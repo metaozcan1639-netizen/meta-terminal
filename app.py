@@ -31,6 +31,8 @@ system_state = {
     "logs": []
 }
 
+candle_cache = {}
+
 EXCLUDED_KEYWORDS = [
     'NVDA', 'GOOGL', 'AAPL', 'TSLA', 'MSFT', 'AMZN', 'META', 'NFLX', 'AMD', 'COIN',
     'BABA', 'PLTR', 'SOXS', 'SOXL', 'QQQ', 'SPY', 'WDC', 'DELL', 'IONQ', 'GLW', 'BIRB'
@@ -96,6 +98,15 @@ async def analyze_symbol(exchange, symbol):
         df_5m, df_15m, df_1h, df_4h = dfs['5m'], dfs['15m'], dfs['1h'], dfs['4h']
         c_5m = df_5m.iloc[-1]
         c_1h, c_4h = df_1h.iloc[-1], df_4h.iloc[-1]
+
+        # Grafik verisini hızlı yükleme için cache'le
+        candle_cache[symbol] = [{
+            "time": int(c[0] / 1000),
+            "open": float(c[1]),
+            "high": float(c[2]),
+            "low": float(c[3]),
+            "close": float(c[4])
+        } for c in results[0]]
 
         score = 0
         direction = None
@@ -190,7 +201,7 @@ async def market_scanner_loop():
         exchange = ccxt.bybit({
             'options': {'defaultType': 'linear'},
             'enableRateLimit': True,
-            'timeout': 10000
+            'timeout': 8000
         })
         try:
             markets = await exchange.load_markets()
@@ -202,7 +213,7 @@ async def market_scanner_loop():
             ]
             system_state["scanned_count"] = len(crypto_symbols)
 
-            batch_size = 6
+            batch_size = 8
             for i in range(0, len(crypto_symbols), batch_size):
                 chunk = crypto_symbols[i:i + batch_size]
                 tasks = [analyze_symbol(exchange, s) for s in chunk]
@@ -216,7 +227,7 @@ async def market_scanner_loop():
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x İzole | Teminat: ${sig['margin']} | Maks Risk: ${sig['max_loss']}")
 
                 system_state["last_scan_time"] = get_now_str()
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.2)
 
             for pos in list(system_state["active_positions"]):
                 try:
@@ -261,12 +272,12 @@ async def market_scanner_loop():
             await exchange.close()
             await asyncio.sleep(2)
         except Exception as e:
-            add_log(f"Döngü Yenileniyor: {str(e)[:50]}")
+            add_log(f"Döngü Uyarısı: {str(e)[:45]}")
             try:
                 await exchange.close()
             except Exception:
                 pass
-            await asyncio.sleep(4)
+            await asyncio.sleep(3)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -284,17 +295,22 @@ async def health_check():
 
 @app.get("/api/candles/{symbol:path}")
 async def get_candles(symbol: str):
-    exchange = ccxt.bybit({'options': {'defaultType': 'linear'}, 'enableRateLimit': True, 'timeout': 8000})
+    if symbol in candle_cache and len(candle_cache[symbol]) > 0:
+        return candle_cache[symbol]
+
+    exchange = ccxt.bybit({'options': {'defaultType': 'linear'}, 'enableRateLimit': True, 'timeout': 5000})
     try:
-        raw_candles = await exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
+        raw = await exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
         await exchange.close()
-        return [{
+        data = [{
             "time": int(c[0] / 1000),
             "open": float(c[1]),
             "high": float(c[2]),
             "low": float(c[3]),
             "close": float(c[4])
-        } for c in raw_candles]
+        } for c in raw]
+        candle_cache[symbol] = data
+        return data
     except Exception:
         try:
             await exchange.close()
@@ -416,6 +432,7 @@ async def get_dashboard(request: Request):
                         <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
                             <tr>
                                 <th class="pb-2">PARİTE</th>
+                                <th class="pb-2">GİRİŞ ZAMANI</th>
                                 <th class="pb-2">YÖN/KALDIRAÇ</th>
                                 <th class="pb-2">TEMİNAT (M.)</th>
                                 <th class="pb-2">GİRİŞ</th>
@@ -563,8 +580,8 @@ async def get_dashboard(request: Request):
                 selectedPos = pos;
                 currentSymbol = pos.symbol;
                 localStorage.setItem("selected_sym", pos.symbol);
-                loadChartCandles(pos.symbol, pos, false);
                 renderRationale(pos);
+                loadChartCandles(pos.symbol, pos, false);
             }
 
             function renderRationale(pos) {
@@ -579,6 +596,7 @@ async def get_dashboard(request: Request):
                         ${pos.reasons.map(r => `<div class="bg-slate-900/60 p-1.5 rounded border border-slate-800">✓ ${r}</div>`).join('')}
                     </div>
                     <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1">
+                        <div class="text-slate-400">Giriş Saati: <span class="text-white font-bold">${pos.open_time}</span></div>
                         <div class="text-slate-400">Kaldıraç & Teminat: <span class="text-white font-bold">${pos.leverage}x İzole ($${pos.margin})</span></div>
                         <div class="text-red-400">Stop-Loss: <span class="font-mono">${pos.sl.toFixed(p)}</span> (Maks Kayıp: $${pos.max_loss})</div>
                         <div class="text-emerald-400">TP1 / TP2: <span class="font-mono">${pos.tp1.toFixed(p)} / ${pos.tp2.toFixed(p)}</span></div>
@@ -616,6 +634,7 @@ async def get_dashboard(request: Request):
                         return `
                         <tr class="hover:bg-slate-800/80 cursor-pointer ${selectedPos && selectedPos.symbol === p.symbol ? 'bg-slate-800/60' : ''}" onclick="selectPosition(lastPositions[${idx}])">
                             <td class="py-2 font-bold text-white">${p.symbol}</td>
+                            <td class="text-slate-400 font-mono text-[10px]">${p.open_time}</td>
                             <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction} (${p.leverage}x)</td>
                             <td class="text-white font-mono">$${p.margin}</td>
                             <td class="font-mono">${p.entry}</td>
