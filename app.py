@@ -102,13 +102,14 @@ async def analyze_symbol(exchange, symbol):
         recent_low = df_5m['low'].iloc[-15:-2].min()
         recent_high = df_5m['high'].iloc[-15:-2].max()
 
+        # Likidite Avı & İğne İhlali Tespiti
         if p_5m['low'] < recent_low and c_5m['close'] > recent_low and macro_bull:
             direction = "LONG"
-            score += 30
+            score += 35
             reasons.append("⚡ 5M Dip Likiditesi Süpürüldü (Stop-Hunt)")
         elif p_5m['high'] > recent_high and c_5m['close'] < recent_high and macro_bear:
             direction = "SHORT"
-            score += 30
+            score += 35
             reasons.append("⚡ 5M Tepe Likiditesi Süpürüldü (Stop-Hunt)")
 
         if not direction:
@@ -118,15 +119,15 @@ async def analyze_symbol(exchange, symbol):
         reasons.append("📈 4H ve 1H EMA50 Üstü Güçlü Trend Uyumu")
 
         vol_ratio = c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)
-        if vol_ratio >= 1.5:
+        if vol_ratio >= 1.2:
             score += 25
-            reasons.append(f"🔥 Kurumsal Hacim Patlaması ({vol_ratio:.1f}x MA20)")
+            reasons.append(f"🔥 Hacim Artışı ({vol_ratio:.1f}x MA20)")
 
-        if (direction == "LONG" and c_5m['rsi'] <= 40) or (direction == "SHORT" and c_5m['rsi'] >= 60):
+        if (direction == "LONG" and c_5m['rsi'] <= 44) or (direction == "SHORT" and c_5m['rsi'] >= 56):
             score += 20
-            reasons.append(f"🎯 5M RSI Aşırı Uç Bölgede ({c_5m['rsi']:.1f})")
+            reasons.append(f"🎯 RSI Uç Bölge Teyidi ({c_5m['rsi']:.1f})")
 
-        if score >= 70:
+        if score >= 60:
             entry = float(c_5m['close'])
             atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.005
 
@@ -311,11 +312,15 @@ async def get_dashboard(request: Request):
         <script src="https://cdn.tailwindcss.com"></script>
         <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
         <style>
-            body { background-color: #0b0e14; color: #e2e8f0; font-family: 'Inter', monospace; }
+            html, body { min-height: 100%; background-color: #0b0e14; color: #e2e8f0; font-family: 'Inter', monospace; overflow-y: auto; }
             .card { background-color: #121824; border: 1px solid #1e293b; }
+            ::-webkit-scrollbar { width: 6px; height: 6px; }
+            ::-webkit-scrollbar-track { background: #0b0e14; }
+            ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+            ::-webkit-scrollbar-thumb:hover { background: #475569; }
         </style>
     </head>
-    <body class="p-4 space-y-4">
+    <body class="p-4 space-y-4 pb-16">
         <div class="card p-4 rounded-xl flex flex-wrap justify-between items-center gap-4 border-emerald-500/30">
             <div class="flex items-center space-x-3">
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
@@ -334,19 +339,19 @@ async def get_dashboard(request: Request):
                     <label class="text-slate-400 block text-[10px]">RİSK (%)</label>
                     <select id="input-risk" class="bg-slate-800 text-white font-bold px-2 py-1 rounded outline-none border border-slate-700">
                         <option value="0.5">%0.5</option>
-                        <option value="1.0" selected>%1.0</option>
+                        <option value="1.0">%1.0</option>
                         <option value="2.0">%2.0</option>
                         <option value="3.0">%3.0</option>
-                        <option value="5.0">%5.0</option>
+                        <option value="5.0" selected>%5.0</option>
                     </select>
                 </div>
                 <div>
                     <label class="text-slate-400 block text-[10px]">KALDIRAÇ</label>
                     <select id="input-leverage" class="bg-slate-800 text-emerald-400 font-bold px-2 py-1 rounded outline-none border border-slate-700">
                         <option value="5">5x</option>
-                        <option value="10" selected>10x</option>
+                        <option value="10">10x</option>
                         <option value="20">20x</option>
-                        <option value="50">50x</option>
+                        <option value="50" selected>50x</option>
                         <option value="75">75x</option>
                     </select>
                 </div>
@@ -360,7 +365,7 @@ async def get_dashboard(request: Request):
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div class="card p-3 rounded-xl lg:col-span-2 h-[460px] flex flex-col">
+            <div class="card p-3 rounded-xl lg:col-span-2 h-[480px] flex flex-col">
                 <div class="flex justify-between items-center mb-2 px-1">
                     <span id="chart-title" class="text-xs font-bold text-emerald-400 tracking-wider">CANLI GRAFİK (5M)</span>
                     <span id="chart-levels" class="text-[11px] text-slate-400 space-x-2"></span>
@@ -368,7 +373,7 @@ async def get_dashboard(request: Request):
                 <div id="tv-container" class="w-full flex-1 rounded overflow-hidden"></div>
             </div>
 
-            <div class="card p-4 rounded-xl flex flex-col justify-between h-[460px]">
+            <div class="card p-4 rounded-xl flex flex-col justify-between h-[480px]">
                 <div>
                     <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
                     <div id="active-rationale" class="space-y-2 text-xs">
@@ -377,7 +382,7 @@ async def get_dashboard(request: Request):
                 </div>
                 <div class="mt-4">
                     <h3 class="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Sistem Logları</h3>
-                    <div id="log-box" class="bg-black/50 p-2 rounded text-[11px] text-emerald-500/80 font-mono h-28 overflow-y-auto space-y-1"></div>
+                    <div id="log-box" class="bg-black/50 p-2 rounded text-[11px] text-emerald-500/80 font-mono h-32 overflow-y-auto space-y-1"></div>
                 </div>
             </div>
         </div>
@@ -387,9 +392,9 @@ async def get_dashboard(request: Request):
                 <h2 class="text-xs font-semibold text-emerald-400 mb-3 flex items-center">
                     <span class="w-2 h-2 bg-emerald-400 rounded-full mr-2"></span> AKTİF POZİSYONLAR (Grafik için Tıkla)
                 </h2>
-                <div class="overflow-x-auto max-h-60 overflow-y-auto">
+                <div class="overflow-x-auto max-h-72 overflow-y-auto">
                     <table class="w-full text-left text-[11px]">
-                        <thead class="text-slate-500 border-b border-slate-800">
+                        <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
                             <tr>
                                 <th class="pb-2">PARİTE</th>
                                 <th class="pb-2">YÖN/KALDIRAÇ</th>
@@ -408,9 +413,9 @@ async def get_dashboard(request: Request):
                 <h2 class="text-xs font-semibold text-sky-400 mb-3 flex items-center">
                     <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> KAPANAN İŞLEMLER RAPORU
                 </h2>
-                <div class="overflow-x-auto max-h-60 overflow-y-auto">
+                <div class="overflow-x-auto max-h-72 overflow-y-auto">
                     <table class="w-full text-left text-[11px]">
-                        <thead class="text-slate-500 border-b border-slate-800">
+                        <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
                             <tr>
                                 <th class="pb-2">PARİTE</th>
                                 <th class="pb-2">PNL ($)</th>
