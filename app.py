@@ -452,7 +452,7 @@ async def get_dashboard(request: Request):
                     grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
                     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
                     timeScale: { timeVisible: true, secondsVisible: false },
-                    priceScale: {
+                    rightPriceScale: {
                         autoScale: true,
                         scaleMargins: { top: 0.15, bottom: 0.15 }
                     }
@@ -502,8 +502,12 @@ async def get_dashboard(request: Request):
                         });
 
                         candleSeries.setData(candles);
+                        
+                        // Dikey (Fiyat) ve Yatay (Zaman) eksenlerini tam sıfırla ve ortala
                         if (!isLiveTick) {
+                            chart.priceScale('right').applyOptions({ autoScale: true });
                             chart.timeScale().fitContent();
+                            chart.timeScale().resetTimeScale();
                         }
                     }
 
