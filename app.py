@@ -70,18 +70,18 @@ def compute_position_metrics(entry, sl):
 
 async def analyze_symbol(exchange, symbol):
     try:
-        results = await asyncio.gather(
-            exchange.fetch_ohlcv(symbol, timeframe='5m', limit=40),
-            exchange.fetch_ohlcv(symbol, timeframe='15m', limit=40),
-            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=40),
-            exchange.fetch_ohlcv(symbol, timeframe='4h', limit=40),
-            return_exceptions=True
-        )
-        if any(isinstance(r, Exception) for r in results):
+        tfs = ['5m', '15m', '1h', '4h']
+        results = []
+        for tf in tfs:
+            data = await exchange.fetch_ohlcv(symbol, timeframe=tf, limit=35)
+            results.append(data)
+            await asyncio.sleep(0.04)
+
+        if any(not r or len(r) < 30 for r in results):
             return None
 
         dfs = {tf: calculate_indicators(pd.DataFrame(results[i], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
-               for i, tf in enumerate(['5m', '15m', '1h', '4h'])}
+               for i, tf in enumerate(tfs)}
 
         df_5m, df_15m, df_1h, df_4h = dfs['5m'], dfs['15m'], dfs['1h'], dfs['4h']
         c_5m, p_5m = df_5m.iloc[-1], df_5m.iloc[-2]
@@ -113,11 +113,11 @@ async def analyze_symbol(exchange, symbol):
         reasons.append("📈 4H ve 1H EMA50 Üstü Güçlü Trend Uyumu")
 
         vol_ratio = c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)
-        if vol_ratio >= 1.5:
+        if vol_ratio >= 1.4:
             score += 25
             reasons.append(f"🔥 Kurumsal Hacim Patlaması ({vol_ratio:.1f}x MA20)")
 
-        if (direction == "LONG" and c_5m['rsi'] <= 40) or (direction == "SHORT" and c_5m['rsi'] >= 60):
+        if (direction == "LONG" and c_5m['rsi'] <= 42) or (direction == "SHORT" and c_5m['rsi'] >= 58):
             score += 20
             reasons.append(f"🎯 5M RSI Aşırı Uç Bölgede ({c_5m['rsi']:.1f})")
 
@@ -170,18 +170,25 @@ async def keep_alive_loop():
                 pass
 
 async def market_scanner_loop():
-    exchange = ccxt.binance({'options': {'defaultType': 'future'}, 'enableRateLimit': True})
-    add_log("Quant Motoru Başlatıldı. 250+ Binance Vadeli parite taranıyor...")
+    exchange = ccxt.binance({
+        'options': {'defaultType': 'future'},
+        'enableRateLimit': True
+    })
+    add_log("Tüm Binance Vadeli Pariteler (250+) için Rotasyonel Tarama Başlatıldı.")
 
     while True:
         try:
             markets = await exchange.load_markets()
-            symbols = [s for s, m in markets.items() if m.get('quote') == 'USDT' and m.get('linear') and m.get('active')]
-            system_state["scanned_count"] = len(symbols)
+            all_symbols = [
+                s for s, m in markets.items() 
+                if m.get('quote') == 'USDT' and m.get('linear') and m.get('active')
+            ]
+            system_state["scanned_count"] = len(all_symbols)
             system_state["last_scan_time"] = datetime.now().strftime("%H:%M:%S")
 
-            for i in range(0, len(symbols), 10):
-                chunk = symbols[i:i + 10]
+            batch_size = 12
+            for i in range(0, len(all_symbols), batch_size):
+                chunk = all_symbols[i:i + batch_size]
                 tasks = [analyze_symbol(exchange, s) for s in chunk]
                 signals = await asyncio.gather(*tasks)
 
@@ -192,49 +199,52 @@ async def market_scanner_loop():
                             system_state["active_positions"].append(sig)
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x İzole | Teminat: ${sig['margin']} | Maks Risk: ${sig['max_loss']}")
 
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.3)
 
             for pos in list(system_state["active_positions"]):
-                ticker = await exchange.fetch_ticker(pos['symbol'])
-                curr_price = ticker['last']
-                direction = pos['direction']
-                close_reason = None
+                try:
+                    ticker = await exchange.fetch_ticker(pos['symbol'])
+                    curr_price = ticker['last']
+                    direction = pos['direction']
+                    close_reason = None
 
-                if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
-                    close_reason = "❌ Stop-Loss Tetiklendi"
-                elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
-                    close_reason = "🎯 TP2 Majör Hedefe Ulaşıldı"
-                elif (direction == "LONG" and curr_price >= pos['tp1']) or (direction == "SHORT" and curr_price <= pos['tp1']):
-                    if not pos.get("tp1_hit"):
-                        pos["tp1_hit"] = True
-                        pos["sl"] = pos["entry"]
-                        add_log(f"⚡ TP1 Alındı ({pos['symbol']}): Stop Girişe Çekildi.")
+                    if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
+                        close_reason = "❌ Stop-Loss Tetiklendi"
+                    elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
+                        close_reason = "🎯 TP2 Majör Hedefe Ulaşıldı"
+                    elif (direction == "LONG" and curr_price >= pos['tp1']) or (direction == "SHORT" and curr_price <= pos['tp1']):
+                        if not pos.get("tp1_hit"):
+                            pos["tp1_hit"] = True
+                            pos["sl"] = pos["entry"]
+                            add_log(f"⚡ TP1 Alındı ({pos['symbol']}): Stop Girişe Çekildi.")
 
-                if close_reason:
-                    pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
-                    realized_pnl = round(pos['pos_size'] * (pnl_pct / 100.0), 2)
-                    system_state["total_balance"] += realized_pnl
+                    if close_reason:
+                        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
+                        realized_pnl = round(pos['pos_size'] * (pnl_pct / 100.0), 2)
+                        system_state["total_balance"] += realized_pnl
 
-                    history_item = {
-                        "symbol": pos['symbol'],
-                        "direction": pos['direction'],
-                        "entry": pos['entry'],
-                        "close_price": curr_price,
-                        "pnl_pct": round(pnl_pct, 2),
-                        "realized_pnl": realized_pnl,
-                        "score": pos['score'],
-                        "open_reasons": pos['reasons'],
-                        "close_reason": close_reason,
-                        "close_time": datetime.now().strftime("%H:%M:%S")
-                    }
-                    system_state["trade_history"].insert(0, history_item)
-                    system_state["active_positions"].remove(pos)
-                    add_log(f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}")
+                        history_item = {
+                            "symbol": pos['symbol'],
+                            "direction": pos['direction'],
+                            "entry": pos['entry'],
+                            "close_price": curr_price,
+                            "pnl_pct": round(pnl_pct, 2),
+                            "realized_pnl": realized_pnl,
+                            "score": pos['score'],
+                            "open_reasons": pos['reasons'],
+                            "close_reason": close_reason,
+                            "close_time": datetime.now().strftime("%H:%M:%S")
+                        }
+                        system_state["trade_history"].insert(0, history_item)
+                        system_state["active_positions"].remove(pos)
+                        add_log(f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}")
+                except Exception:
+                    pass
 
-            await asyncio.sleep(5)
+            await asyncio.sleep(3)
         except Exception as e:
-            add_log(f"Hata: {e}")
-            await asyncio.sleep(5)
+            add_log(f"Döngü Uyarısı: {str(e)[:70]}")
+            await asyncio.sleep(10)
 
 @app.on_event("startup")
 async def startup_event():
@@ -297,7 +307,7 @@ async def get_dashboard(request: Request):
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
                 <div>
                     <h1 class="text-lg font-bold tracking-wider text-emerald-400">META QUANT PRO TERMINAL</h1>
-                    <div class="text-[11px] text-slate-400">250+ Parite 7/24 Kesintisiz Canlı Motor</div>
+                    <div class="text-[11px] text-slate-400">Tüm Binance Vadeli Coinleri (250+) 7/24 Taranıyor</div>
                 </div>
             </div>
 
@@ -330,7 +340,7 @@ async def get_dashboard(request: Request):
             </div>
 
             <div class="flex space-x-4 text-xs text-slate-400">
-                <div>Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
+                <div>Taranan Toplam Parite: <span id="scanned-count" class="text-white font-bold">0</span></div>
                 <div>Son Tarama: <span id="last-scan" class="text-white font-bold">-</span></div>
             </div>
         </div>
@@ -348,7 +358,7 @@ async def get_dashboard(request: Request):
                 <div>
                     <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
                     <div id="active-rationale" class="space-y-2 text-xs">
-                        <div class="text-slate-500 italic">Sinyal bekleniyor...</div>
+                        <div class="text-slate-500 italic">Tablodan bir parite seçin...</div>
                     </div>
                 </div>
                 <div class="mt-4">
