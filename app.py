@@ -27,6 +27,12 @@ system_state = {
     "logs": []
 }
 
+# Geleneksel hisse senetleri ve sentetik kontratları filtreleme
+EXCLUDED_KEYWORDS = [
+    'NVDA', 'GOOGL', 'AAPL', 'TSLA', 'MSFT', 'AMZN', 'META', 'NFLX', 'AMD', 'COIN',
+    'BABA', 'PLTR', 'SOXS', 'SOXL', 'QQQ', 'SPY', 'WDC', 'DELL', 'IONQ', 'GLW', 'BIRB'
+]
+
 def add_log(msg: str):
     ts = datetime.now().strftime("%H:%M:%S")
     system_state["logs"].insert(0, f"[{ts}] {msg}")
@@ -70,8 +76,12 @@ def compute_position_metrics(entry, sl):
 
 async def analyze_symbol(exchange, symbol):
     try:
+        base = symbol.split('/')[0].upper()
+        if any(exc in base for exc in EXCLUDED_KEYWORDS):
+            return None
+
         tfs = ['5m', '15m', '1h', '4h']
-        tasks = [exchange.fetch_ohlcv(symbol, timeframe=tf, limit=35) for tf in tfs]
+        tasks = [exchange.fetch_ohlcv(symbol, timeframe=tf, limit=40) for tf in tfs]
         results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=4.0)
 
         if any(isinstance(r, Exception) or not r or len(r) < 25 for r in results):
@@ -88,12 +98,14 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
+        # Makro Trend Uyumu (4H ve 1H)
         macro_bull = c_4h['close'] > c_4h['ema50'] and c_1h['close'] > c_1h['ema50']
         macro_bear = c_4h['close'] < c_4h['ema50'] and c_1h['close'] < c_1h['ema50']
 
         recent_low = df_5m['low'].iloc[-15:-2].min()
         recent_high = df_5m['high'].iloc[-15:-2].max()
 
+        # Likidite Avı & Dönüş Teyidi
         if p_5m['low'] < recent_low and c_5m['close'] > recent_low and macro_bull:
             direction = "LONG"
             score += 30
@@ -110,30 +122,31 @@ async def analyze_symbol(exchange, symbol):
         reasons.append("📈 4H ve 1H EMA50 Üstü Güçlü Trend Uyumu")
 
         vol_ratio = c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)
-        if vol_ratio >= 1.4:
+        if vol_ratio >= 1.5:
             score += 25
             reasons.append(f"🔥 Kurumsal Hacim Patlaması ({vol_ratio:.1f}x MA20)")
 
-        if (direction == "LONG" and c_5m['rsi'] <= 42) or (direction == "SHORT" and c_5m['rsi'] >= 58):
+        if (direction == "LONG" and c_5m['rsi'] <= 40) or (direction == "SHORT" and c_5m['rsi'] >= 60):
             score += 20
             reasons.append(f"🎯 5M RSI Aşırı Uç Bölgede ({c_5m['rsi']:.1f})")
 
         if score >= 70:
             entry = float(c_5m['close'])
-            atr = float(c_5m['atr'])
+            atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.005
 
+            # Dinamik ve Güvenli Stop Marjı (1.2 * ATR Emniyet Payı)
             if direction == "LONG":
-                sl = float(min(p_5m['low'], c_5m['low']) - (0.3 * atr))
-                tp1 = float(df_15m['high'].iloc[-15:-1].max())
-                tp2 = float(df_1h['high'].iloc[-20:-1].max())
-                if tp1 <= entry: tp1 = entry + (1.5 * (entry - sl))
-                if tp2 <= tp1: tp2 = entry + (3.0 * (entry - sl))
+                sl = float(min(p_5m['low'], c_5m['low']) - (1.2 * atr))
+                if (entry - sl) / entry < 0.006:
+                    sl = entry * 0.994
+                tp1 = float(entry + (1.6 * (entry - sl)))
+                tp2 = float(entry + (3.2 * (entry - sl)))
             else:
-                sl = float(max(p_5m['high'], c_5m['high']) + (0.3 * atr))
-                tp1 = float(df_15m['low'].iloc[-15:-1].min())
-                tp2 = float(df_1h['low'].iloc[-20:-1].min())
-                if tp1 >= entry: tp1 = entry - (1.5 * (sl - entry))
-                if tp2 >= tp1: tp2 = entry - (3.0 * (sl - entry))
+                sl = float(max(p_5m['high'], c_5m['high']) + (1.2 * atr))
+                if (sl - entry) / entry < 0.006:
+                    sl = entry * 1.006
+                tp1 = float(entry - (1.6 * (sl - entry)))
+                tp2 = float(entry - (3.2 * (sl - entry)))
 
             pos_size, margin, max_loss = compute_position_metrics(entry, sl)
 
@@ -171,20 +184,22 @@ async def market_scanner_loop():
         'options': {'defaultType': 'linear'},
         'enableRateLimit': True
     })
-    add_log("Quant Motoru Aktif: 300+ Sürekli Vadeli Parite Kesintisiz Taranıyor...")
+    add_log("Quant Motoru Aktif: Likit Kripto Vadeli Pariteler Taranıyor...")
 
     while True:
         try:
             markets = await exchange.load_markets()
-            all_symbols = [
+            crypto_symbols = [
                 s for s, m in markets.items() 
-                if m.get('quote') == 'USDT' and m.get('linear') and m.get('active') and not m.get('delivery') and not '-' in s
+                if m.get('quote') == 'USDT' and m.get('linear') and m.get('active') 
+                and not m.get('delivery') and not '-' in s
+                and not any(exc in s.split('/')[0].upper() for exc in EXCLUDED_KEYWORDS)
             ]
-            system_state["scanned_count"] = len(all_symbols)
+            system_state["scanned_count"] = len(crypto_symbols)
 
             batch_size = 10
-            for i in range(0, len(all_symbols), batch_size):
-                chunk = all_symbols[i:i + batch_size]
+            for i in range(0, len(crypto_symbols), batch_size):
+                chunk = crypto_symbols[i:i + batch_size]
                 tasks = [analyze_symbol(exchange, s) for s in chunk]
                 signals = await asyncio.gather(*tasks)
 
@@ -304,7 +319,7 @@ async def get_dashboard(request: Request):
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
                 <div>
                     <h1 class="text-lg font-bold tracking-wider text-emerald-400">META QUANT PRO TERMINAL</h1>
-                    <div class="text-[11px] text-slate-400">300+ Sürekli Vadeli Parite 7/24 Kesintisiz Canlı Motor</div>
+                    <div class="text-[11px] text-slate-400">Kripto Vadeli Pariteler 7/24 Kesintisiz Canlı Motor</div>
                 </div>
             </div>
 
@@ -410,7 +425,7 @@ async def get_dashboard(request: Request):
         <script>
             let chart = null;
             let candleSeries = null;
-            let currentSymbol = "BTC/USDT:USDT";
+            let currentSymbol = localStorage.getItem("selected_sym") || "BTC/USDT:USDT";
             let selectedPos = null;
             let priceLines = [];
             let lastPositions = [];
@@ -431,63 +446,67 @@ async def get_dashboard(request: Request):
                 });
             }
 
-            async function loadChartCandles(symbol, posData = null) {
+            async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
                     const res = await fetch(`/api/candles/${encodeURIComponent(symbol)}`);
                     const candles = await res.json();
                     if (candles.length > 0) {
                         candleSeries.setData(candles);
-                        chart.timeScale().fitContent();
+                        if (!isLiveTick) {
+                            chart.timeScale().fitContent();
+                        }
                     }
 
-                    priceLines.forEach(l => candleSeries.removePriceLine(l));
-                    priceLines = [];
+                    if (!isLiveTick) {
+                        priceLines.forEach(l => candleSeries.removePriceLine(l));
+                        priceLines = [];
 
-                    document.getElementById('chart-title').innerText = `${symbol} (5M)`;
+                        document.getElementById('chart-title').innerText = `${symbol} (5M)`;
 
-                    if (posData) {
-                        const entryLine = candleSeries.createPriceLine({
-                            price: posData.entry,
-                            color: '#38bdf8',
-                            lineWidth: 2,
-                            lineStyle: LightweightCharts.LineStyle.Solid,
-                            axisLabelVisible: true,
-                            title: 'GİRİŞ',
-                        });
-                        const slLine = candleSeries.createPriceLine({
-                            price: posData.sl,
-                            color: '#ef4444',
-                            lineWidth: 2,
-                            lineStyle: LightweightCharts.LineStyle.Dashed,
-                            axisLabelVisible: true,
-                            title: 'STOP (SL)',
-                        });
-                        const tp1Line = candleSeries.createPriceLine({
-                            price: posData.tp1,
-                            color: '#10b981',
-                            lineWidth: 2,
-                            lineStyle: LightweightCharts.LineStyle.Dashed,
-                            axisLabelVisible: true,
-                            title: 'TP1',
-                        });
-                        const tp2Line = candleSeries.createPriceLine({
-                            price: posData.tp2,
-                            color: '#059669',
-                            lineWidth: 2,
-                            lineStyle: LightweightCharts.LineStyle.Dashed,
-                            axisLabelVisible: true,
-                            title: 'TP2',
-                        });
-                        priceLines.push(entryLine, slLine, tp1Line, tp2Line);
+                        if (posData) {
+                            const entryLine = candleSeries.createPriceLine({
+                                price: posData.entry,
+                                color: '#38bdf8',
+                                lineWidth: 2,
+                                lineStyle: LightweightCharts.LineStyle.Solid,
+                                axisLabelVisible: true,
+                                title: 'GİRİŞ',
+                            });
+                            const slLine = candleSeries.createPriceLine({
+                                price: posData.sl,
+                                color: '#ef4444',
+                                lineWidth: 2,
+                                lineStyle: LightweightCharts.LineStyle.Dashed,
+                                axisLabelVisible: true,
+                                title: 'STOP (SL)',
+                            });
+                            const tp1Line = candleSeries.createPriceLine({
+                                price: posData.tp1,
+                                color: '#10b981',
+                                lineWidth: 2,
+                                lineStyle: LightweightCharts.LineStyle.Dashed,
+                                axisLabelVisible: true,
+                                title: 'TP1',
+                            });
+                            const tp2Line = candleSeries.createPriceLine({
+                                price: posData.tp2,
+                                color: '#059669',
+                                lineWidth: 2,
+                                lineStyle: LightweightCharts.LineStyle.Dashed,
+                                axisLabelVisible: true,
+                                title: 'TP2',
+                            });
+                            priceLines.push(entryLine, slLine, tp1Line, tp2Line);
 
-                        document.getElementById('chart-levels').innerHTML = `
-                            <span class="text-sky-400">Giriş: ${posData.entry}</span> | 
-                            <span class="text-red-400">SL: ${posData.sl.toFixed(4)}</span> | 
-                            <span class="text-emerald-400">TP1: ${posData.tp1.toFixed(4)}</span> | 
-                            <span class="text-emerald-500">TP2: ${posData.tp2.toFixed(4)}</span>
-                        `;
-                    } else {
-                        document.getElementById('chart-levels').innerHTML = '';
+                            document.getElementById('chart-levels').innerHTML = `
+                                <span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | 
+                                <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(4)}</span> | 
+                                <span class="text-emerald-400 font-mono">TP1: ${posData.tp1.toFixed(4)}</span> | 
+                                <span class="text-emerald-500 font-mono">TP2: ${posData.tp2.toFixed(4)}</span>
+                            `;
+                        } else {
+                            document.getElementById('chart-levels').innerHTML = '';
+                        }
                     }
                 } catch(e) {}
             }
@@ -495,7 +514,8 @@ async def get_dashboard(request: Request):
             function selectPosition(pos) {
                 selectedPos = pos;
                 currentSymbol = pos.symbol;
-                loadChartCandles(pos.symbol, pos);
+                localStorage.setItem("selected_sym", pos.symbol);
+                loadChartCandles(pos.symbol, pos, false);
                 renderRationale(pos);
             }
 
@@ -547,7 +567,7 @@ async def get_dashboard(request: Request):
                             <td class="py-2 font-bold text-white">${p.symbol}</td>
                             <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction} (${p.leverage}x)</td>
                             <td class="text-white font-mono">$${p.margin}</td>
-                            <td>${p.entry}</td>
+                            <td class="font-mono">${p.entry}</td>
                             <td class="text-red-400 font-mono">${p.sl.toFixed(4)}</td>
                             <td class="text-emerald-400 font-mono">${p.tp1.toFixed(4)} / ${p.tp2.toFixed(4)}</td>
                         </tr>
@@ -565,8 +585,15 @@ async def get_dashboard(request: Request):
                         </tr>
                     `).join('');
 
+                    // Canlı grafik tick güncellemesi
+                    if (currentSymbol) {
+                        loadChartCandles(currentSymbol, selectedPos, true);
+                    }
+
                     if (!selectedPos && data.active_positions.length > 0) {
-                        selectPosition(data.active_positions[0]);
+                        const saved = localStorage.getItem("selected_sym");
+                        const target = data.active_positions.find(p => p.symbol === saved) || data.active_positions[0];
+                        selectPosition(target);
                     } else if (selectedPos) {
                         const updated = data.active_positions.find(p => p.symbol === selectedPos.symbol);
                         if (updated) {
@@ -578,7 +605,7 @@ async def get_dashboard(request: Request):
             }
 
             initChart();
-            loadChartCandles(currentSymbol);
+            loadChartCandles(currentSymbol, null, false);
             setInterval(updateDashboard, 2000);
         </script>
     </body>
