@@ -258,7 +258,6 @@ async def market_scanner_loop():
                 except Exception:
                     pass
 
-            add_log(f"🔄 Tarama Döngüsü Tamamlandı ({len(crypto_symbols)} Parite Kontrol Edildi)")
             await exchange.close()
             await asyncio.sleep(2)
         except Exception as e:
@@ -457,6 +456,13 @@ async def get_dashboard(request: Request):
             let priceLines = [];
             let lastPositions = [];
 
+            function getPrecisionConfig(price) {
+                if (price < 0.001) return { precision: 6, minMove: 0.000001 };
+                if (price < 1) return { precision: 4, minMove: 0.0001 };
+                if (price < 100) return { precision: 3, minMove: 0.001 };
+                return { precision: 2, minMove: 0.01 };
+            }
+
             function initChart() {
                 const container = document.getElementById('tv-container');
                 container.innerHTML = '';
@@ -464,7 +470,11 @@ async def get_dashboard(request: Request):
                     layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
                     grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
                     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-                    timeScale: { timeVisible: true, secondsVisible: false }
+                    timeScale: { timeVisible: true, secondsVisible: false },
+                    priceScale: {
+                        autoScale: true,
+                        scaleMargins: { top: 0.15, bottom: 0.15 }
+                    }
                 });
                 candleSeries = chart.addCandlestickSeries({
                     upColor: '#10b981', downColor: '#ef4444',
@@ -478,6 +488,16 @@ async def get_dashboard(request: Request):
                     const res = await fetch(`/api/candles/${encodeURIComponent(symbol)}`);
                     const candles = await res.json();
                     if (candles.length > 0) {
+                        const lastPrice = candles[candles.length - 1].close;
+                        const pConf = getPrecisionConfig(lastPrice);
+                        candleSeries.applyOptions({
+                            priceFormat: {
+                                type: 'price',
+                                precision: pConf.precision,
+                                minMove: pConf.minMove
+                            }
+                        });
+
                         candleSeries.setData(candles);
                         if (!isLiveTick) {
                             chart.timeScale().fitContent();
@@ -525,11 +545,12 @@ async def get_dashboard(request: Request):
                             });
                             priceLines.push(entryLine, slLine, tp1Line, tp2Line);
 
+                            const p = posData.entry < 1 ? 6 : 2;
                             document.getElementById('chart-levels').innerHTML = `
                                 <span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | 
-                                <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(4)}</span> | 
-                                <span class="text-emerald-400 font-mono">TP1: ${posData.tp1.toFixed(4)}</span> | 
-                                <span class="text-emerald-500 font-mono">TP2: ${posData.tp2.toFixed(4)}</span>
+                                <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span> | 
+                                <span class="text-emerald-400 font-mono">TP1: ${posData.tp1.toFixed(p)}</span> | 
+                                <span class="text-emerald-500 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>
                             `;
                         } else {
                             document.getElementById('chart-levels').innerHTML = '';
@@ -548,6 +569,7 @@ async def get_dashboard(request: Request):
 
             function renderRationale(pos) {
                 if (!pos) return;
+                const p = pos.entry < 1 ? 6 : 4;
                 document.getElementById('active-rationale').innerHTML = `
                     <div class="flex justify-between items-center mb-2">
                         <span class="font-bold text-base text-white">${pos.symbol}</span>
@@ -558,8 +580,8 @@ async def get_dashboard(request: Request):
                     </div>
                     <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1">
                         <div class="text-slate-400">Kaldıraç & Teminat: <span class="text-white font-bold">${pos.leverage}x İzole ($${pos.margin})</span></div>
-                        <div class="text-red-400">Stop-Loss: <span class="font-mono">${pos.sl.toFixed(4)}</span> (Maks Kayıp: $${pos.max_loss})</div>
-                        <div class="text-emerald-400">TP1 / TP2: <span class="font-mono">${pos.tp1.toFixed(4)} / ${pos.tp2.toFixed(4)}</span></div>
+                        <div class="text-red-400">Stop-Loss: <span class="font-mono">${pos.sl.toFixed(p)}</span> (Maks Kayıp: $${pos.max_loss})</div>
+                        <div class="text-emerald-400">TP1 / TP2: <span class="font-mono">${pos.tp1.toFixed(p)} / ${pos.tp2.toFixed(p)}</span></div>
                     </div>
                 `;
             }
@@ -589,16 +611,18 @@ async def get_dashboard(request: Request):
 
                     lastPositions = data.active_positions;
                     const activeTbody = document.getElementById('active-pos-table');
-                    activeTbody.innerHTML = data.active_positions.map((p, idx) => `
+                    activeTbody.innerHTML = data.active_positions.map((p, idx) => {
+                        const dec = p.entry < 1 ? 6 : 4;
+                        return `
                         <tr class="hover:bg-slate-800/80 cursor-pointer ${selectedPos && selectedPos.symbol === p.symbol ? 'bg-slate-800/60' : ''}" onclick="selectPosition(lastPositions[${idx}])">
                             <td class="py-2 font-bold text-white">${p.symbol}</td>
                             <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction} (${p.leverage}x)</td>
                             <td class="text-white font-mono">$${p.margin}</td>
                             <td class="font-mono">${p.entry}</td>
-                            <td class="text-red-400 font-mono">${p.sl.toFixed(4)}</td>
-                            <td class="text-emerald-400 font-mono">${p.tp1.toFixed(4)} / ${p.tp2.toFixed(4)}</td>
+                            <td class="text-red-400 font-mono">${p.sl.toFixed(dec)}</td>
+                            <td class="text-emerald-400 font-mono">${p.tp1.toFixed(dec)} / ${p.tp2.toFixed(dec)}</td>
                         </tr>
-                    `).join('');
+                    `}).join('');
 
                     const histTbody = document.getElementById('history-table');
                     histTbody.innerHTML = data.trade_history.map(h => `
