@@ -14,7 +14,6 @@ import uvicorn
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Türkiye Saati (UTC+3)
 TURKEY_TZ = timezone(timedelta(hours=3))
 
 def get_now_str():
@@ -40,7 +39,7 @@ EXCLUDED_KEYWORDS = [
 def add_log(msg: str):
     ts = get_now_str()
     system_state["logs"].insert(0, f"[{ts}] {msg}")
-    if len(system_state["logs"]) > 50:
+    if len(system_state["logs"]) > 60:
         system_state["logs"].pop()
 
 def calculate_indicators(df):
@@ -86,7 +85,7 @@ async def analyze_symbol(exchange, symbol):
 
         tfs = ['5m', '15m', '1h', '4h']
         tasks = [exchange.fetch_ohlcv(symbol, timeframe=tf, limit=35) for tf in tfs]
-        results = await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=3.5)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
 
         if any(isinstance(r, Exception) or not r or len(r) < 20 for r in results):
             return None
@@ -108,7 +107,6 @@ async def analyze_symbol(exchange, symbol):
         recent_low = df_5m['low'].iloc[-20:-4].min()
         recent_high = df_5m['high'].iloc[-20:-4].max()
 
-        # Son 3 mumu tarayan esnek likidite avı mekanizması
         last_3_lows = df_5m['low'].iloc[-4:-1].min()
         last_3_highs = df_5m['high'].iloc[-4:-1].max()
 
@@ -185,11 +183,15 @@ async def keep_alive_loop():
                 pass
 
 async def market_scanner_loop():
-    await asyncio.sleep(1)
-    exchange = ccxt.bybit({'options': {'defaultType': 'linear'}, 'enableRateLimit': True})
-    add_log("Quant Motoru Aktif: Likit Kripto Vadeli Pariteler Taranıyor...")
+    await asyncio.sleep(2)
+    add_log("Quant Motoru Başlatıldı: Parite Taraması Aktif...")
 
     while True:
+        exchange = ccxt.bybit({
+            'options': {'defaultType': 'linear'},
+            'enableRateLimit': True,
+            'timeout': 10000
+        })
         try:
             markets = await exchange.load_markets()
             crypto_symbols = [
@@ -200,7 +202,7 @@ async def market_scanner_loop():
             ]
             system_state["scanned_count"] = len(crypto_symbols)
 
-            batch_size = 20
+            batch_size = 6
             for i in range(0, len(crypto_symbols), batch_size):
                 chunk = crypto_symbols[i:i + batch_size]
                 tasks = [analyze_symbol(exchange, s) for s in chunk]
@@ -214,7 +216,7 @@ async def market_scanner_loop():
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x İzole | Teminat: ${sig['margin']} | Maks Risk: ${sig['max_loss']}")
 
                 system_state["last_scan_time"] = get_now_str()
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.3)
 
             for pos in list(system_state["active_positions"]):
                 try:
@@ -256,10 +258,16 @@ async def market_scanner_loop():
                 except Exception:
                     pass
 
-            await asyncio.sleep(1)
+            add_log(f"🔄 Tarama Döngüsü Tamamlandı ({len(crypto_symbols)} Parite Kontrol Edildi)")
+            await exchange.close()
+            await asyncio.sleep(2)
         except Exception as e:
-            add_log(f"Döngü Uyarısı: {str(e)[:70]}")
-            await asyncio.sleep(3)
+            add_log(f"Döngü Yenileniyor: {str(e)[:50]}")
+            try:
+                await exchange.close()
+            except Exception:
+                pass
+            await asyncio.sleep(4)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -277,7 +285,7 @@ async def health_check():
 
 @app.get("/api/candles/{symbol:path}")
 async def get_candles(symbol: str):
-    exchange = ccxt.bybit({'options': {'defaultType': 'linear'}, 'enableRateLimit': True})
+    exchange = ccxt.bybit({'options': {'defaultType': 'linear'}, 'enableRateLimit': True, 'timeout': 8000})
     try:
         raw_candles = await exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
         await exchange.close()
@@ -289,7 +297,10 @@ async def get_candles(symbol: str):
             "close": float(c[4])
         } for c in raw_candles]
     except Exception:
-        await exchange.close()
+        try:
+            await exchange.close()
+        except Exception:
+            pass
         return []
 
 class SettingsPayload(BaseModel):
