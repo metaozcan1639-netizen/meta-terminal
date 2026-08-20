@@ -5,6 +5,7 @@ from datetime import datetime
 import pandas as pd
 import numpy as np
 import ccxt.async_support as ccxt
+import aiohttp
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
@@ -69,11 +70,13 @@ def compute_position_metrics(entry, sl):
 
 async def analyze_symbol(exchange, symbol):
     try:
-        tf_tasks = [
-            exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50)
-            for tf in ['5m', '15m', '1h', '4h']
-        ]
-        results = await asyncio.gather(*tf_tasks, return_exceptions=True)
+        results = await asyncio.gather(
+            exchange.fetch_ohlcv(symbol, timeframe='5m', limit=40),
+            exchange.fetch_ohlcv(symbol, timeframe='15m', limit=40),
+            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=40),
+            exchange.fetch_ohlcv(symbol, timeframe='4h', limit=40),
+            return_exceptions=True
+        )
         if any(isinstance(r, Exception) for r in results):
             return None
 
@@ -110,11 +113,11 @@ async def analyze_symbol(exchange, symbol):
         reasons.append("📈 4H ve 1H EMA50 Üstü Güçlü Trend Uyumu")
 
         vol_ratio = c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)
-        if vol_ratio >= 1.8:
+        if vol_ratio >= 1.5:
             score += 25
             reasons.append(f"🔥 Kurumsal Hacim Patlaması ({vol_ratio:.1f}x MA20)")
 
-        if (direction == "LONG" and c_5m['rsi'] <= 38) or (direction == "SHORT" and c_5m['rsi'] >= 62):
+        if (direction == "LONG" and c_5m['rsi'] <= 40) or (direction == "SHORT" and c_5m['rsi'] >= 60):
             score += 20
             reasons.append(f"🎯 5M RSI Aşırı Uç Bölgede ({c_5m['rsi']:.1f})")
 
@@ -155,6 +158,17 @@ async def analyze_symbol(exchange, symbol):
     except Exception:
         return None
 
+async def keep_alive_loop():
+    url = os.environ.get("RENDER_EXTERNAL_URL")
+    while True:
+        await asyncio.sleep(600)
+        if url:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    await session.get(f"{url}/api/state")
+            except Exception:
+                pass
+
 async def market_scanner_loop():
     exchange = ccxt.binance({'options': {'defaultType': 'future'}, 'enableRateLimit': True})
     add_log("Quant Motoru Başlatıldı. 250+ Binance Vadeli parite taranıyor...")
@@ -166,8 +180,8 @@ async def market_scanner_loop():
             system_state["scanned_count"] = len(symbols)
             system_state["last_scan_time"] = datetime.now().strftime("%H:%M:%S")
 
-            for i in range(0, len(symbols), 25):
-                chunk = symbols[i:i + 25]
+            for i in range(0, len(symbols), 10):
+                chunk = symbols[i:i + 10]
                 tasks = [analyze_symbol(exchange, s) for s in chunk]
                 signals = await asyncio.gather(*tasks)
 
@@ -178,7 +192,7 @@ async def market_scanner_loop():
                             system_state["active_positions"].append(sig)
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x İzole | Teminat: ${sig['margin']} | Maks Risk: ${sig['max_loss']}")
 
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.5)
 
             for pos in list(system_state["active_positions"]):
                 ticker = await exchange.fetch_ticker(pos['symbol'])
@@ -187,9 +201,9 @@ async def market_scanner_loop():
                 close_reason = None
 
                 if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
-                    close_reason = "❌ Stop-Loss Tetiklendi (Teknik Fitil Seviyesi İhlal Edildi)"
+                    close_reason = "❌ Stop-Loss Tetiklendi"
                 elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
-                    close_reason = "🎯 TP2 Majör Likidite Havuzuna Ulaşıldı (Tam Kâr Alındı)"
+                    close_reason = "🎯 TP2 Majör Hedefe Ulaşıldı"
                 elif (direction == "LONG" and curr_price >= pos['tp1']) or (direction == "SHORT" and curr_price <= pos['tp1']):
                     if not pos.get("tp1_hit"):
                         pos["tp1_hit"] = True
@@ -225,22 +239,23 @@ async def market_scanner_loop():
 @app.on_event("startup")
 async def startup_event():
     asyncio.create_task(market_scanner_loop())
+    asyncio.create_task(keep_alive_loop())
 
 @app.get("/api/candles/{symbol:path}")
 async def get_candles(symbol: str):
+    exchange = ccxt.binance({'options': {'defaultType': 'future'}, 'enableRateLimit': True})
     try:
-        exchange = ccxt.binance({'options': {'defaultType': 'future'}})
         raw_candles = await exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
         await exchange.close()
-        formatted = [{
+        return [{
             "time": int(c[0] / 1000),
-            "open": c[1],
-            "high": c[2],
-            "low": c[3],
-            "close": c[4]
+            "open": float(c[1]),
+            "high": float(c[2]),
+            "low": float(c[3]),
+            "close": float(c[4])
         } for c in raw_candles]
-        return formatted
-    except Exception as e:
+    except Exception:
+        await exchange.close()
         return []
 
 class SettingsPayload(BaseModel):
@@ -270,7 +285,7 @@ async def get_dashboard(request: Request):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Meta Quant Terminal</title>
         <script src="https://cdn.tailwindcss.com"></script>
-        <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+        <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
         <style>
             body { background-color: #0b0e14; color: #e2e8f0; font-family: 'Inter', monospace; }
             .card { background-color: #121824; border: 1px solid #1e293b; }
@@ -282,7 +297,7 @@ async def get_dashboard(request: Request):
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
                 <div>
                     <h1 class="text-lg font-bold tracking-wider text-emerald-400">META QUANT PRO TERMINAL</h1>
-                    <div class="text-[11px] text-slate-400">250+ Parite Canlı TP/SL Çizgili Terminal</div>
+                    <div class="text-[11px] text-slate-400">250+ Parite 7/24 Kesintisiz Canlı Motor</div>
                 </div>
             </div>
 
@@ -333,7 +348,7 @@ async def get_dashboard(request: Request):
                 <div>
                     <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
                     <div id="active-rationale" class="space-y-2 text-xs">
-                        <div class="text-slate-500 italic">Tablodan bir parite seçin...</div>
+                        <div class="text-slate-500 italic">Sinyal bekleniyor...</div>
                     </div>
                 </div>
                 <div class="mt-4">
