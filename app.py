@@ -31,8 +31,6 @@ system_state = {
     "logs": []
 }
 
-candle_cache = {}
-
 EXCLUDED_KEYWORDS = [
     'NVDA', 'GOOGL', 'AAPL', 'TSLA', 'MSFT', 'AMZN', 'META', 'NFLX', 'AMD', 'COIN',
     'BABA', 'PLTR', 'SOXS', 'SOXL', 'QQQ', 'SPY', 'WDC', 'DELL', 'IONQ', 'GLW', 'BIRB'
@@ -98,15 +96,6 @@ async def analyze_symbol(exchange, symbol):
         df_5m, df_15m, df_1h, df_4h = dfs['5m'], dfs['15m'], dfs['1h'], dfs['4h']
         c_5m = df_5m.iloc[-1]
         c_1h, c_4h = df_1h.iloc[-1], df_4h.iloc[-1]
-
-        # Grafik verisini hızlı yükleme için cache'le
-        candle_cache[symbol] = [{
-            "time": int(c[0] / 1000),
-            "open": float(c[1]),
-            "high": float(c[2]),
-            "low": float(c[3]),
-            "close": float(c[4])
-        } for c in results[0]]
 
         score = 0
         direction = None
@@ -293,31 +282,6 @@ app = FastAPI(title="Meta Quant Terminal", lifespan=lifespan)
 async def health_check():
     return {"status": "ok"}
 
-@app.get("/api/candles/{symbol:path}")
-async def get_candles(symbol: str):
-    if symbol in candle_cache and len(candle_cache[symbol]) > 0:
-        return candle_cache[symbol]
-
-    exchange = ccxt.bybit({'options': {'defaultType': 'linear'}, 'enableRateLimit': True, 'timeout': 5000})
-    try:
-        raw = await exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
-        await exchange.close()
-        data = [{
-            "time": int(c[0] / 1000),
-            "open": float(c[1]),
-            "high": float(c[2]),
-            "low": float(c[3]),
-            "close": float(c[4])
-        } for c in raw]
-        candle_cache[symbol] = data
-        return data
-    except Exception:
-        try:
-            await exchange.close()
-        except Exception:
-            pass
-        return []
-
 class SettingsPayload(BaseModel):
     total_balance: float
     risk_pct: float
@@ -500,10 +464,32 @@ async def get_dashboard(request: Request):
                 });
             }
 
+            function parseBybitSymbol(symbol) {
+                return symbol.replace('/USDT:USDT', 'USDT').replace('/USDT', 'USDT').replace(':', '');
+            }
+
+            async function fetchCandlesDirect(symbol) {
+                const rawSym = parseBybitSymbol(symbol);
+                const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${rawSym}&interval=5&limit=200`;
+                try {
+                    const res = await fetch(url);
+                    const json = await res.json();
+                    if (json.result && json.result.list) {
+                        return json.result.list.map(c => ({
+                            time: Math.floor(parseInt(c[0]) / 1000),
+                            open: parseFloat(c[1]),
+                            high: parseFloat(c[2]),
+                            low: parseFloat(c[3]),
+                            close: parseFloat(c[4])
+                        })).sort((a, b) => a.time - b.time);
+                    }
+                } catch(e) {}
+                return [];
+            }
+
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
-                    const res = await fetch(`/api/candles/${encodeURIComponent(symbol)}`);
-                    const candles = await res.json();
+                    const candles = await fetchCandlesDirect(symbol);
                     if (candles.length > 0) {
                         const lastPrice = candles[candles.length - 1].close;
                         const pConf = getPrecisionConfig(lastPrice);
