@@ -49,6 +49,7 @@ def calculate_indicators(df):
     rs = gain / (loss + 1e-9)
     df['rsi'] = 100 - (100 / (1 + rs))
 
+    df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
 
@@ -84,70 +85,87 @@ async def analyze_symbol(exchange, symbol):
             return None
 
         tfs = ['5m', '15m', '1h', '4h']
-        tasks = [exchange.fetch_ohlcv(symbol, timeframe=tf, limit=35) for tf in tfs]
+        tasks = [exchange.fetch_ohlcv(symbol, timeframe=tf, limit=40) for tf in tfs]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        if any(isinstance(r, Exception) or not r or len(r) < 20 for r in results):
+        if any(isinstance(r, Exception) or not r or len(r) < 25 for r in results):
             return None
 
         dfs = {tf: calculate_indicators(pd.DataFrame(results[i], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
                for i, tf in enumerate(tfs)}
 
         df_5m, df_15m, df_1h, df_4h = dfs['5m'], dfs['15m'], dfs['1h'], dfs['4h']
-        c_5m = df_5m.iloc[-1]
+        c_5m, p_5m = df_5m.iloc[-1], df_5m.iloc[-2]
+        c_15m = df_15m.iloc[-1]
         c_1h, c_4h = df_1h.iloc[-1], df_4h.iloc[-1]
 
         score = 0
         direction = None
         reasons = []
 
-        macro_bull = c_4h['close'] > c_4h['ema50'] and c_1h['close'] > c_1h['ema50']
-        macro_bear = c_4h['close'] < c_4h['ema50'] and c_1h['close'] < c_1h['ema50']
+        # 1. Makro & Ara Trend Uyumu (4H + 1H + 15M)
+        bull_trend = (c_4h['close'] > c_4h['ema50']) and (c_1h['close'] > c_1h['ema50']) and (c_15m['ema20'] > c_15m['ema50'])
+        bear_trend = (c_4h['close'] < c_4h['ema50']) and (c_1h['close'] < c_1h['ema50']) and (c_15m['ema20'] < c_15m['ema50'])
 
-        recent_low = df_5m['low'].iloc[-20:-4].min()
-        recent_high = df_5m['high'].iloc[-20:-4].max()
+        # 2. 5M Swing Seviyeleri (Son 20 mumun tepe/dip noktaları)
+        swing_low = df_5m['low'].iloc[-22:-4].min()
+        swing_high = df_5m['high'].iloc[-22:-4].max()
 
-        last_3_lows = df_5m['low'].iloc[-4:-1].min()
-        last_3_highs = df_5m['high'].iloc[-4:-1].max()
+        recent_breakout_high = df_5m['high'].iloc[-6:-1].max()
+        recent_breakout_low = df_5m['low'].iloc[-6:-1].min()
 
-        if last_3_lows < recent_low and c_5m['close'] > recent_low and macro_bull:
-            direction = "LONG"
-            score += 35
-            reasons.append("⚡ 5M Dip Likiditesi Süpürüldü (Stop-Hunt)")
-        elif last_3_highs > recent_high and c_5m['close'] < recent_high and macro_bear:
-            direction = "SHORT"
-            score += 35
-            reasons.append("⚡ 5M Tepe Likiditesi Süpürüldü (Stop-Hunt)")
+        # 3. Market Structure Shift (MSS / CHoCH) ve Likidite Teyidi
+        if bull_trend:
+            sweep_happened = df_5m['low'].iloc[-6:-1].min() < swing_low
+            # Dip süpürüldükten sonra 5M son ara tepeyi yukarı kıran güçlü yeşil gövde
+            mss_confirmed = c_5m['close'] > recent_breakout_high and c_5m['close'] > c_5m['open']
+            
+            if sweep_happened and mss_confirmed:
+                direction = "LONG"
+                score += 40
+                reasons.append("⚡ Dip Likiditesi + 5M Yapı Kırılımı (MSS/CHoCH)")
+
+        elif bear_trend:
+            sweep_happened = df_5m['high'].iloc[-6:-1].max() > swing_high
+            # Tepe süpürüldükten sonra 5M son ara dibi aşağı kıran güçlü kırmızı gövde
+            mss_confirmed = c_5m['close'] < recent_breakout_low and c_5m['close'] < c_5m['open']
+
+            if sweep_happened and mss_confirmed:
+                direction = "SHORT"
+                score += 40
+                reasons.append("⚡ Tepe Likiditesi + 5M Yapı Kırılımı (MSS/CHoCH)")
 
         if not direction:
             return None
 
-        score += 25
-        reasons.append("📈 4H ve 1H EMA50 Trend Teyidi")
+        score += 30
+        reasons.append("📈 4H / 1H / 15M Üçlü Trend Uyumu")
 
+        # 4. Hacim Patlaması Teyidi
         vol_ratio = c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)
-        if vol_ratio >= 1.1:
-            score += 25
-            reasons.append(f"🔥 Hacim Artışı ({vol_ratio:.1f}x MA20)")
+        if vol_ratio >= 1.25:
+            score += 20
+            reasons.append(f"🔥 Onay Hacmi Patlaması ({vol_ratio:.1f}x MA20)")
 
-        if (direction == "LONG" and c_5m['rsi'] <= 48) or (direction == "SHORT" and c_5m['rsi'] >= 52):
-            score += 15
-            reasons.append(f"🎯 RSI Uç Bölge ({c_5m['rsi']:.1f})")
+        # 5. Momentum RSI Teyidi
+        if (direction == "LONG" and 40 <= c_5m['rsi'] <= 60) or (direction == "SHORT" and 40 <= c_5m['rsi'] <= 60):
+            score += 10
+            reasons.append(f"🎯 Sağlıklı Momentum Bölgesi ({c_5m['rsi']:.1f})")
 
-        if score >= 60:
+        if score >= 70:
             entry = float(c_5m['close'])
             atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.005
 
             if direction == "LONG":
-                sl = float(df_5m['low'].iloc[-4:].min() - (1.0 * atr))
-                if (entry - sl) / entry < 0.006:
-                    sl = entry * 0.994
+                sl = float(df_5m['low'].iloc[-6:].min() - (1.5 * atr))
+                if (entry - sl) / entry < 0.008:
+                    sl = entry * 0.992
                 tp1 = float(entry + (1.5 * (entry - sl)))
                 tp2 = float(entry + (3.0 * (entry - sl)))
             else:
-                sl = float(df_5m['high'].iloc[-4:].max() + (1.0 * atr))
-                if (sl - entry) / entry < 0.006:
-                    sl = entry * 1.006
+                sl = float(df_5m['high'].iloc[-6:].max() + (1.5 * atr))
+                if (sl - entry) / entry < 0.008:
+                    sl = entry * 1.008
                 tp1 = float(entry - (1.5 * (sl - entry)))
                 tp2 = float(entry - (3.0 * (sl - entry)))
 
@@ -184,7 +202,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru Başlatıldı: Parite Taraması Aktif...")
+    add_log("Quant Motoru Başlatıldı: Multi-Timeframe Trend & MSS Taraması Aktif...")
 
     while True:
         exchange = ccxt.bybit({
@@ -503,7 +521,6 @@ async def get_dashboard(request: Request):
 
                         candleSeries.setData(candles);
                         
-                        // Dikey (Fiyat) ve Yatay (Zaman) eksenlerini tam sıfırla ve ortala
                         if (!isLiveTick) {
                             chart.priceScale('right').applyOptions({ autoScale: true });
                             chart.timeScale().fitContent();
