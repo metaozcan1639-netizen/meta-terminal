@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 from datetime import datetime
+from contextlib import asynccontextmanager
 import pandas as pd
 import numpy as np
 import ccxt.async_support as ccxt
@@ -12,8 +13,6 @@ from pydantic import BaseModel
 import uvicorn
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
-
-app = FastAPI(title="Meta Quant Terminal")
 
 system_state = {
     "total_balance": 1000.0,
@@ -27,7 +26,6 @@ system_state = {
     "logs": []
 }
 
-# Geleneksel hisse senetleri ve sentetik kontratları filtreleme
 EXCLUDED_KEYWORDS = [
     'NVDA', 'GOOGL', 'AAPL', 'TSLA', 'MSFT', 'AMZN', 'META', 'NFLX', 'AMD', 'COIN',
     'BABA', 'PLTR', 'SOXS', 'SOXL', 'QQQ', 'SPY', 'WDC', 'DELL', 'IONQ', 'GLW', 'BIRB'
@@ -98,14 +96,12 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
-        # Makro Trend Uyumu (4H ve 1H)
         macro_bull = c_4h['close'] > c_4h['ema50'] and c_1h['close'] > c_1h['ema50']
         macro_bear = c_4h['close'] < c_4h['ema50'] and c_1h['close'] < c_1h['ema50']
 
         recent_low = df_5m['low'].iloc[-15:-2].min()
         recent_high = df_5m['high'].iloc[-15:-2].max()
 
-        # Likidite Avı & Dönüş Teyidi
         if p_5m['low'] < recent_low and c_5m['close'] > recent_low and macro_bull:
             direction = "LONG"
             score += 30
@@ -134,7 +130,6 @@ async def analyze_symbol(exchange, symbol):
             entry = float(c_5m['close'])
             atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.005
 
-            # Dinamik ve Güvenli Stop Marjı (1.2 * ATR Emniyet Payı)
             if direction == "LONG":
                 sl = float(min(p_5m['low'], c_5m['low']) - (1.2 * atr))
                 if (entry - sl) / entry < 0.006:
@@ -175,15 +170,13 @@ async def keep_alive_loop():
         if url:
             try:
                 async with aiohttp.ClientSession() as session:
-                    await session.get(f"{url}/api/state")
+                    await session.get(f"{url}/api/health")
             except Exception:
                 pass
 
 async def market_scanner_loop():
-    exchange = ccxt.bybit({
-        'options': {'defaultType': 'linear'},
-        'enableRateLimit': True
-    })
+    await asyncio.sleep(2)
+    exchange = ccxt.bybit({'options': {'defaultType': 'linear'}, 'enableRateLimit': True})
     add_log("Quant Motoru Aktif: Likit Kripto Vadeli Pariteler Taranıyor...")
 
     while True:
@@ -258,10 +251,19 @@ async def market_scanner_loop():
             add_log(f"Döngü Uyarısı: {str(e)[:70]}")
             await asyncio.sleep(5)
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(market_scanner_loop())
-    asyncio.create_task(keep_alive_loop())
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task1 = asyncio.create_task(market_scanner_loop())
+    task2 = asyncio.create_task(keep_alive_loop())
+    yield
+    task1.cancel()
+    task2.cancel()
+
+app = FastAPI(title="Meta Quant Terminal", lifespan=lifespan)
+
+@app.get("/api/health")
+async def health_check():
+    return {"status": "ok"}
 
 @app.get("/api/candles/{symbol:path}")
 async def get_candles(symbol: str):
@@ -585,7 +587,6 @@ async def get_dashboard(request: Request):
                         </tr>
                     `).join('');
 
-                    // Canlı grafik tick güncellemesi
                     if (currentSymbol) {
                         loadChartCandles(currentSymbol, selectedPos, true);
                     }
