@@ -14,7 +14,6 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 app = FastAPI(title="Meta Quant Terminal")
 
-# Sistem Durumu ve Canlı Değişkenler
 system_state = {
     "total_balance": 1000.0,
     "risk_pct": 1.0,
@@ -120,19 +119,19 @@ async def analyze_symbol(exchange, symbol):
             reasons.append(f"🎯 5M RSI Aşırı Uç Bölgede ({c_5m['rsi']:.1f})")
 
         if score >= 70:
-            entry = c_5m['close']
-            atr = c_5m['atr']
+            entry = float(c_5m['close'])
+            atr = float(c_5m['atr'])
 
             if direction == "LONG":
-                sl = min(p_5m['low'], c_5m['low']) - (0.3 * atr)
-                tp1 = df_15m['high'].iloc[-15:-1].max()
-                tp2 = df_1h['high'].iloc[-20:-1].max()
+                sl = float(min(p_5m['low'], c_5m['low']) - (0.3 * atr))
+                tp1 = float(df_15m['high'].iloc[-15:-1].max())
+                tp2 = float(df_1h['high'].iloc[-20:-1].max())
                 if tp1 <= entry: tp1 = entry + (1.5 * (entry - sl))
                 if tp2 <= tp1: tp2 = entry + (3.0 * (entry - sl))
             else:
-                sl = max(p_5m['high'], c_5m['high']) + (0.3 * atr)
-                tp1 = df_15m['low'].iloc[-15:-1].min()
-                tp2 = df_1h['low'].iloc[-20:-1].min()
+                sl = float(max(p_5m['high'], c_5m['high']) + (0.3 * atr))
+                tp1 = float(df_15m['low'].iloc[-15:-1].min())
+                tp2 = float(df_1h['low'].iloc[-20:-1].min())
                 if tp1 >= entry: tp1 = entry - (1.5 * (sl - entry))
                 if tp2 >= tp1: tp2 = entry - (3.0 * (sl - entry))
 
@@ -227,6 +226,23 @@ async def market_scanner_loop():
 async def startup_event():
     asyncio.create_task(market_scanner_loop())
 
+@app.get("/api/candles/{symbol:path}")
+async def get_candles(symbol: str):
+    try:
+        exchange = ccxt.binance({'options': {'defaultType': 'future'}})
+        raw_candles = await exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
+        await exchange.close()
+        formatted = [{
+            "time": int(c[0] / 1000),
+            "open": c[1],
+            "high": c[2],
+            "low": c[3],
+            "close": c[4]
+        } for c in raw_candles]
+        return formatted
+    except Exception as e:
+        return []
+
 class SettingsPayload(BaseModel):
     total_balance: float
     risk_pct: float
@@ -254,7 +270,7 @@ async def get_dashboard(request: Request):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Meta Quant Terminal</title>
         <script src="https://cdn.tailwindcss.com"></script>
-        <script src="https://s3.tradingview.com/tv.js"></script>
+        <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
         <style>
             body { background-color: #0b0e14; color: #e2e8f0; font-family: 'Inter', monospace; }
             .card { background-color: #121824; border: 1px solid #1e293b; }
@@ -266,7 +282,7 @@ async def get_dashboard(request: Request):
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
                 <div>
                     <h1 class="text-lg font-bold tracking-wider text-emerald-400">META QUANT PRO TERMINAL</h1>
-                    <div class="text-[11px] text-slate-400">250+ Parite 4H/1H/15M/5M | İzole Marjin Motoru</div>
+                    <div class="text-[11px] text-slate-400">250+ Parite Canlı TP/SL Çizgili Terminal</div>
                 </div>
             </div>
 
@@ -305,15 +321,19 @@ async def get_dashboard(request: Request):
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div class="card p-2 rounded-xl lg:col-span-2 h-[450px]">
-                <div id="tradingview_chart" class="w-full h-full"></div>
+            <div class="card p-3 rounded-xl lg:col-span-2 h-[460px] flex flex-col">
+                <div class="flex justify-between items-center mb-2 px-1">
+                    <span id="chart-title" class="text-xs font-bold text-emerald-400 tracking-wider">CANLI GRAFİK (5M)</span>
+                    <span id="chart-levels" class="text-[11px] text-slate-400 space-x-2"></span>
+                </div>
+                <div id="tv-container" class="w-full flex-1 rounded overflow-hidden"></div>
             </div>
 
-            <div class="card p-4 rounded-xl flex flex-col justify-between h-[450px]">
+            <div class="card p-4 rounded-xl flex flex-col justify-between h-[460px]">
                 <div>
                     <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
                     <div id="active-rationale" class="space-y-2 text-xs">
-                        <div class="text-slate-500 italic">Sinyal bekleniyor...</div>
+                        <div class="text-slate-500 italic">Tablodan bir parite seçin...</div>
                     </div>
                 </div>
                 <div class="mt-4">
@@ -326,9 +346,9 @@ async def get_dashboard(request: Request):
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div class="card p-4 rounded-xl">
                 <h2 class="text-xs font-semibold text-emerald-400 mb-3 flex items-center">
-                    <span class="w-2 h-2 bg-emerald-400 rounded-full mr-2"></span> AKTİF POZİSYONLAR
+                    <span class="w-2 h-2 bg-emerald-400 rounded-full mr-2"></span> AKTİF POZİSYONLAR (Grafik için Tıkla)
                 </h2>
-                <div class="overflow-x-auto">
+                <div class="overflow-x-auto max-h-60 overflow-y-auto">
                     <table class="w-full text-left text-[11px]">
                         <thead class="text-slate-500 border-b border-slate-800">
                             <tr>
@@ -366,26 +386,114 @@ async def get_dashboard(request: Request):
         </div>
 
         <script>
-            let currentSymbol = "BINANCE:BTCUSDT.P";
-            let tvWidget = null;
+            let chart = null;
+            let candleSeries = null;
+            let currentSymbol = "BTC/USDT:USDT";
+            let selectedPos = null;
+            let priceLines = [];
+            let lastPositions = [];
 
-            function loadTradingView(symbol) {
-                document.getElementById('tradingview_chart').innerHTML = '';
-                tvWidget = new TradingView.widget({
-                    "autosize": true,
-                    "symbol": symbol,
-                    "interval": "5",
-                    "timezone": "Etc/UTC",
-                    "theme": "dark",
-                    "style": "1",
-                    "locale": "tr",
-                    "toolbar_bg": "#121824",
-                    "enable_publishing": false,
-                    "container_id": "tradingview_chart"
+            function initChart() {
+                const container = document.getElementById('tv-container');
+                container.innerHTML = '';
+                chart = LightweightCharts.createChart(container, {
+                    layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
+                    grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
+                    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+                    timeScale: { timeVisible: true, secondsVisible: false }
+                });
+                candleSeries = chart.addCandlestickSeries({
+                    upColor: '#10b981', downColor: '#ef4444',
+                    borderUpColor: '#10b981', borderDownColor: '#ef4444',
+                    wickUpColor: '#10b981', wickDownColor: '#ef4444'
                 });
             }
 
-            loadTradingView(currentSymbol);
+            async function loadChartCandles(symbol, posData = null) {
+                try {
+                    const res = await fetch(`/api/candles/${encodeURIComponent(symbol)}`);
+                    const candles = await res.json();
+                    if (candles.length > 0) {
+                        candleSeries.setData(candles);
+                        chart.timeScale().fitContent();
+                    }
+
+                    priceLines.forEach(l => candleSeries.removePriceLine(l));
+                    priceLines = [];
+
+                    document.getElementById('chart-title').innerText = `${symbol} (5M)`;
+
+                    if (posData) {
+                        const entryLine = candleSeries.createPriceLine({
+                            price: posData.entry,
+                            color: '#38bdf8',
+                            lineWidth: 2,
+                            lineStyle: LightweightCharts.LineStyle.Solid,
+                            axisLabelVisible: true,
+                            title: 'GİRİŞ',
+                        });
+                        const slLine = candleSeries.createPriceLine({
+                            price: posData.sl,
+                            color: '#ef4444',
+                            lineWidth: 2,
+                            lineStyle: LightweightCharts.LineStyle.Dashed,
+                            axisLabelVisible: true,
+                            title: 'STOP (SL)',
+                        });
+                        const tp1Line = candleSeries.createPriceLine({
+                            price: posData.tp1,
+                            color: '#10b981',
+                            lineWidth: 2,
+                            lineStyle: LightweightCharts.LineStyle.Dashed,
+                            axisLabelVisible: true,
+                            title: 'TP1',
+                        });
+                        const tp2Line = candleSeries.createPriceLine({
+                            price: posData.tp2,
+                            color: '#059669',
+                            lineWidth: 2,
+                            lineStyle: LightweightCharts.LineStyle.Dashed,
+                            axisLabelVisible: true,
+                            title: 'TP2',
+                        });
+                        priceLines.push(entryLine, slLine, tp1Line, tp2Line);
+
+                        document.getElementById('chart-levels').innerHTML = `
+                            <span class="text-sky-400">Giriş: ${posData.entry}</span> | 
+                            <span class="text-red-400">SL: ${posData.sl.toFixed(4)}</span> | 
+                            <span class="text-emerald-400">TP1: ${posData.tp1.toFixed(4)}</span> | 
+                            <span class="text-emerald-500">TP2: ${posData.tp2.toFixed(4)}</span>
+                        `;
+                    } else {
+                        document.getElementById('chart-levels').innerHTML = '';
+                    }
+                } catch(e) {}
+            }
+
+            function selectPosition(pos) {
+                selectedPos = pos;
+                currentSymbol = pos.symbol;
+                loadChartCandles(pos.symbol, pos);
+                renderRationale(pos);
+            }
+
+            function renderRationale(pos) {
+                if (!pos) return;
+                document.getElementById('active-rationale').innerHTML = `
+                    <div class="flex justify-between items-center mb-2">
+                        <span class="font-bold text-base text-white">${pos.symbol}</span>
+                        <span class="px-2 py-0.5 rounded text-xs font-bold ${pos.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${pos.direction} (${pos.score} Puan)</span>
+                    </div>
+                    <div class="space-y-1 text-slate-300">
+                        ${pos.reasons.map(r => `<div class="bg-slate-900/60 p-1.5 rounded border border-slate-800">✓ ${r}</div>`).join('')}
+                    </div>
+                    <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1">
+                        <div class="text-slate-400">Kaldıraç & Teminat: <span class="text-white font-bold">${pos.leverage}x İzole ($${pos.margin})</span></div>
+                        <div class="text-red-400">Stop-Loss: <span class="font-mono">${pos.sl.toFixed(4)}</span> (Maks Kayıp: $${pos.max_loss})</div>
+                        <div class="text-emerald-400">TP1 / TP2: <span class="font-mono">${pos.tp1.toFixed(4)} / ${pos.tp2.toFixed(4)}</span></div>
+                    </div>
+                `;
+            }
 
             async function saveSettings() {
                 const total_balance = parseFloat(document.getElementById('input-balance').value);
@@ -410,10 +518,11 @@ async def get_dashboard(request: Request):
                     const logBox = document.getElementById('log-box');
                     logBox.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
 
+                    lastPositions = data.active_positions;
                     const activeTbody = document.getElementById('active-pos-table');
-                    activeTbody.innerHTML = data.active_positions.map(p => `
-                        <tr class="hover:bg-slate-800/50 cursor-pointer" onclick="selectSymbol('${p.symbol}')">
-                            <td class="py-2 font-bold">${p.symbol}</td>
+                    activeTbody.innerHTML = data.active_positions.map((p, idx) => `
+                        <tr class="hover:bg-slate-800/80 cursor-pointer ${selectedPos && selectedPos.symbol === p.symbol ? 'bg-slate-800/60' : ''}" onclick="selectPosition(lastPositions[${idx}])">
+                            <td class="py-2 font-bold text-white">${p.symbol}</td>
                             <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction} (${p.leverage}x)</td>
                             <td class="text-white font-mono">$${p.margin}</td>
                             <td>${p.entry}</td>
@@ -434,31 +543,20 @@ async def get_dashboard(request: Request):
                         </tr>
                     `).join('');
 
-                    if(data.active_positions.length > 0) {
-                        const first = data.active_positions[0];
-                        document.getElementById('active-rationale').innerHTML = `
-                            <div class="flex justify-between items-center mb-2">
-                                <span class="font-bold text-base text-white">${first.symbol}</span>
-                                <span class="px-2 py-0.5 rounded text-xs font-bold ${first.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${first.direction} (${first.score} Puan)</span>
-                            </div>
-                            <div class="space-y-1 text-slate-300">
-                                ${first.reasons.map(r => `<div class="bg-slate-900/60 p-1 rounded border border-slate-800">✓ ${r}</div>`).join('')}
-                            </div>
-                            <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1">
-                                <div class="text-slate-400">Kaldıraç & Teminat: <span class="text-white font-bold">${first.leverage}x İzole ($${first.margin})</span></div>
-                                <div class="text-red-400">Stop-Loss: <span class="font-mono">${first.sl.toFixed(4)}</span> (Maks Kayıp: $${first.max_loss})</div>
-                                <div class="text-emerald-400">TP1 / TP2: <span class="font-mono">${first.tp1.toFixed(4)} / ${first.tp2.toFixed(4)}</span></div>
-                            </div>
-                        `;
+                    if (!selectedPos && data.active_positions.length > 0) {
+                        selectPosition(data.active_positions[0]);
+                    } else if (selectedPos) {
+                        const updated = data.active_positions.find(p => p.symbol === selectedPos.symbol);
+                        if (updated) {
+                            selectedPos = updated;
+                            renderRationale(updated);
+                        }
                     }
                 } catch (e) {}
             }
 
-            function selectSymbol(sym) {
-                let formatted = "BINANCE:" + sym.replace("/", "").replace(":USDT", "") + ".P";
-                loadTradingView(formatted);
-            }
-
+            initChart();
+            loadChartCandles(currentSymbol);
             setInterval(updateDashboard, 2000);
         </script>
     </body>
