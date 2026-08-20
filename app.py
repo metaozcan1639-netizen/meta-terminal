@@ -75,9 +75,9 @@ async def analyze_symbol(exchange, symbol):
         for tf in tfs:
             data = await exchange.fetch_ohlcv(symbol, timeframe=tf, limit=35)
             results.append(data)
-            await asyncio.sleep(0.04)
+            await asyncio.sleep(0.02)
 
-        if any(not r or len(r) < 30 for r in results):
+        if any(not r or len(r) < 25 for r in results):
             return None
 
         dfs = {tf: calculate_indicators(pd.DataFrame(results[i], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
@@ -170,11 +170,11 @@ async def keep_alive_loop():
                 pass
 
 async def market_scanner_loop():
-    exchange = ccxt.binance({
-        'options': {'defaultType': 'future'},
+    exchange = ccxt.bybit({
+        'options': {'defaultType': 'linear'},
         'enableRateLimit': True
     })
-    add_log("Tüm Binance Vadeli Pariteler (250+) için Rotasyonel Tarama Başlatıldı.")
+    add_log("Quant Motoru Aktif: 300+ Vadeli Parite Kesintisiz Taranıyor...")
 
     while True:
         try:
@@ -186,7 +186,7 @@ async def market_scanner_loop():
             system_state["scanned_count"] = len(all_symbols)
             system_state["last_scan_time"] = datetime.now().strftime("%H:%M:%S")
 
-            batch_size = 12
+            batch_size = 15
             for i in range(0, len(all_symbols), batch_size):
                 chunk = all_symbols[i:i + batch_size]
                 tasks = [analyze_symbol(exchange, s) for s in chunk]
@@ -199,7 +199,7 @@ async def market_scanner_loop():
                             system_state["active_positions"].append(sig)
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x İzole | Teminat: ${sig['margin']} | Maks Risk: ${sig['max_loss']}")
 
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(0.15)
 
             for pos in list(system_state["active_positions"]):
                 try:
@@ -241,10 +241,10 @@ async def market_scanner_loop():
                 except Exception:
                     pass
 
-            await asyncio.sleep(3)
+            await asyncio.sleep(2)
         except Exception as e:
             add_log(f"Döngü Uyarısı: {str(e)[:70]}")
-            await asyncio.sleep(10)
+            await asyncio.sleep(5)
 
 @app.on_event("startup")
 async def startup_event():
@@ -253,7 +253,7 @@ async def startup_event():
 
 @app.get("/api/candles/{symbol:path}")
 async def get_candles(symbol: str):
-    exchange = ccxt.binance({'options': {'defaultType': 'future'}, 'enableRateLimit': True})
+    exchange = ccxt.bybit({'options': {'defaultType': 'linear'}, 'enableRateLimit': True})
     try:
         raw_candles = await exchange.fetch_ohlcv(symbol, timeframe='5m', limit=100)
         await exchange.close()
@@ -307,7 +307,7 @@ async def get_dashboard(request: Request):
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
                 <div>
                     <h1 class="text-lg font-bold tracking-wider text-emerald-400">META QUANT PRO TERMINAL</h1>
-                    <div class="text-[11px] text-slate-400">Tüm Binance Vadeli Coinleri (250+) 7/24 Taranıyor</div>
+                    <div class="text-[11px] text-slate-400">300+ Parite 7/24 Kesintisiz Yüksek Hızlı Quant Motoru</div>
                 </div>
             </div>
 
@@ -340,7 +340,7 @@ async def get_dashboard(request: Request):
             </div>
 
             <div class="flex space-x-4 text-xs text-slate-400">
-                <div>Taranan Toplam Parite: <span id="scanned-count" class="text-white font-bold">0</span></div>
+                <div>Taranan Parite: <span id="scanned-count" class="text-white font-bold">0</span></div>
                 <div>Son Tarama: <span id="last-scan" class="text-white font-bold">-</span></div>
             </div>
         </div>
