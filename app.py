@@ -19,6 +19,9 @@ TURKEY_TZ = timezone(timedelta(hours=3))
 def get_now_str():
     return datetime.now(TURKEY_TZ).strftime("%H:%M:%S")
 
+def get_now_datetime():
+    return datetime.now(TURKEY_TZ)
+
 system_state = {
     "initial_balance": 1000.0,
     "total_balance": 1000.0,
@@ -176,7 +179,8 @@ async def analyze_symbol(exchange, symbol):
                 "max_loss": max_loss,
                 "leverage": system_state["leverage"],
                 "reasons": reasons,
-                "open_time": get_now_str()
+                "open_time": get_now_str(),
+                "open_timestamp": int(get_now_datetime().timestamp())
             }
     except Exception:
         return None
@@ -250,6 +254,7 @@ async def market_scanner_loop():
                         realized_pnl = round(pos['pos_size'] * (pnl_pct / 100.0), 2)
                         system_state["total_balance"] += realized_pnl
 
+                        now_dt = get_now_datetime()
                         history_item = {
                             "symbol": pos['symbol'],
                             "direction": pos['direction'],
@@ -260,7 +265,8 @@ async def market_scanner_loop():
                             "score": pos['score'],
                             "open_reasons": pos['reasons'],
                             "close_reason": close_reason,
-                            "close_time": get_now_str()
+                            "close_time": now_dt.strftime("%H:%M:%S"),
+                            "close_timestamp": int(now_dt.timestamp())
                         }
                         system_state["trade_history"].insert(0, history_item)
                         system_state["active_positions"].remove(pos)
@@ -328,9 +334,11 @@ async def get_dashboard(request: Request):
             ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
             ::-webkit-scrollbar-thumb:hover { background: #475569; }
             .tf-btn.active { background-color: #10b981; color: #000; font-weight: bold; }
+            .pnl-tf-btn.active { background-color: #38bdf8; color: #000; font-weight: bold; }
         </style>
     </head>
     <body class="p-4 space-y-4 pb-16">
+        <!-- ÜST PANEL -->
         <div class="card p-4 rounded-xl flex flex-wrap justify-between items-center gap-4 border-emerald-500/30">
             <div class="flex items-center space-x-3">
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
@@ -340,23 +348,43 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <div class="flex items-center space-x-4 bg-slate-900/90 px-4 py-2 rounded-xl border border-slate-800">
-                <div>
-                    <div class="text-[10px] text-slate-400 uppercase tracking-wider">Net PnL ($)</div>
-                    <div id="stat-pnl" class="text-base font-extrabold font-mono text-emerald-400">$0.00</div>
+            <!-- KÂR / ZARAR METRİKLERİ VE TSİ ZAMAN SEÇİCİ -->
+            <div class="flex flex-col space-y-1.5 bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
+                <div class="flex items-center justify-between gap-2 border-b border-slate-800/80 pb-1 text-[10px]">
+                    <span class="text-slate-400 font-semibold uppercase">Dönemsel PnL (TSİ 00:00):</span>
+                    <div class="flex space-x-1">
+                        <button onclick="changePnlFilter('today')" id="pnl-tf-today" class="pnl-tf-btn active px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Bugün</button>
+                        <button onclick="changePnlFilter('yesterday')" id="pnl-tf-yesterday" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Dün</button>
+                        <button onclick="changePnlFilter('week')" id="pnl-tf-week" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Bu Hafta</button>
+                        <button onclick="changePnlFilter('month')" id="pnl-tf-month" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Bu Ay</button>
+                        <button onclick="changePnlFilter('all')" id="pnl-tf-all" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Tümü</button>
+                    </div>
                 </div>
-                <div class="border-r border-slate-800 h-8"></div>
-                <div>
-                    <div class="text-[10px] text-slate-400 uppercase tracking-wider">Win Rate (%)</div>
-                    <div id="stat-winrate" class="text-base font-extrabold font-mono text-sky-400">%0.0</div>
-                </div>
-                <div class="border-r border-slate-800 h-8"></div>
-                <div>
-                    <div class="text-[10px] text-slate-400 uppercase tracking-wider">Kapalı İşlem</div>
-                    <div id="stat-trades" class="text-base font-extrabold font-mono text-white">0</div>
+
+                <div class="flex items-center space-x-4 pt-0.5">
+                    <div>
+                        <div class="text-[9px] text-slate-400 uppercase tracking-wider" id="pnl-label">Bugün Net PnL</div>
+                        <div id="stat-pnl" class="text-base font-extrabold font-mono text-emerald-400">$0.00</div>
+                    </div>
+                    <div class="border-r border-slate-800 h-7"></div>
+                    <div>
+                        <div class="text-[9px] text-slate-400 uppercase tracking-wider">Win Rate</div>
+                        <div id="stat-winrate" class="text-base font-extrabold font-mono text-sky-400">%0.0</div>
+                    </div>
+                    <div class="border-r border-slate-800 h-7"></div>
+                    <div>
+                        <div class="text-[9px] text-slate-400 uppercase tracking-wider">İşlem Adedi</div>
+                        <div id="stat-trades" class="text-base font-extrabold font-mono text-white">0</div>
+                    </div>
+                    <div class="border-r border-slate-800 h-7"></div>
+                    <div>
+                        <div class="text-[9px] text-slate-400 uppercase tracking-wider">Genel Toplam PnL</div>
+                        <div id="stat-all-pnl" class="text-sm font-bold font-mono text-slate-300">$0.00</div>
+                    </div>
                 </div>
             </div>
 
+            <!-- KASA & AYARLAR -->
             <div class="flex items-center space-x-3 bg-slate-900/80 p-2 rounded-lg border border-slate-800 text-xs">
                 <div>
                     <label class="text-slate-400 block text-[10px]">KASA ($)</label>
@@ -391,11 +419,14 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
+        <!-- GRAFİK VE GEREKÇE ALANI -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div class="card p-3 rounded-xl lg:col-span-2 h-[520px] flex flex-col">
                 <div class="flex flex-wrap justify-between items-center mb-2 px-1 gap-2">
                     <div class="flex items-center space-x-3">
                         <span id="chart-title" class="text-xs font-bold text-emerald-400 tracking-wider">GRAFİK</span>
+                        
+                        <!-- ZAMAN DİLİMİ BUTONLARI -->
                         <div class="flex space-x-1 bg-slate-900 p-0.5 rounded border border-slate-800 text-[10px]">
                             <button onclick="changeTimeframe('1')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-1">1M</button>
                             <button onclick="changeTimeframe('5')" class="tf-btn active px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-5">5M</button>
@@ -403,6 +434,13 @@ async def get_dashboard(request: Request):
                             <button onclick="changeTimeframe('60')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-60">1H</button>
                             <button onclick="changeTimeframe('240')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-240">4H</button>
                             <button onclick="changeTimeframe('D')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-D">1D</button>
+                        </div>
+
+                        <!-- GRAFİK ÜSTÜ YÜKSEK / DÜŞÜK GÖSTERGESİ -->
+                        <div class="flex items-center space-x-2 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 text-[11px] font-mono">
+                            <span class="text-amber-400 font-semibold">Yüksek (H): <span id="bar-high" class="text-white">-</span></span>
+                            <span class="text-slate-600">|</span>
+                            <span class="text-indigo-400 font-semibold">Düşük (L): <span id="bar-low" class="text-white">-</span></span>
                         </div>
                     </div>
                     <span id="chart-levels" class="text-[11px] text-slate-400 space-x-2"></span>
@@ -424,6 +462,7 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
+        <!-- TABLOLAR -->
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
             <div class="card p-4 rounded-xl">
                 <h2 class="text-xs font-semibold text-emerald-400 mb-3 flex items-center">
@@ -472,9 +511,11 @@ async def get_dashboard(request: Request):
             let candleSeries = null;
             let currentSymbol = localStorage.getItem("selected_sym") || "BTC/USDT:USDT";
             let currentTimeframe = "5";
+            let currentPnlFilter = "today";
             let selectedPos = null;
             let priceLines = [];
             let lastPositions = [];
+            let tradeHistoryCache = [];
 
             function getPrecisionConfig(price) {
                 if (price < 0.001) return { precision: 6, minMove: 0.000001 };
@@ -515,9 +556,102 @@ async def get_dashboard(request: Request):
                 loadChartCandles(currentSymbol, selectedPos, false);
             }
 
+            function changePnlFilter(filter) {
+                currentPnlFilter = filter;
+                document.querySelectorAll('.pnl-tf-btn').forEach(b => b.classList.remove('active'));
+                const btn = document.getElementById(`pnl-tf-${filter}`);
+                if (btn) btn.classList.add('active');
+                
+                const labels = {
+                    today: "Bugün Net PnL",
+                    yesterday: "Dün Net PnL",
+                    week: "Bu Hafta Net PnL",
+                    month: "Bu Ay Net PnL",
+                    all: "Tüm Zamanlar Net PnL"
+                };
+                document.getElementById('pnl-label').innerText = labels[filter] || "Net PnL";
+                recalculatePnlMetrics();
+            }
+
+            function getTurkeyTimeBoundaries() {
+                const now = new Date();
+                const trOffset = 3 * 60; // UTC+3
+                const localOffset = now.getTimezoneOffset(); // dakika
+                const trNow = new Date(now.getTime() + (trOffset + localOffset) * 60 * 1000);
+
+                // Bugün TSİ 00:00:00
+                const todayStart = new Date(trNow.getFullYear(), trNow.getMonth(), trNow.getDate(), 0, 0, 0);
+                const todayStartTs = Math.floor((todayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                // Dün TSİ 00:00:00 - 23:59:59
+                const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+                const yesterdayStartTs = Math.floor((yesterdayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                // Bu Hafta Pazartesi TSİ 00:00:00
+                const dayOfWeek = trNow.getDay() === 0 ? 6 : trNow.getDay() - 1; // Pazartesi = 0
+                const weekStart = new Date(todayStart.getTime() - dayOfWeek * 24 * 60 * 60 * 1000);
+                const weekStartTs = Math.floor((weekStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                // Bu Ay 1. Gün TSİ 00:00:00
+                const monthStart = new Date(trNow.getFullYear(), trNow.getMonth(), 1, 0, 0, 0);
+                const monthStartTs = Math.floor((monthStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                return {
+                    todayStartTs,
+                    yesterdayStartTs,
+                    yesterdayEndTs: todayStartTs,
+                    weekStartTs,
+                    monthStartTs
+                };
+            }
+
+            function recalculatePnlMetrics() {
+                const boundaries = getTurkeyTimeBoundaries();
+                let filtered = [];
+                let totalAllPnl = 0;
+
+                tradeHistoryCache.forEach(h => {
+                    totalAllPnl += h.realized_pnl;
+                    const ts = h.close_timestamp || 0;
+
+                    if (currentPnlFilter === 'today' && ts >= boundaries.todayStartTs) {
+                        filtered.push(h);
+                    } else if (currentPnlFilter === 'yesterday' && ts >= boundaries.yesterdayStartTs && ts < boundaries.yesterdayEndTs) {
+                        filtered.push(h);
+                    } else if (currentPnlFilter === 'week' && ts >= boundaries.weekStartTs) {
+                        filtered.push(h);
+                    } else if (currentPnlFilter === 'month' && ts >= boundaries.monthStartTs) {
+                        filtered.push(h);
+                    } else if (currentPnlFilter === 'all') {
+                        filtered.push(h);
+                    }
+                });
+
+                let periodPnl = 0;
+                let winCount = 0;
+                filtered.forEach(h => {
+                    periodPnl += h.realized_pnl;
+                    if (h.realized_pnl > 0) winCount++;
+                });
+
+                periodPnl = Math.round(periodPnl * 100) / 100;
+                totalAllPnl = Math.round(totalAllPnl * 100) / 100;
+                const winRate = filtered.length > 0 ? ((winCount / filtered.length) * 100).toFixed(1) : "0.0";
+
+                const pnlElem = document.getElementById('stat-pnl');
+                pnlElem.innerText = `${periodPnl >= 0 ? '+' : ''}$${periodPnl.toFixed(2)}`;
+                pnlElem.className = `text-base font-extrabold font-mono ${periodPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+
+                document.getElementById('stat-winrate').innerText = `%${winRate}`;
+                document.getElementById('stat-trades').innerText = filtered.length;
+
+                const allPnlElem = document.getElementById('stat-all-pnl');
+                allPnlElem.innerText = `${totalAllPnl >= 0 ? '+' : ''}$${totalAllPnl.toFixed(2)}`;
+                allPnlElem.className = `text-sm font-bold font-mono ${totalAllPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+            }
+
             async function fetchCandlesDirect(symbol, interval = '5') {
                 const rawSym = parseBybitSymbol(symbol);
-                // 1000 Geçmiş Mum Desteği
                 const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${rawSym}&interval=${interval}&limit=1000`;
                 try {
                     const res = await fetch(url);
@@ -557,37 +691,18 @@ async def get_dashboard(request: Request):
                             chart.timeScale().resetTimeScale();
                         }
 
-                        // Yüksek (High) ve Düşük (Low) Fiyat Çizgilerini Çiz
-                        if (!isLiveTick) {
-                            priceLines.forEach(l => candleSeries.removePriceLine(l));
-                            priceLines = [];
-
-                            let maxPrice = Math.max(...candles.map(c => c.high));
-                            let minPrice = Math.min(...candles.map(c => c.low));
-
-                            const highLine = candleSeries.createPriceLine({
-                                price: maxPrice,
-                                color: '#f59e0b',
-                                lineWidth: 1,
-                                lineStyle: LightweightCharts.LineStyle.Dotted,
-                                axisLabelVisible: true,
-                                title: 'YÜKSEK (H)',
-                            });
-
-                            const lowLine = candleSeries.createPriceLine({
-                                price: minPrice,
-                                color: '#6366f1',
-                                lineWidth: 1,
-                                lineStyle: LightweightCharts.LineStyle.Dotted,
-                                axisLabelVisible: true,
-                                title: 'DÜŞÜK (L)',
-                            });
-
-                            priceLines.push(highLine, lowLine);
-                        }
+                        // Üst bardaki Yüksek (H) & Düşük (L) değerlerini güncelle
+                        let maxPrice = Math.max(...candles.map(c => c.high));
+                        let minPrice = Math.min(...candles.map(c => c.low));
+                        const dec = lastPrice < 1 ? pConf.precision : 2;
+                        document.getElementById('bar-high').innerText = `$${maxPrice.toFixed(dec)}`;
+                        document.getElementById('bar-low').innerText = `$${minPrice.toFixed(dec)}`;
                     }
 
                     if (!isLiveTick) {
+                        priceLines.forEach(l => candleSeries.removePriceLine(l));
+                        priceLines = [];
+
                         const tfLabel = currentTimeframe === '60' ? '1H' : (currentTimeframe === '240' ? '4H' : (currentTimeframe === 'D' ? '1D' : `${currentTimeframe}M`));
                         document.getElementById('chart-title').innerText = `${symbol} (${tfLabel})`;
 
@@ -688,22 +803,8 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
-                    // Net PnL ve Win Rate Hesaplama
-                    let totalPnl = 0;
-                    let winCount = 0;
-                    data.trade_history.forEach(h => {
-                        totalPnl += h.realized_pnl;
-                        if (h.realized_pnl > 0) winCount++;
-                    });
-                    totalPnl = Math.round(totalPnl * 100) / 100;
-                    const winRate = data.trade_history.length > 0 ? ((winCount / data.trade_history.length) * 100).toFixed(1) : "0.0";
-
-                    const pnlElem = document.getElementById('stat-pnl');
-                    pnlElem.innerText = `${totalPnl >= 0 ? '+' : ''}$${totalPnl}`;
-                    pnlElem.className = `text-base font-extrabold font-mono ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
-
-                    document.getElementById('stat-winrate').innerText = `%${winRate}`;
-                    document.getElementById('stat-trades').innerText = data.trade_history.length;
+                    tradeHistoryCache = data.trade_history;
+                    recalculatePnlMetrics();
 
                     const logBox = document.getElementById('log-box');
                     logBox.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
