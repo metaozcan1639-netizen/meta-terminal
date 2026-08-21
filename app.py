@@ -20,6 +20,7 @@ def get_now_str():
     return datetime.now(TURKEY_TZ).strftime("%H:%M:%S")
 
 system_state = {
+    "initial_balance": 1000.0,
     "total_balance": 1000.0,
     "risk_pct": 5.0,
     "leverage": 50,
@@ -95,7 +96,7 @@ async def analyze_symbol(exchange, symbol):
                for i, tf in enumerate(tfs)}
 
         df_5m, df_15m, df_1h, df_4h = dfs['5m'], dfs['15m'], dfs['1h'], dfs['4h']
-        c_5m, p_5m = df_5m.iloc[-1], df_5m.iloc[-2]
+        c_5m = df_5m.iloc[-1]
         c_15m = df_15m.iloc[-1]
         c_1h, c_4h = df_1h.iloc[-1], df_4h.iloc[-1]
 
@@ -103,23 +104,18 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
-        # 1. Makro & Ara Trend Uyumu (4H + 1H + 15M)
         bull_trend = (c_4h['close'] > c_4h['ema50']) and (c_1h['close'] > c_1h['ema50']) and (c_15m['ema20'] > c_15m['ema50'])
         bear_trend = (c_4h['close'] < c_4h['ema50']) and (c_1h['close'] < c_1h['ema50']) and (c_15m['ema20'] < c_15m['ema50'])
 
-        # 2. 5M Swing Seviyeleri (Son 20 mumun tepe/dip noktaları)
         swing_low = df_5m['low'].iloc[-22:-4].min()
         swing_high = df_5m['high'].iloc[-22:-4].max()
 
         recent_breakout_high = df_5m['high'].iloc[-6:-1].max()
         recent_breakout_low = df_5m['low'].iloc[-6:-1].min()
 
-        # 3. Market Structure Shift (MSS / CHoCH) ve Likidite Teyidi
         if bull_trend:
             sweep_happened = df_5m['low'].iloc[-6:-1].min() < swing_low
-            # Dip süpürüldükten sonra 5M son ara tepeyi yukarı kıran güçlü yeşil gövde
             mss_confirmed = c_5m['close'] > recent_breakout_high and c_5m['close'] > c_5m['open']
-            
             if sweep_happened and mss_confirmed:
                 direction = "LONG"
                 score += 40
@@ -127,9 +123,7 @@ async def analyze_symbol(exchange, symbol):
 
         elif bear_trend:
             sweep_happened = df_5m['high'].iloc[-6:-1].max() > swing_high
-            # Tepe süpürüldükten sonra 5M son ara dibi aşağı kıran güçlü kırmızı gövde
             mss_confirmed = c_5m['close'] < recent_breakout_low and c_5m['close'] < c_5m['open']
-
             if sweep_happened and mss_confirmed:
                 direction = "SHORT"
                 score += 40
@@ -141,14 +135,12 @@ async def analyze_symbol(exchange, symbol):
         score += 30
         reasons.append("📈 4H / 1H / 15M Üçlü Trend Uyumu")
 
-        # 4. Hacim Patlaması Teyidi
         vol_ratio = c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)
         if vol_ratio >= 1.25:
             score += 20
             reasons.append(f"🔥 Onay Hacmi Patlaması ({vol_ratio:.1f}x MA20)")
 
-        # 5. Momentum RSI Teyidi
-        if (direction == "LONG" and 40 <= c_5m['rsi'] <= 60) or (direction == "SHORT" and 40 <= c_5m['rsi'] <= 60):
+        if 40 <= c_5m['rsi'] <= 60:
             score += 10
             reasons.append(f"🎯 Sağlıklı Momentum Bölgesi ({c_5m['rsi']:.1f})")
 
@@ -335,6 +327,7 @@ async def get_dashboard(request: Request):
             ::-webkit-scrollbar-track { background: #0b0e14; }
             ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
             ::-webkit-scrollbar-thumb:hover { background: #475569; }
+            .tf-btn.active { background-color: #10b981; color: #000; font-weight: bold; }
         </style>
     </head>
     <body class="p-4 space-y-4 pb-16">
@@ -343,7 +336,24 @@ async def get_dashboard(request: Request):
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
                 <div>
                     <h1 class="text-lg font-bold tracking-wider text-emerald-400">META QUANT PRO TERMINAL</h1>
-                    <div class="text-[11px] text-slate-400">Kripto Vadeli Pariteler 7/24 Kesintisiz Canlı Motor</div>
+                    <div class="text-[11px] text-slate-400">Multi-Timeframe & Likidite Karakter Kırılımı (MSS) Motoru</div>
+                </div>
+            </div>
+
+            <div class="flex items-center space-x-4 bg-slate-900/90 px-4 py-2 rounded-xl border border-slate-800">
+                <div>
+                    <div class="text-[10px] text-slate-400 uppercase tracking-wider">Net PnL ($)</div>
+                    <div id="stat-pnl" class="text-base font-extrabold font-mono text-emerald-400">$0.00</div>
+                </div>
+                <div class="border-r border-slate-800 h-8"></div>
+                <div>
+                    <div class="text-[10px] text-slate-400 uppercase tracking-wider">Win Rate (%)</div>
+                    <div id="stat-winrate" class="text-base font-extrabold font-mono text-sky-400">%0.0</div>
+                </div>
+                <div class="border-r border-slate-800 h-8"></div>
+                <div>
+                    <div class="text-[10px] text-slate-400 uppercase tracking-wider">Kapalı İşlem</div>
+                    <div id="stat-trades" class="text-base font-extrabold font-mono text-white">0</div>
                 </div>
             </div>
 
@@ -376,21 +386,31 @@ async def get_dashboard(request: Request):
             </div>
 
             <div class="flex space-x-4 text-xs text-slate-400">
-                <div>Taranan Parite: <span id="scanned-count" class="text-white font-bold">0</span></div>
+                <div>Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
                 <div>Son Tarama: <span id="last-scan" class="text-white font-bold">-</span></div>
             </div>
         </div>
 
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div class="card p-3 rounded-xl lg:col-span-2 h-[480px] flex flex-col">
-                <div class="flex justify-between items-center mb-2 px-1">
-                    <span id="chart-title" class="text-xs font-bold text-emerald-400 tracking-wider">CANLI GRAFİK (5M)</span>
+            <div class="card p-3 rounded-xl lg:col-span-2 h-[520px] flex flex-col">
+                <div class="flex flex-wrap justify-between items-center mb-2 px-1 gap-2">
+                    <div class="flex items-center space-x-3">
+                        <span id="chart-title" class="text-xs font-bold text-emerald-400 tracking-wider">GRAFİK</span>
+                        <div class="flex space-x-1 bg-slate-900 p-0.5 rounded border border-slate-800 text-[10px]">
+                            <button onclick="changeTimeframe('1')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-1">1M</button>
+                            <button onclick="changeTimeframe('5')" class="tf-btn active px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-5">5M</button>
+                            <button onclick="changeTimeframe('15')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-15">15M</button>
+                            <button onclick="changeTimeframe('60')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-60">1H</button>
+                            <button onclick="changeTimeframe('240')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-240">4H</button>
+                            <button onclick="changeTimeframe('D')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-D">1D</button>
+                        </div>
+                    </div>
                     <span id="chart-levels" class="text-[11px] text-slate-400 space-x-2"></span>
                 </div>
                 <div id="tv-container" class="w-full flex-1 rounded overflow-hidden"></div>
             </div>
 
-            <div class="card p-4 rounded-xl flex flex-col justify-between h-[480px]">
+            <div class="card p-4 rounded-xl flex flex-col justify-between h-[520px]">
                 <div>
                     <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
                     <div id="active-rationale" class="space-y-2 text-xs">
@@ -451,6 +471,7 @@ async def get_dashboard(request: Request):
             let chart = null;
             let candleSeries = null;
             let currentSymbol = localStorage.getItem("selected_sym") || "BTC/USDT:USDT";
+            let currentTimeframe = "5";
             let selectedPos = null;
             let priceLines = [];
             let lastPositions = [];
@@ -486,9 +507,18 @@ async def get_dashboard(request: Request):
                 return symbol.replace('/USDT:USDT', 'USDT').replace('/USDT', 'USDT').replace(':', '');
             }
 
-            async function fetchCandlesDirect(symbol) {
+            function changeTimeframe(tf) {
+                currentTimeframe = tf;
+                document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+                const btn = document.getElementById(`tf-${tf}`);
+                if (btn) btn.classList.add('active');
+                loadChartCandles(currentSymbol, selectedPos, false);
+            }
+
+            async function fetchCandlesDirect(symbol, interval = '5') {
                 const rawSym = parseBybitSymbol(symbol);
-                const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${rawSym}&interval=5&limit=200`;
+                // 1000 Geçmiş Mum Desteği
+                const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${rawSym}&interval=${interval}&limit=1000`;
                 try {
                     const res = await fetch(url);
                     const json = await res.json();
@@ -507,7 +537,7 @@ async def get_dashboard(request: Request):
 
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
-                    const candles = await fetchCandlesDirect(symbol);
+                    const candles = await fetchCandlesDirect(symbol, currentTimeframe);
                     if (candles.length > 0) {
                         const lastPrice = candles[candles.length - 1].close;
                         const pConf = getPrecisionConfig(lastPrice);
@@ -526,13 +556,40 @@ async def get_dashboard(request: Request):
                             chart.timeScale().fitContent();
                             chart.timeScale().resetTimeScale();
                         }
+
+                        // Yüksek (High) ve Düşük (Low) Fiyat Çizgilerini Çiz
+                        if (!isLiveTick) {
+                            priceLines.forEach(l => candleSeries.removePriceLine(l));
+                            priceLines = [];
+
+                            let maxPrice = Math.max(...candles.map(c => c.high));
+                            let minPrice = Math.min(...candles.map(c => c.low));
+
+                            const highLine = candleSeries.createPriceLine({
+                                price: maxPrice,
+                                color: '#f59e0b',
+                                lineWidth: 1,
+                                lineStyle: LightweightCharts.LineStyle.Dotted,
+                                axisLabelVisible: true,
+                                title: 'YÜKSEK (H)',
+                            });
+
+                            const lowLine = candleSeries.createPriceLine({
+                                price: minPrice,
+                                color: '#6366f1',
+                                lineWidth: 1,
+                                lineStyle: LightweightCharts.LineStyle.Dotted,
+                                axisLabelVisible: true,
+                                title: 'DÜŞÜK (L)',
+                            });
+
+                            priceLines.push(highLine, lowLine);
+                        }
                     }
 
                     if (!isLiveTick) {
-                        priceLines.forEach(l => candleSeries.removePriceLine(l));
-                        priceLines = [];
-
-                        document.getElementById('chart-title').innerText = `${symbol} (5M)`;
+                        const tfLabel = currentTimeframe === '60' ? '1H' : (currentTimeframe === '240' ? '4H' : (currentTimeframe === 'D' ? '1D' : `${currentTimeframe}M`));
+                        document.getElementById('chart-title').innerText = `${symbol} (${tfLabel})`;
 
                         if (posData) {
                             const entryLine = candleSeries.createPriceLine({
@@ -630,6 +687,23 @@ async def get_dashboard(request: Request):
 
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
+
+                    // Net PnL ve Win Rate Hesaplama
+                    let totalPnl = 0;
+                    let winCount = 0;
+                    data.trade_history.forEach(h => {
+                        totalPnl += h.realized_pnl;
+                        if (h.realized_pnl > 0) winCount++;
+                    });
+                    totalPnl = Math.round(totalPnl * 100) / 100;
+                    const winRate = data.trade_history.length > 0 ? ((winCount / data.trade_history.length) * 100).toFixed(1) : "0.0";
+
+                    const pnlElem = document.getElementById('stat-pnl');
+                    pnlElem.innerText = `${totalPnl >= 0 ? '+' : ''}$${totalPnl}`;
+                    pnlElem.className = `text-base font-extrabold font-mono ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+
+                    document.getElementById('stat-winrate').innerText = `%${winRate}`;
+                    document.getElementById('stat-trades').innerText = data.trade_history.length;
 
                     const logBox = document.getElementById('log-box');
                     logBox.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
