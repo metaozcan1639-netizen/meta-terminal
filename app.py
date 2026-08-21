@@ -27,7 +27,9 @@ system_state = {
     "total_balance": 1000.0,
     "risk_pct": 5.0,
     "leverage": 50,
-    "margin_mode": "ISOLATED",
+    "margin_mode": "ISOLATED",   # ISOLATED veya CROSS
+    "max_open_positions": 5,     # 0 ise SINIRSIZ
+    "max_total_margin_pct": 50.0,# Açık işlemlerin toplam kasa payı limiti (%)
     "scanned_count": 0,
     "last_scan_time": "-",
     "active_positions": [],
@@ -178,6 +180,7 @@ async def analyze_symbol(exchange, symbol):
                 "margin": margin,
                 "max_loss": max_loss,
                 "leverage": system_state["leverage"],
+                "margin_mode": system_state["margin_mode"],
                 "reasons": reasons,
                 "open_time": get_now_str(),
                 "open_timestamp": int(get_now_datetime().timestamp())
@@ -226,8 +229,23 @@ async def market_scanner_loop():
                     if sig:
                         exists = any(p['symbol'] == sig['symbol'] for p in system_state["active_positions"])
                         if not exists:
+                            # 1. Maksimum Açık Pozisyon Limiti Kontrolü
+                            max_pos = system_state["max_open_positions"]
+                            current_pos_count = len(system_state["active_positions"])
+                            if max_pos > 0 and current_pos_count >= max_pos:
+                                continue
+
+                            # 2. Toplam Kasa Teminat (Marjin) Tavanı Kontrolü
+                            current_total_margin = sum(p['margin'] for p in system_state["active_positions"])
+                            allowed_margin_ceiling = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
+
+                            if (current_total_margin + sig['margin']) > allowed_margin_ceiling:
+                                continue
+
+                            # Kurallar sağlandı, pozisyon aç
                             system_state["active_positions"].append(sig)
-                            add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x İzole | Teminat: ${sig['margin']} | Maks Risk: ${sig['max_loss']}")
+                            mode_label = "İzole" if sig['margin_mode'] == "ISOLATED" else "Cross"
+                            add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Maks Risk: ${sig['max_loss']}")
 
                 system_state["last_scan_time"] = get_now_str()
                 await asyncio.sleep(0.2)
@@ -302,13 +320,22 @@ class SettingsPayload(BaseModel):
     total_balance: float
     risk_pct: float
     leverage: int
+    margin_mode: str
+    max_open_positions: int
+    max_total_margin_pct: float
 
 @app.post("/api/update_settings")
 async def update_settings(payload: SettingsPayload):
     system_state["total_balance"] = payload.total_balance
     system_state["risk_pct"] = payload.risk_pct
     system_state["leverage"] = payload.leverage
-    add_log(f"⚙️ AYARLAR GÜNCELLENDİ: Kasa: ${payload.total_balance} | Risk: %{payload.risk_pct} | Kaldıraç: {payload.leverage}x İzole")
+    system_state["margin_mode"] = payload.margin_mode
+    system_state["max_open_positions"] = payload.max_open_positions
+    system_state["max_total_margin_pct"] = payload.max_total_margin_pct
+    
+    pos_limit_str = "Sınırsız" if payload.max_open_positions == 0 else str(payload.max_open_positions)
+    mode_label = "İzole" if payload.margin_mode == "ISOLATED" else "Cross"
+    add_log(f"⚙️ AYARLAR: Kasa: ${payload.total_balance} | Mod: {mode_label} | Risk: %{payload.risk_pct} | Max Poz: {pos_limit_str} | Max Kasa Marjin: %{payload.max_total_margin_pct}")
     return {"status": "success"}
 
 @app.get("/api/state")
@@ -378,21 +405,28 @@ async def get_dashboard(request: Request):
                     </div>
                     <div class="border-r border-slate-800 h-7"></div>
                     <div>
-                        <div class="text-[9px] text-slate-400 uppercase tracking-wider">Genel Toplam PnL</div>
-                        <div id="stat-all-pnl" class="text-sm font-bold font-mono text-slate-300">$0.00</div>
+                        <div class="text-[9px] text-slate-400 uppercase tracking-wider">Kullanılan Marjin</div>
+                        <div id="stat-used-margin" class="text-sm font-bold font-mono text-amber-400">$0 (%0)</div>
                     </div>
                 </div>
             </div>
 
-            <!-- KASA & AYARLAR -->
-            <div class="flex items-center space-x-3 bg-slate-900/80 p-2 rounded-lg border border-slate-800 text-xs">
+            <!-- GELİŞMİŞ RİSK & MARJİN AYARLARI -->
+            <div class="flex flex-wrap items-center gap-2.5 bg-slate-900/90 p-2.5 rounded-xl border border-slate-800 text-xs">
                 <div>
-                    <label class="text-slate-400 block text-[10px]">KASA ($)</label>
-                    <input id="input-balance" type="number" value="1000" class="bg-slate-800 text-white font-bold w-20 px-2 py-1 rounded outline-none border border-slate-700">
+                    <label class="text-slate-400 block text-[9px]">KASA ($)</label>
+                    <input id="input-balance" type="number" value="1000" class="bg-slate-800 text-white font-bold w-16 px-1.5 py-1 rounded outline-none border border-slate-700">
                 </div>
                 <div>
-                    <label class="text-slate-400 block text-[10px]">RİSK (%)</label>
-                    <select id="input-risk" class="bg-slate-800 text-white font-bold px-2 py-1 rounded outline-none border border-slate-700">
+                    <label class="text-slate-400 block text-[9px]">MARJİN MODU</label>
+                    <select id="input-margin-mode" class="bg-slate-800 text-cyan-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
+                        <option value="ISOLATED" selected>İzole</option>
+                        <option value="CROSS">Cross</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-slate-400 block text-[9px]">RİSK (%)</label>
+                    <select id="input-risk" class="bg-slate-800 text-white font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
                         <option value="0.5">%0.5</option>
                         <option value="1.0">%1.0</option>
                         <option value="2.0">%2.0</option>
@@ -401,8 +435,8 @@ async def get_dashboard(request: Request):
                     </select>
                 </div>
                 <div>
-                    <label class="text-slate-400 block text-[10px]">KALDIRAÇ</label>
-                    <select id="input-leverage" class="bg-slate-800 text-emerald-400 font-bold px-2 py-1 rounded outline-none border border-slate-700">
+                    <label class="text-slate-400 block text-[9px]">KALDIRAÇ</label>
+                    <select id="input-leverage" class="bg-slate-800 text-emerald-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
                         <option value="5">5x</option>
                         <option value="10">10x</option>
                         <option value="20">20x</option>
@@ -410,7 +444,28 @@ async def get_dashboard(request: Request):
                         <option value="75">75x</option>
                     </select>
                 </div>
-                <button onclick="saveSettings()" class="mt-3 bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-3 py-1 rounded transition">KAYDET</button>
+                <div>
+                    <label class="text-slate-400 block text-[9px]">MAX POZİSYON</label>
+                    <select id="input-max-pos" class="bg-slate-800 text-amber-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
+                        <option value="1">1 Adet</option>
+                        <option value="2">2 Adet</option>
+                        <option value="3">3 Adet</option>
+                        <option value="5" selected>5 Adet</option>
+                        <option value="10">10 Adet</option>
+                        <option value="0">Sınırsız</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-slate-400 block text-[9px]">MAX KASA PAYI</label>
+                    <select id="input-max-margin-pct" class="bg-slate-800 text-fuchsia-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
+                        <option value="20">%20</option>
+                        <option value="35">%35</option>
+                        <option value="50" selected>%50</option>
+                        <option value="75">%75</option>
+                        <option value="100">%100</option>
+                    </select>
+                </div>
+                <button onclick="saveSettings()" class="mt-3 bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-2.5 py-1 rounded transition text-xs">KAYDET</button>
             </div>
 
             <div class="flex space-x-4 text-xs text-slate-400">
@@ -474,7 +529,7 @@ async def get_dashboard(request: Request):
                             <tr>
                                 <th class="pb-2">PARİTE</th>
                                 <th class="pb-2">GİRİŞ ZAMANI</th>
-                                <th class="pb-2">YÖN/KALDIRAÇ</th>
+                                <th class="pb-2">YÖN/KALDIRAÇ/MOD</th>
                                 <th class="pb-2">TEMİNAT (M.)</th>
                                 <th class="pb-2">GİRİŞ</th>
                                 <th class="pb-2">STOP (SL)</th>
@@ -579,20 +634,16 @@ async def get_dashboard(request: Request):
                 const localOffset = now.getTimezoneOffset(); // dakika
                 const trNow = new Date(now.getTime() + (trOffset + localOffset) * 60 * 1000);
 
-                // Bugün TSİ 00:00:00
                 const todayStart = new Date(trNow.getFullYear(), trNow.getMonth(), trNow.getDate(), 0, 0, 0);
                 const todayStartTs = Math.floor((todayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
 
-                // Dün TSİ 00:00:00 - 23:59:59
                 const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
                 const yesterdayStartTs = Math.floor((yesterdayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
 
-                // Bu Hafta Pazartesi TSİ 00:00:00
-                const dayOfWeek = trNow.getDay() === 0 ? 6 : trNow.getDay() - 1; // Pazartesi = 0
+                const dayOfWeek = trNow.getDay() === 0 ? 6 : trNow.getDay() - 1;
                 const weekStart = new Date(todayStart.getTime() - dayOfWeek * 24 * 60 * 60 * 1000);
                 const weekStartTs = Math.floor((weekStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
 
-                // Bu Ay 1. Gün TSİ 00:00:00
                 const monthStart = new Date(trNow.getFullYear(), trNow.getMonth(), 1, 0, 0, 0);
                 const monthStartTs = Math.floor((monthStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
 
@@ -635,7 +686,6 @@ async def get_dashboard(request: Request):
                 });
 
                 periodPnl = Math.round(periodPnl * 100) / 100;
-                totalAllPnl = Math.round(totalAllPnl * 100) / 100;
                 const winRate = filtered.length > 0 ? ((winCount / filtered.length) * 100).toFixed(1) : "0.0";
 
                 const pnlElem = document.getElementById('stat-pnl');
@@ -644,10 +694,6 @@ async def get_dashboard(request: Request):
 
                 document.getElementById('stat-winrate').innerText = `%${winRate}`;
                 document.getElementById('stat-trades').innerText = filtered.length;
-
-                const allPnlElem = document.getElementById('stat-all-pnl');
-                allPnlElem.innerText = `${totalAllPnl >= 0 ? '+' : ''}$${totalAllPnl.toFixed(2)}`;
-                allPnlElem.className = `text-sm font-bold font-mono ${totalAllPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
             }
 
             async function fetchCandlesDirect(symbol, interval = '5') {
@@ -691,7 +737,6 @@ async def get_dashboard(request: Request):
                             chart.timeScale().resetTimeScale();
                         }
 
-                        // Üst bardaki Yüksek (H) & Düşük (L) değerlerini güncelle
                         let maxPrice = Math.max(...candles.map(c => c.high));
                         let minPrice = Math.min(...candles.map(c => c.low));
                         const dec = lastPrice < 1 ? pConf.precision : 2;
@@ -766,6 +811,7 @@ async def get_dashboard(request: Request):
             function renderRationale(pos) {
                 if (!pos) return;
                 const p = pos.entry < 1 ? 6 : 4;
+                const modeLabel = pos.margin_mode === "ISOLATED" ? "İzole" : "Cross";
                 document.getElementById('active-rationale').innerHTML = `
                     <div class="flex justify-between items-center mb-2">
                         <span class="font-bold text-base text-white">${pos.symbol}</span>
@@ -776,7 +822,7 @@ async def get_dashboard(request: Request):
                     </div>
                     <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1">
                         <div class="text-slate-400">Giriş Saati: <span class="text-white font-bold">${pos.open_time}</span></div>
-                        <div class="text-slate-400">Kaldıraç & Teminat: <span class="text-white font-bold">${pos.leverage}x İzole ($${pos.margin})</span></div>
+                        <div class="text-slate-400">Kaldıraç & Mod: <span class="text-white font-bold">${pos.leverage}x ${modeLabel} ($${pos.margin})</span></div>
                         <div class="text-red-400">Stop-Loss: <span class="font-mono">${pos.sl.toFixed(p)}</span> (Maks Kayıp: $${pos.max_loss})</div>
                         <div class="text-emerald-400">TP1 / TP2: <span class="font-mono">${pos.tp1.toFixed(p)} / ${pos.tp2.toFixed(p)}</span></div>
                     </div>
@@ -787,11 +833,14 @@ async def get_dashboard(request: Request):
                 const total_balance = parseFloat(document.getElementById('input-balance').value);
                 const risk_pct = parseFloat(document.getElementById('input-risk').value);
                 const leverage = parseInt(document.getElementById('input-leverage').value);
+                const margin_mode = document.getElementById('input-margin-mode').value;
+                const max_open_positions = parseInt(document.getElementById('input-max-pos').value);
+                const max_total_margin_pct = parseFloat(document.getElementById('input-max-margin-pct').value);
 
                 await fetch('/api/update_settings', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({total_balance, risk_pct, leverage})
+                    body: JSON.stringify({total_balance, risk_pct, leverage, margin_mode, max_open_positions, max_total_margin_pct})
                 });
             }
 
@@ -803,6 +852,11 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
+                    // Toplam Kullanılan Marjin Hesabı
+                    const totalUsedMargin = data.active_positions.reduce((acc, p) => acc + p.margin, 0);
+                    const usedPct = data.total_balance > 0 ? ((totalUsedMargin / data.total_balance) * 100).toFixed(1) : "0.0";
+                    document.getElementById('stat-used-margin').innerText = `$${totalUsedMargin.toFixed(1)} (%${usedPct})`;
+
                     tradeHistoryCache = data.trade_history;
                     recalculatePnlMetrics();
 
@@ -813,11 +867,12 @@ async def get_dashboard(request: Request):
                     const activeTbody = document.getElementById('active-pos-table');
                     activeTbody.innerHTML = data.active_positions.map((p, idx) => {
                         const dec = p.entry < 1 ? 6 : 4;
+                        const modeStr = p.margin_mode === "ISOLATED" ? "İzole" : "Cross";
                         return `
                         <tr class="hover:bg-slate-800/80 cursor-pointer ${selectedPos && selectedPos.symbol === p.symbol ? 'bg-slate-800/60' : ''}" onclick="selectPosition(lastPositions[${idx}])">
                             <td class="py-2 font-bold text-white">${p.symbol}</td>
                             <td class="text-slate-400 font-mono text-[10px]">${p.open_time}</td>
-                            <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction} (${p.leverage}x)</td>
+                            <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction} (${p.leverage}x ${modeStr})</td>
                             <td class="text-white font-mono">$${p.margin}</td>
                             <td class="font-mono">${p.entry}</td>
                             <td class="text-red-400 font-mono">${p.sl.toFixed(dec)}</td>
