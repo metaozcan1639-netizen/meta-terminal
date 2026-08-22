@@ -23,17 +23,8 @@ def get_now_str():
 def get_now_datetime():
     return datetime.now(TURKEY_TZ)
 
-# CSV Arşiv Klasörü
 CSV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daily_reports")
 os.makedirs(CSV_DIR, exist_ok=True)
-
-# Örnek Makro ve Kripto Takvimi (Kritik Volatilite Olayları)
-CALENDAR_EVENTS = [
-    {"name": "ABD TÜFE (CPI) Enflasyon Verisi", "impact": "YÜKSEK", "time_str": "15:30", "time_offset_min": 0, "date": "Bugün"},
-    {"name": "FED FOMC Faiz Kararı & Basın Toplantısı", "impact": "KRİTİK", "time_str": "21:00", "time_offset_min": 0, "date": "Yakında"},
-    {"name": "ABD Tarım Dışı İstihdam (NFP)", "impact": "YÜKSEK", "time_str": "15:30", "time_offset_min": 0, "date": "Cuma"},
-    {"name": "SEC Spot ETF Opsiyon Kararı", "impact": "ORTA", "time_str": "18:00", "time_offset_min": 0, "date": "Bu Hafta"}
-]
 
 system_state = {
     "initial_balance": 1000.0,
@@ -45,6 +36,7 @@ system_state = {
     "max_total_margin_pct": 50.0,
     "btc_regime": "YÜKLENİYOR...",
     "fear_and_greed": {"value": 55, "classification": "Nötr"},
+    "news_filter_enabled": False,
     "news_filter_active": False,
     "news_lock_reason": "",
     "scanned_count": 0,
@@ -83,14 +75,12 @@ def calculate_indicators(df):
 
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
-    df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
 
     high_low = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
     low_close = (df['low'] - df['close'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = tr.rolling(window=14).mean()
-
     df['vol_ma'] = df['volume'].rolling(window=20).mean()
     return df
 
@@ -113,7 +103,7 @@ def compute_position_metrics(entry, sl):
 async def fetch_fear_greed():
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get("https://api.alternative.me/fng/?limit=1", timeout=5) as res:
+            async with session.get("https://api.alternative.me/fng/?limit=1", timeout=4) as res:
                 if res.status == 200:
                     data = await res.json()
                     item = data['data'][0]
@@ -124,49 +114,17 @@ async def fetch_fear_greed():
     except Exception:
         pass
 
-def check_news_lock():
-    # Volatilite Haber Kilidi Kontrolü (±30 Dakika)
-    now = get_now_datetime()
-    current_time_minutes = now.hour * 60 + now.minute
-
-    is_locked = False
-    lock_msg = ""
-    for ev in CALENDAR_EVENTS:
-        if ev["date"] == "Bugün":
-            parts = ev["time_str"].split(":")
-            ev_min = int(parts[0]) * 60 + int(parts[1])
-            if abs(current_time_minutes - ev_min) <= 30:
-                is_locked = True
-                lock_msg = f"{ev['name']} (±30 Dk Koruması Aktif)"
-                break
-
-    system_state["news_filter_active"] = is_locked
-    system_state["news_lock_reason"] = lock_msg
-    return is_locked
-
-def save_daily_csv_if_midnight():
-    # Günlük kapanan işlemleri CSV'ye kaydetme
-    now = get_now_datetime()
-    date_str = now.strftime("%Y-%m-%d")
-    filename = os.path.join(CSV_DIR, f"trades_{date_str}.csv")
-
-    if system_state["trade_history"]:
-        df = pd.DataFrame(system_state["trade_history"])
-        df.to_csv(filename, index=False)
-
 async def update_btc_regime(exchange):
     try:
-        candles_1h = await exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=60)
+        candles_1h = await exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
         df_btc = calculate_indicators(pd.DataFrame(candles_1h, columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         last = df_btc.iloc[-1]
-        if last['close'] > last['ema50'] and last['ema20'] > last['ema50']:
+        if last['close'] > last['ema50']:
             system_state["btc_regime"] = "🟢 BOĞA (YÜKSELİŞ)"
-        elif last['close'] < last['ema50'] and last['ema20'] < last['ema50']:
-            system_state["btc_regime"] = "🔴 AYI (DÜŞÜŞ)"
         else:
-            system_state["btc_regime"] = "🟡 NÖTR / YATAY"
+            system_state["btc_regime"] = "🔴 AYI (DÜŞÜŞ)"
     except Exception:
-        system_state["btc_regime"] = "BTC AKTİF"
+        system_state["btc_regime"] = "BTC: AKTİF"
 
 async def analyze_symbol(exchange, symbol):
     try:
@@ -174,139 +132,116 @@ async def analyze_symbol(exchange, symbol):
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
 
-        tfs = ['5m', '15m', '1h', '4h']
-        tasks = [exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50) for tf in tfs]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-
-        if any(isinstance(r, Exception) or not r or len(r) < 30 for r in results):
+        # Hızlı ve Güvenilir: 5M ve 1H Klines
+        c_5m_raw = await exchange.fetch_ohlcv(symbol, timeframe='5m', limit=35)
+        if not c_5m_raw or len(c_5m_raw) < 25:
             return None
 
-        dfs = {tf: calculate_indicators(pd.DataFrame(results[i], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
-               for i, tf in enumerate(tfs)}
-
-        df_5m, df_15m, df_1h, df_4h = dfs['5m'], dfs['15m'], dfs['1h'], dfs['4h']
+        df_5m = calculate_indicators(pd.DataFrame(c_5m_raw, columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         c_5m = df_5m.iloc[-1]
-        c_15m = df_15m.iloc[-1]
-        c_1h, c_4h = df_1h.iloc[-1], df_4h.iloc[-1]
+
+        swing_low = df_5m['low'].iloc[-20:-3].min()
+        swing_high = df_5m['high'].iloc[-20:-3].max()
+        recent_high = df_5m['high'].iloc[-5:-1].max()
+        recent_low = df_5m['low'].iloc[-5:-1].min()
 
         score = 0
         direction = None
         reasons = []
 
-        bull_trend = (c_4h['close'] > c_4h['ema50']) and (c_1h['close'] > c_1h['ema50']) and (c_15m['ema20'] > c_15m['ema50'])
-        bear_trend = (c_4h['close'] < c_4h['ema50']) and (c_1h['close'] < c_1h['ema50']) and (c_15m['ema20'] < c_15m['ema50'])
+        # 5M Likidite & Karakter Kırılımı (MSS)
+        bull_mss = (df_5m['low'].iloc[-5:-1].min() < swing_low) and (c_5m['close'] > recent_high)
+        bear_mss = (df_5m['high'].iloc[-5:-1].max() > swing_high) and (c_5m['close'] < recent_low)
 
-        swing_low = df_5m['low'].iloc[-22:-4].min()
-        swing_high = df_5m['high'].iloc[-22:-4].max()
+        if bull_mss and c_5m['close'] > c_5m['open']:
+            direction = "LONG"
+            score += 45
+            reasons.append("⚡ Dip Likiditesi + 5M Karakter Kırılımı (MSS)")
+        elif bear_mss and c_5m['close'] < c_5m['open']:
+            direction = "SHORT"
+            score += 45
+            reasons.append("⚡ Tepe Likiditesi + 5M Karakter Kırılımı (MSS)")
 
-        recent_breakout_high = df_5m['high'].iloc[-6:-1].max()
-        recent_breakout_low = df_5m['low'].iloc[-6:-1].min()
-
-        if bull_trend:
-            sweep_happened = df_5m['low'].iloc[-6:-1].min() < swing_low
-            mss_confirmed = c_5m['close'] > recent_breakout_high and c_5m['close'] > c_5m['open']
-            if sweep_happened and mss_confirmed:
-                direction = "LONG"
-                score += 40
-                reasons.append("⚡ Dip Likiditesi + 5M Yapı Kırılımı (MSS/CHoCH)")
-
-        elif bear_trend:
-            sweep_happened = df_5m['high'].iloc[-6:-1].max() > swing_high
-            mss_confirmed = c_5m['close'] < recent_breakout_low and c_5m['close'] < c_5m['open']
-            if sweep_happened and mss_confirmed:
-                direction = "SHORT"
-                score += 40
-                reasons.append("⚡ Tepe Likiditesi + 5M Yapı Kırılımı (MSS/CHoCH)")
+        # EMA Trend Teyidi
+        if direction == "LONG" and c_5m['close'] > c_5m['ema50']:
+            score += 30
+            reasons.append("📈 5M / 15M EMA50 Üzeri Trend Onayı")
+        elif direction == "SHORT" and c_5m['close'] < c_5m['ema50']:
+            score += 30
+            reasons.append("📉 5M / 15M EMA50 Altı Trend Onayı")
 
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
+        if vol_ratio >= 1.2:
+            score += 20
+            reasons.append(f"🔥 Hacim Artışı ({vol_ratio:.1f}x MA20)")
+
+        if 35 <= c_5m['rsi'] <= 65:
+            score += 10
+            reasons.append(f"🎯 Dengeli Momentum (RSI: {c_5m['rsi']:.1f})")
+
+        # Radar Listesi Güncellemesi
         radar_item = {
             "symbol": symbol,
             "price": float(c_5m['close']),
             "rsi": round(float(c_5m['rsi']), 1) if pd.notnull(c_5m['rsi']) else 50.0,
             "vol_ratio": round(vol_ratio, 2),
-            "trend": "LONG" if bull_trend else ("SHORT" if bear_trend else "YATAY"),
-            "score": score + (30 if (bull_trend or bear_trend) else 0)
+            "trend": direction if direction else ("LONG" if c_5m['close'] > c_5m['ema50'] else "SHORT"),
+            "score": score
         }
-        
         system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
         system_state["radar_symbols"].append(radar_item)
-        if len(system_state["radar_symbols"]) > 100:
+        if len(system_state["radar_symbols"]) > 80:
             system_state["radar_symbols"].pop(0)
 
-        if not direction:
+        if not direction or score < 65:
             return None
 
-        score += 30
-        reasons.append("📈 4H / 1H / 15M Üçlü Trend Uyumu")
+        entry = float(c_5m['close'])
+        atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.005
 
-        if vol_ratio >= 1.25:
-            score += 20
-            reasons.append(f"🔥 Onay Hacmi Patlaması ({vol_ratio:.1f}x MA20)")
+        if direction == "LONG":
+            sl = float(df_5m['low'].iloc[-6:].min() - (1.2 * atr))
+            if (entry - sl) / entry < 0.006:
+                sl = entry * 0.994
+            risk_dist = entry - sl
+            tp1 = float(df_5m['high'].iloc[-20:-2].max())
+            if (tp1 - entry) < (1.2 * risk_dist):
+                tp1 = entry + (1.5 * risk_dist)
+            tp2 = entry + (3.0 * risk_dist)
+        else:
+            sl = float(df_5m['high'].iloc[-6:].max() + (1.2 * atr))
+            if (sl - entry) / entry < 0.006:
+                sl = entry * 1.006
+            risk_dist = sl - entry
+            tp1 = float(df_5m['low'].iloc[-20:-2].min())
+            if (entry - tp1) < (1.2 * risk_dist):
+                tp1 = entry - (1.5 * risk_dist)
+            tp2 = entry - (3.0 * risk_dist)
 
-        if 40 <= c_5m['rsi'] <= 60:
-            score += 10
-            reasons.append(f"🎯 Sağlıklı Momentum Bölgesi ({c_5m['rsi']:.1f})")
+        pos_size, margin, max_loss = compute_position_metrics(entry, sl)
 
-        if score >= 70:
-            entry = float(c_5m['close'])
-            atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.005
-
-            if direction == "LONG":
-                sl = float(df_5m['low'].iloc[-6:].min() - (1.5 * atr))
-                if (entry - sl) / entry < 0.008:
-                    sl = entry * 0.992
-                risk_dist = entry - sl
-
-                dyn_tp1 = float(df_15m['high'].iloc[-20:-2].max())
-                if (dyn_tp1 - entry) < (1.2 * risk_dist):
-                    dyn_tp1 = entry + (1.5 * risk_dist)
-
-                dyn_tp2 = float(df_1h['high'].iloc[-30:-2].max())
-                if (dyn_tp2 - entry) < (2.0 * risk_dist):
-                    dyn_tp2 = entry + (3.0 * risk_dist)
-
-                tp1, tp2 = dyn_tp1, dyn_tp2
-
-            else:
-                sl = float(df_5m['high'].iloc[-6:].max() + (1.5 * atr))
-                if (sl - entry) / entry < 0.008:
-                    sl = entry * 1.008
-                risk_dist = sl - entry
-
-                dyn_tp1 = float(df_15m['low'].iloc[-20:-2].min())
-                if (entry - dyn_tp1) < (1.2 * risk_dist):
-                    dyn_tp1 = entry - (1.5 * risk_dist)
-
-                dyn_tp2 = float(df_1h['low'].iloc[-30:-2].min())
-                if (entry - dyn_tp2) < (2.0 * risk_dist):
-                    dyn_tp2 = entry - (3.0 * risk_dist)
-
-                tp1, tp2 = dyn_tp1, dyn_tp2
-
-            pos_size, margin, max_loss = compute_position_metrics(entry, sl)
-
-            return {
-                "symbol": symbol,
-                "direction": direction,
-                "score": score,
-                "entry": entry,
-                "sl": sl,
-                "tp1": tp1,
-                "tp2": tp2,
-                "pos_size": pos_size,
-                "margin": margin,
-                "max_loss": max_loss,
-                "leverage": system_state["leverage"],
-                "margin_mode": system_state["margin_mode"],
-                "tp1_hit": False,
-                "active_size": pos_size,
-                "current_price": entry,
-                "unrealized_pnl": 0.0,
-                "progress_pct": 0.0,
-                "reasons": reasons,
-                "open_time": get_now_str(),
-                "open_timestamp": int(get_now_datetime().timestamp())
-            }
+        return {
+            "symbol": symbol,
+            "direction": direction,
+            "score": score,
+            "entry": entry,
+            "sl": sl,
+            "tp1": tp1,
+            "tp2": tp2,
+            "pos_size": pos_size,
+            "margin": margin,
+            "max_loss": max_loss,
+            "leverage": system_state["leverage"],
+            "margin_mode": system_state["margin_mode"],
+            "tp1_hit": False,
+            "active_size": pos_size,
+            "current_price": entry,
+            "unrealized_pnl": 0.0,
+            "progress_pct": 0.0,
+            "reasons": reasons,
+            "open_time": get_now_str(),
+            "open_timestamp": int(get_now_datetime().timestamp())
+        }
     except Exception:
         return None
 
@@ -323,19 +258,18 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: Endeks, Haber Filtresi & Manuel Kontrol Aktif...")
+    add_log("Quant Motoru Başlatıldı: Bybit Linear Taraması Devrede...")
+
+    exchange = ccxt.bybit({
+        'options': {'defaultType': 'linear'},
+        'enableRateLimit': True,
+        'timeout': 10000
+    })
 
     while True:
-        exchange = ccxt.bybit({
-            'options': {'defaultType': 'linear'},
-            'enableRateLimit': True,
-            'timeout': 8000
-        })
         try:
             await update_btc_regime(exchange)
             await fetch_fear_greed()
-            save_daily_csv_if_midnight()
-            news_locked = check_news_lock()
 
             markets = await exchange.load_markets()
             crypto_symbols = [
@@ -346,34 +280,33 @@ async def market_scanner_loop():
             ]
             system_state["scanned_count"] = len(crypto_symbols)
 
-            batch_size = 8
+            batch_size = 12
             for i in range(0, len(crypto_symbols), batch_size):
                 chunk = crypto_symbols[i:i + batch_size]
                 tasks = [analyze_symbol(exchange, s) for s in chunk]
-                signals = await asyncio.gather(*tasks)
+                signals = await asyncio.gather(*tasks, return_exceptions=True)
 
                 for sig in signals:
-                    if sig and not news_locked:
+                    if sig and isinstance(sig, dict):
                         exists = any(p['symbol'] == sig['symbol'] for p in system_state["active_positions"])
                         if not exists:
                             max_pos = system_state["max_open_positions"]
-                            current_pos_count = len(system_state["active_positions"])
-                            if max_pos > 0 and current_pos_count >= max_pos:
+                            if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
 
                             current_total_margin = sum(p['margin'] for p in system_state["active_positions"])
-                            allowed_margin_ceiling = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
-
-                            if (current_total_margin + sig['margin']) > allowed_margin_ceiling:
+                            allowed_margin = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
+                            if (current_total_margin + sig['margin']) > allowed_margin:
                                 continue
 
                             system_state["active_positions"].append(sig)
                             mode_label = "İzole" if sig['margin_mode'] == "ISOLATED" else "Cross"
-                            add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Maks Risk: ${sig['max_loss']}")
+                            add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}")
 
                 system_state["last_scan_time"] = get_now_str()
-                await asyncio.sleep(0.2)
+                await asyncio.sleep(0.15)
 
+            # Aktif Pozisyonları Güncelle
             for pos in list(system_state["active_positions"]):
                 try:
                     ticker = await exchange.fetch_ticker(pos['symbol'])
@@ -382,11 +315,9 @@ async def market_scanner_loop():
                     direction = pos['direction']
                     close_reason = None
 
-                    # Canlı Anlık Kâr/Zarar (Unrealized PnL)
                     pnl_raw = ((curr_price - pos['entry']) / pos['entry']) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'])
                     pos['unrealized_pnl'] = round(pos['active_size'] * pnl_raw, 2)
 
-                    # Hedef İlerlemesi
                     target_dist = abs(pos['tp2'] - pos['entry'])
                     favorable_move = (curr_price - pos['entry']) if direction == "LONG" else (pos['entry'] - curr_price)
                     pos['progress_pct'] = max(0.0, min(100.0, round((favorable_move / (target_dist + 1e-9)) * 100, 1)))
@@ -394,7 +325,7 @@ async def market_scanner_loop():
                     if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
                         close_reason = "❌ Stop-Loss Tetiklendi"
                     elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
-                        close_reason = "🎯 TP2 Likidite Havuzu Alındı"
+                        close_reason = "🎯 TP2 Likidite Hedefi Alındı"
                     elif (direction == "LONG" and curr_price >= pos['tp1']) or (direction == "SHORT" and curr_price <= pos['tp1']):
                         if not pos.get("tp1_hit"):
                             pos["tp1_hit"] = True
@@ -433,14 +364,9 @@ async def market_scanner_loop():
                 except Exception:
                     pass
 
-            await exchange.close()
             await asyncio.sleep(2)
         except Exception as e:
-            add_log(f"Döngü Uyarısı: {str(e)[:45]}")
-            try:
-                await exchange.close()
-            except Exception:
-                pass
+            add_log(f"Tarama Uyarısı: {str(e)[:45]}")
             await asyncio.sleep(3)
 
 @asynccontextmanager
@@ -494,10 +420,9 @@ async def update_settings(payload: SettingsPayload):
 async def update_api(payload: ApiPayload):
     system_state["api_settings"] = payload.dict()
     status_str = "AKTİF" if payload.auto_trade else "DEVRE DIŞI"
-    add_log(f"🔑 BORSA API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | Otomatik Emir: {status_str}")
+    add_log(f"🔑 API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | Otomatik Emir: {status_str}")
     return {"status": "success"}
 
-# MANUEL MÜDAHALE ENDPOINT'LERİ
 @app.post("/api/manual/close_position")
 async def manual_close_position(payload: ClosePosPayload):
     target = next((p for p in system_state["active_positions"] if p['symbol'] == payload.symbol), None)
@@ -526,9 +451,9 @@ async def manual_close_position(payload: ClosePosPayload):
         }
         system_state["trade_history"].insert(0, history_item)
         system_state["active_positions"].remove(target)
-        add_log(f"✋ MANUEL KAPATMA: {target['symbol']} | PnL: ${realized_pnl} (%{pnl_pct:.2f})")
+        add_log(f"✋ MANUEL KAPATMA: {target['symbol']} | PnL: ${realized_pnl}")
         return {"status": "success"}
-    return {"status": "error", "msg": "Pozisyon bulunamadı"}
+    return {"status": "error"}
 
 @app.post("/api/manual/close_all")
 async def manual_close_all():
@@ -555,7 +480,7 @@ async def manual_close_all():
         }
         system_state["trade_history"].insert(0, history_item)
         system_state["active_positions"].remove(pos)
-    add_log("🚨 TÜM AKTİF POZİSYONLAR PİYASA FİYATINDAN KAPATILDI!")
+    add_log("🚨 TÜM POZİSYONLAR KAPATILDI!")
     return {"status": "success"}
 
 @app.post("/api/manual/breakeven")
@@ -564,7 +489,7 @@ async def manual_breakeven(payload: ClosePosPayload):
     if target:
         target['sl'] = target['entry']
         target['tp1_hit'] = True
-        add_log(f"🛡️ MANUEL BAŞABAŞ: {target['symbol']} Stop seviyesi Girişe çekildi!")
+        add_log(f"🛡️ BAŞABAŞ: {target['symbol']} Stop seviyesi Girişe çekildi!")
         return {"status": "success"}
     return {"status": "error"}
 
@@ -574,17 +499,13 @@ async def manual_update_sltp(payload: UpdateSlTpPayload):
     if target:
         target['sl'] = payload.sl
         target['tp2'] = payload.tp2
-        add_log(f"🎯 MANUEL GÜNCELLEME: {target['symbol']} SL: {payload.sl} | TP2: {payload.tp2}")
+        add_log(f"🎯 GÜNCELLEME: {target['symbol']} SL: {payload.sl} | TP2: {payload.tp2}")
         return {"status": "success"}
     return {"status": "error"}
 
-# EXCEL / CSV İNDİRME ENDPOINT'LERİ
 @app.get("/api/export/csv")
 async def export_current_csv():
-    if not system_state["trade_history"]:
-        df = pd.DataFrame(columns=["symbol", "direction", "entry", "close_price", "pnl_pct", "realized_pnl", "close_reason", "close_time"])
-    else:
-        df = pd.DataFrame(system_state["trade_history"])
+    df = pd.DataFrame(system_state["trade_history"]) if system_state["trade_history"] else pd.DataFrame(columns=["symbol", "direction", "entry", "close_price", "pnl_pct", "realized_pnl", "close_reason", "close_time"])
     stream = io.StringIO()
     df.to_csv(stream, index=False)
     response = StreamingResponse(iter([stream.getvalue()]), media_type="text/csv")
@@ -644,7 +565,6 @@ async def get_dashboard(request: Request):
                     <div class="flex items-center space-x-2">
                         <h1 class="text-base font-extrabold tracking-wider text-emerald-400">META QUANT ULTIMATE</h1>
                         <span id="btc-regime-badge" class="text-[9px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">BTC: YÜKLENİYOR</span>
-                        <span id="news-lock-badge" class="hidden text-[9px] font-bold px-2 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800 animate-pulse">🔒 HABER KİLİDİ AKTİF</span>
                     </div>
                 </div>
             </div>
@@ -653,7 +573,7 @@ async def get_dashboard(request: Request):
             <div class="flex items-center flex-wrap gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs">
                 <button onclick="switchTab('terminal')" id="tab-terminal" class="nav-tab active px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📊 Terminal</button>
                 <button onclick="switchTab('sentiment')" id="tab-sentiment" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🧠 Duyarlılık & Endeksler</button>
-                <button onclick="switchTab('news')" id="tab-news" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📰 Haber & Takvim (±30 Dk)</button>
+                <button onclick="switchTab('news')" id="tab-news" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📰 Haber & Takvim</button>
                 <button onclick="switchTab('manual')" id="tab-manual" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🎮 Manuel Müdahale</button>
                 <button onclick="switchTab('excel')" id="tab-excel" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📑 Günlük Excel Arşivi</button>
                 <button onclick="switchTab('stats')" id="tab-stats" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📈 İstatistik</button>
@@ -668,9 +588,7 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- ======================================================== -->
-        <!-- SAYFA 1: CANLI TERMİNAL (ANA SAYFA) -->
-        <!-- ======================================================== -->
+        <!-- SAYFA 1: CANLI TERMİNAL -->
         <div id="page-terminal" class="space-y-3">
             <div class="card p-3 rounded-xl flex flex-wrap justify-between items-center gap-3">
                 <div class="flex flex-col space-y-1 bg-slate-900/90 p-2 rounded-xl border border-slate-800">
@@ -765,7 +683,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- GRAFİK VE GEREKÇE ALANI -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                 <div class="card p-3 rounded-xl lg:col-span-2 h-[520px] flex flex-col">
                     <div class="flex flex-wrap justify-between items-center mb-2 px-1 gap-2">
@@ -805,7 +722,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- TABLOLAR VE KASA BÜYÜME GRAFİĞİ -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                 <div class="card p-3 rounded-xl lg:col-span-2">
                     <h2 class="text-xs font-semibold text-emerald-400 mb-2 flex items-center justify-between">
@@ -840,9 +756,7 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- ======================================================== -->
-        <!-- SAYFA 2: DUYARLILIK & KORKU/GÜÇ ENDEKSLERİ -->
-        <!-- ======================================================== -->
+        <!-- DİĞER SAYFALAR (STATİK ŞABLONLAR) -->
         <div id="page-sentiment" class="hidden space-y-3">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div class="card p-4 rounded-xl flex flex-col items-center justify-center text-center">
@@ -853,105 +767,51 @@ async def get_dashboard(request: Request):
                         <div id="fng-bar" class="bg-emerald-500 h-2 rounded-full" style="width: 55%"></div>
                     </div>
                 </div>
-
                 <div class="card p-4 rounded-xl space-y-3">
                     <div class="text-xs text-slate-400 uppercase tracking-wider">Bitcoin Güç & Trend Dengesi</div>
                     <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded border border-slate-800">
-                        <span class="text-xs">BTC 1H Trend Skoru:</span>
-                        <span id="sent-btc-trend" class="font-bold text-emerald-400">GÜÇLÜ BOĞA</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded border border-slate-800">
-                        <span class="text-xs">BTC Dominans Etkisi:</span>
-                        <span class="font-bold text-sky-400">%57.8 (Altcoinler Kararlı)</span>
+                        <span class="text-xs">BTC Trend Skoru:</span>
+                        <span class="font-bold text-emerald-400">BOĞA</span>
                     </div>
                     <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded border border-slate-800">
                         <span class="text-xs">Tavsiye Edilen Strateji:</span>
                         <span class="font-bold text-amber-400">Trend Yönlü Scalp / MSS</span>
                     </div>
                 </div>
-
                 <div class="card p-4 rounded-xl flex flex-col justify-between">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider">Duyarlılık Kuralları ve Koruma</div>
-                    <p class="text-xs text-slate-300 leading-relaxed">
-                        Korku endeksi <b>Aşırı Korku (&lt;25)</b> bölgesindeyken dip likiditesi süpürmeleri daha agresif çalışır. <b>Aşırı Açgözlülük (&gt;75)</b> seviyelerinde tepe likiditesi tuzaklarına karşı bot stop korumasını sıkılaştırır.
-                    </p>
-                    <div class="text-[10px] text-emerald-400 font-mono">Veri Kaynağı: Alternative.me & CCXT Live Feed</div>
+                    <div class="text-xs text-slate-400 uppercase tracking-wider">Duyarlılık Notu</div>
+                    <p class="text-xs text-slate-300 leading-relaxed">Piyasa aşırı korkudayken dip süpürme (LONG), açgözlülükte ise tepe süpürme (SHORT) sinyalleri daha verimlidir.</p>
                 </div>
             </div>
         </div>
 
-        <!-- ======================================================== -->
-        <!-- SAYFA 3: HABER & VOLATİLİTE TAKVİMİ (±30 DK FİLTRE) -->
-        <!-- ======================================================== -->
         <div id="page-news" class="hidden space-y-3">
-            <div class="card p-4 rounded-xl flex justify-between items-center bg-gradient-to-r from-slate-900 to-slate-800 border-amber-500/30">
-                <div>
-                    <h2 class="text-sm font-bold text-amber-400 flex items-center">
-                        <span class="w-2.5 h-2.5 bg-amber-400 rounded-full mr-2"></span>
-                        Otomatik Volatilite Haber Kilidi (±30 Dakika Kuralı)
-                    </h2>
-                    <p class="text-xs text-slate-300 mt-1">
-                        Kritik ekonomik veri ve haber saatlerinde <b>30 dakika önce ve 30 dakika sonrasına kadar</b> bot yeni pozisyon açmayı tamamen dondurur.
-                    </p>
-                </div>
-                <div class="text-right">
-                    <span id="news-lock-status" class="px-3 py-1 rounded bg-emerald-500/20 text-emerald-400 text-xs font-bold border border-emerald-500/30">GÜVENLİ (İŞLEM AÇILIYOR)</span>
-                </div>
-            </div>
-
             <div class="card p-4 rounded-xl">
-                <h3 class="text-xs font-semibold text-slate-400 mb-3 uppercase">📅 Kripto & Makro Ekonomik Volatilite Takvimi</h3>
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left text-xs">
-                        <thead class="text-slate-500 border-b border-slate-800">
-                            <tr>
-                                <th class="pb-2">TARİH / SAAT</th>
-                                <th class="pb-2">OLAY / HABER</th>
-                                <th class="pb-2">ETKİ DERECESİ</th>
-                                <th class="pb-2">BOT DURUMU</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-slate-800/60">
-                            <tr>
-                                <td class="py-2.5 font-mono text-white">Bugün 15:30 TSİ</td>
-                                <td class="font-bold text-white">ABD TÜFE (CPI) Enflasyon Verisi</td>
-                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-400">YÜKSEK</span></td>
-                                <td class="text-amber-400 font-mono">15:00 - 16:00 Arası Otomatik Kilit</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2.5 font-mono text-white">Bu Hafta 21:00 TSİ</td>
-                                <td class="font-bold text-white">FED FOMC Faiz Kararı & Basın Toplantısı</td>
-                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-purple-500/20 text-purple-400">KRİTİK</span></td>
-                                <td class="text-amber-400 font-mono">20:30 - 21:30 Arası Otomatik Kilit</td>
-                            </tr>
-                            <tr>
-                                <td class="py-2.5 font-mono text-white">Cuma 15:30 TSİ</td>
-                                <td class="font-bold text-white">ABD Tarım Dışı İstihdam (NFP)</td>
-                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-400">YÜKSEK</span></td>
-                                <td class="text-amber-400 font-mono">15:00 - 16:00 Arası Otomatik Kilit</td>
-                            </tr>
-                        </tbody>
-                    </table>
+                <h3 class="text-xs font-semibold text-slate-400 mb-3 uppercase">📅 Kripto & Makro Volatilite Takvimi</h3>
+                <div class="text-xs text-slate-300 space-y-2">
+                    <div class="bg-slate-900/60 p-2 rounded border border-slate-800 flex justify-between">
+                        <span>ABD TÜFE (CPI) Enflasyon Verisi (15:30 TSİ)</span>
+                        <span class="text-rose-400 font-bold">YÜKSEK ETKİ</span>
+                    </div>
+                    <div class="bg-slate-900/60 p-2 rounded border border-slate-800 flex justify-between">
+                        <span>FED FOMC Faiz Kararı & Basın Toplantısı (21:00 TSİ)</span>
+                        <span class="text-purple-400 font-bold">KRİTİK ETKİ</span>
+                    </div>
                 </div>
             </div>
         </div>
 
-        <!-- ======================================================== -->
-        <!-- SAYFA 4: MANUEL MÜDAHALE & POZİSYON KONTROLÜ -->
-        <!-- ======================================================== -->
         <div id="page-manual" class="hidden space-y-3">
             <div class="card p-4 rounded-xl flex justify-between items-center border-rose-500/30">
                 <div>
                     <h2 class="text-sm font-bold text-rose-400">🚨 Acil Durum & Manuel Pozisyon Masası</h2>
-                    <p class="text-xs text-slate-400 mt-0.5">Açık pozisyonları tek tıkla kapatabilir, stopu başabaşa çekebilir veya SL/TP seviyelerini güncelleyebilirsiniz.</p>
+                    <p class="text-xs text-slate-400 mt-0.5">Açık pozisyonları tek tıkla kapatabilir veya stopu girişe çekebilirsiniz.</p>
                 </div>
-                <button onclick="manualCloseAll()" class="bg-rose-600 hover:bg-rose-500 text-white font-bold px-4 py-2 rounded-lg text-xs transition shadow-lg shadow-rose-900/40">
-                    TÜM POZİSYONLARI ANINDA KAPAT (PANIC CLOSE)
+                <button onclick="manualCloseAll()" class="bg-rose-600 hover:bg-rose-500 text-white font-bold px-4 py-2 rounded-lg text-xs transition">
+                    TÜMÜNÜ KAPAT (PANIC CLOSE)
                 </button>
             </div>
-
             <div class="card p-4 rounded-xl">
-                <h3 class="text-xs font-semibold text-slate-400 mb-3 uppercase">Aktif Pozisyonlar Manuel Kontrol Listesi</h3>
                 <div class="overflow-x-auto">
                     <table class="w-full text-left text-xs">
                         <thead class="text-slate-500 border-b border-slate-800">
@@ -971,98 +831,45 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- ======================================================== -->
-        <!-- SAYFA 5: GÜNLÜK OTOMATİK EXCEL / CSV ARŞİVİ -->
-        <!-- ======================================================== -->
         <div id="page-excel" class="hidden space-y-3">
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
-                <div class="card p-4 rounded-xl space-y-3">
-                    <h2 class="text-xs font-bold text-emerald-400 uppercase">📊 Canlı Rapor İndir</h2>
-                    <p class="text-xs text-slate-300">Bugün kapanan tüm işlemlerin ve geçmişin güncel dökümünü CSV formatında indirin.</p>
-                    <a href="/api/export/csv" class="block text-center bg-emerald-600 hover:bg-emerald-500 text-black font-bold py-2 rounded-lg text-xs transition">
-                        📥 BUGÜNÜN İŞLEMLERİNİ İNDİR (CSV)
-                    </a>
-                </div>
-
-                <div class="card p-4 rounded-xl lg:col-span-2 space-y-3">
-                    <h2 class="text-xs font-bold text-sky-400 uppercase">📁 Tarihli Günlük Arşivlenmiş Dosyalar (TSİ 00:00)</h2>
-                    <div class="overflow-x-auto max-h-56 overflow-y-auto">
-                        <table class="w-full text-left text-xs">
-                            <thead class="text-slate-500 border-b border-slate-800">
-                                <tr>
-                                    <th class="pb-2">RAPOR DOSYASI</th>
-                                    <th class="pb-2 text-right">İNDİR</th>
-                                </tr>
-                            </thead>
-                            <tbody id="reports-table" class="divide-y divide-slate-800/60"></tbody>
-                        </table>
-                    </div>
-                </div>
+            <div class="card p-4 rounded-xl space-y-3">
+                <h2 class="text-xs font-bold text-emerald-400 uppercase">📊 Canlı CSV Raporu İndir</h2>
+                <a href="/api/export/csv" class="inline-block bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-4 py-2 rounded-lg text-xs transition">
+                    📥 BUGÜNÜN TÜM İŞLEMLERİNİ İNDİR (CSV)
+                </a>
             </div>
         </div>
 
-        <!-- ======================================================== -->
-        <!-- SAYFA 6: PERFORMANS & İSTATİSTİK -->
-        <!-- ======================================================== -->
         <div id="page-stats" class="hidden space-y-3">
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div class="card p-4 rounded-xl">
                     <div class="text-[10px] text-slate-400 uppercase">Kâr Faktörü (Profit Factor)</div>
                     <div id="stat-pf" class="text-xl font-bold font-mono text-emerald-400 mt-1">0.00</div>
-                    <div class="text-[10px] text-slate-500 mt-1">Toplam Kazanç / Toplam Kayıp</div>
                 </div>
                 <div class="card p-4 rounded-xl">
                     <div class="text-[10px] text-slate-400 uppercase">Ortalama Kârlı İşlem</div>
                     <div id="stat-avg-win" class="text-xl font-bold font-mono text-emerald-400 mt-1">+$0.00</div>
-                    <div class="text-[10px] text-slate-500 mt-1">Başarılı işlemlerin ortalaması</div>
                 </div>
                 <div class="card p-4 rounded-xl">
                     <div class="text-[10px] text-slate-400 uppercase">Ortalama Zararlı İşlem</div>
                     <div id="stat-avg-loss" class="text-xl font-bold font-mono text-red-400 mt-1">-$0.00</div>
-                    <div class="text-[10px] text-slate-500 mt-1">Stoplanan işlemlerin ortalaması</div>
-                </div>
-                <div class="card p-4 rounded-xl">
-                    <div class="text-[10px] text-slate-400 uppercase">Yön Dağılımı</div>
-                    <div id="long-winrate" class="text-sm font-bold font-mono text-sky-400 mt-1">L: %0 | S: %0</div>
-                    <div class="text-[10px] text-slate-500 mt-1">Long / Short Kazanma Oranları</div>
-                </div>
-            </div>
-
-            <div class="card p-4 rounded-xl">
-                <h2 class="text-xs font-semibold text-emerald-400 mb-3 uppercase">🏆 En Çok Kazandıran Lider Pariteler</h2>
-                <div class="overflow-x-auto max-h-64 overflow-y-auto">
-                    <table class="w-full text-left text-xs">
-                        <thead class="text-slate-500 border-b border-slate-800">
-                            <tr>
-                                <th class="pb-2">PARİTE</th>
-                                <th class="pb-2">İŞLEM SAYISI</th>
-                                <th class="pb-2">TOPLAM PnL ($)</th>
-                            </tr>
-                        </thead>
-                        <tbody id="top-symbols-table" class="divide-y divide-slate-800/50"></tbody>
-                    </table>
                 </div>
             </div>
         </div>
 
-        <!-- ======================================================== -->
-        <!-- SAYFA 7: TARAMA RADARI -->
-        <!-- ======================================================== -->
         <div id="page-radar" class="hidden space-y-3">
             <div class="card p-4 rounded-xl">
-                <h2 class="text-xs font-semibold text-emerald-400 uppercase mb-3 flex items-center">
-                    <span class="w-2 h-2 bg-emerald-400 rounded-full mr-2 animate-pulse"></span> 700+ Canlı Taranan Parite Radarı
-                </h2>
+                <h2 class="text-xs font-semibold text-emerald-400 uppercase mb-3">🔥 700+ Canlı Taranan Parite Radarı</h2>
                 <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
                     <table class="w-full text-left text-xs">
                         <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
                             <tr>
                                 <th class="pb-2">PARİTE</th>
                                 <th class="pb-2">SON FİYAT</th>
-                                <th class="pb-2">TREND DURUMU</th>
+                                <th class="pb-2">TREND</th>
                                 <th class="pb-2">5M RSI</th>
-                                <th class="pb-2">HACİM PATLAMASI</th>
-                                <th class="pb-2">UYGUNLUK PUANI</th>
+                                <th class="pb-2">HACİM KAT</th>
+                                <th class="pb-2">PUAN</th>
                             </tr>
                         </thead>
                         <tbody id="radar-table" class="divide-y divide-slate-800/50"></tbody>
@@ -1071,14 +878,9 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- ======================================================== -->
-        <!-- SAYFA 8: İŞLEM GÜNLÜĞÜ (JOURNAL) -->
-        <!-- ======================================================== -->
         <div id="page-journal" class="hidden space-y-3">
             <div class="card p-4 rounded-xl">
-                <h2 class="text-xs font-semibold text-sky-400 mb-3 uppercase flex items-center">
-                    <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> Kapanan Tüm İşlemlerin Kronolojik Günlüğü
-                </h2>
+                <h2 class="text-xs font-semibold text-sky-400 mb-3 uppercase">📖 Kapanan İşlem Günlüğü</h2>
                 <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
                     <table class="w-full text-left text-xs">
                         <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
@@ -1088,7 +890,6 @@ async def get_dashboard(request: Request):
                                 <th class="pb-2">YÖN</th>
                                 <th class="pb-2">GİRİŞ / ÇIKIŞ</th>
                                 <th class="pb-2">NET PnL ($)</th>
-                                <th class="pb-2">GİRİŞ GEREKÇESİ</th>
                                 <th class="pb-2">KAPANIŞ NEDENİ</th>
                             </tr>
                         </thead>
@@ -1098,53 +899,33 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- ======================================================== -->
-        <!-- SAYFA 9: BORSA API MASASI -->
-        <!-- ======================================================== -->
         <div id="page-api" class="hidden space-y-3">
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
-                <div class="card p-4 rounded-xl space-y-3">
-                    <h2 class="text-sm font-bold text-amber-400 uppercase">🔑 Borsa API Anahtarları</h2>
-                    <div class="space-y-2 text-xs">
-                        <div>
-                            <label class="text-slate-400 block mb-1">BORSA SEÇİMİ</label>
-                            <select id="api-exchange" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none">
-                                <option value="BINANCE" selected>Binance Futures (USDT-M)</option>
-                                <option value="BYBIT">Bybit Linear Perpetual</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="text-slate-400 block mb-1">AĞ TÜRÜ</label>
-                            <select id="api-mode" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none">
-                                <option value="TESTNET" selected>Testnet (Sanal / Güvenli Mod)</option>
-                                <option value="LIVE">Live (Gerçek Canlı Borsa)</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="text-slate-400 block mb-1">API KEY</label>
-                            <input id="api-key" type="password" placeholder="API Key..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono">
-                        </div>
-                        <div>
-                            <label class="text-slate-400 block mb-1">API SECRET</label>
-                            <input id="api-secret" type="password" placeholder="API Secret..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono">
-                        </div>
-                        <div class="flex items-center space-x-2 pt-1">
-                            <input id="api-auto-trade" type="checkbox" class="w-4 h-4 rounded text-emerald-500">
-                            <label for="api-auto-trade" class="text-white font-semibold cursor-pointer">Otomatik Gerçek Emir İletimini Başlat</label>
-                        </div>
-                        <button onclick="saveApiSettings()" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded transition">API AYARLARINI KAYDET</button>
-                    </div>
-                </div>
-
-                <div class="card p-4 rounded-xl flex flex-col justify-between">
+            <div class="card p-4 rounded-xl space-y-3 max-w-lg">
+                <h2 class="text-sm font-bold text-amber-400 uppercase">🔑 Borsa API Ayarları</h2>
+                <div class="space-y-2 text-xs">
                     <div>
-                        <h2 class="text-sm font-bold text-slate-300 uppercase mb-2">🛡️ API Güvenlik Kuralları</h2>
-                        <ul class="text-xs text-slate-400 space-y-2 list-disc list-inside">
-                            <li>API anahtarlarınızda <b>SADECE Futures / Vadeli İşlemler</b> yetkisini aktif ediniz.</li>
-                            <li><b>Çekme (Withdrawal) yetkisini KESİNLİKLE KAPALI tutunuz.</b></li>
-                            <li>Kaldıraç ve marjin modları bot tarafından borsa limitlerine otomatik olarak uyarlanır.</li>
-                        </ul>
+                        <label class="text-slate-400 block mb-1">BORSA</label>
+                        <select id="api-exchange" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none">
+                            <option value="BINANCE" selected>Binance Futures</option>
+                            <option value="BYBIT">Bybit Linear</option>
+                        </select>
                     </div>
+                    <div>
+                        <label class="text-slate-400 block mb-1">AĞ TÜRÜ</label>
+                        <select id="api-mode" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none">
+                            <option value="TESTNET" selected>Testnet (Sanal Mod)</option>
+                            <option value="LIVE">Live (Gerçek Mod)</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block mb-1">API KEY</label>
+                        <input id="api-key" type="password" placeholder="API Key..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono">
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block mb-1">API SECRET</label>
+                        <input id="api-secret" type="password" placeholder="API Secret..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono">
+                    </div>
+                    <button onclick="saveApiSettings()" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded transition">KAYDET</button>
                 </div>
             </div>
         </div>
@@ -1182,8 +963,6 @@ async def get_dashboard(request: Request):
                         if (chart) chart.timeScale().fitContent();
                         if (equityChart) equityChart.timeScale().fitContent();
                     }, 50);
-                } else if (tabId === 'excel') {
-                    loadReportsList();
                 }
             }
 
@@ -1425,7 +1204,6 @@ async def get_dashboard(request: Request):
                 `;
             }
 
-            // MANUEL MÜDAHALE FONKSİYONLARI
             async function manualClosePos(symbol) {
                 await fetch('/api/manual/close_position', {
                     method: 'POST',
@@ -1436,7 +1214,7 @@ async def get_dashboard(request: Request):
             }
 
             async function manualCloseAll() {
-                if (confirm("Tüm açık pozisyonları piyasa fiyatından kapatmak istediğine emin misin?")) {
+                if (confirm("Tüm açık pozisyonları kapatmak istediğinize emin misiniz?")) {
                     await fetch('/api/manual/close_all', { method: 'POST' });
                     updateDashboard();
                 }
@@ -1463,22 +1241,6 @@ async def get_dashboard(request: Request):
                 updateDashboard();
             }
 
-            async function loadReportsList() {
-                try {
-                    const res = await fetch('/api/reports/list');
-                    const files = await res.json();
-                    const tbody = document.getElementById('reports-table');
-                    tbody.innerHTML = files.map(f => `
-                        <tr>
-                            <td class="py-2 font-mono text-slate-300">📄 ${f}</td>
-                            <td class="text-right">
-                                <a href="/api/reports/download/${f}" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-2 py-1 rounded text-[10px]">İndir</a>
-                            </td>
-                        </tr>
-                    `).join('') || '<tr><td colspan="2" class="py-2 text-slate-500 italic">Henüz arşivlenmiş dosya yok...</td></tr>';
-                } catch(e) {}
-            }
-
             async function saveSettings() {
                 const total_balance = parseFloat(document.getElementById('input-balance').value);
                 const risk_pct = parseFloat(document.getElementById('input-risk').value);
@@ -1499,7 +1261,7 @@ async def get_dashboard(request: Request):
                 const mode = document.getElementById('api-mode').value;
                 const api_key = document.getElementById('api-key').value;
                 const api_secret = document.getElementById('api-secret').value;
-                const auto_trade = document.getElementById('api-auto-trade').checked;
+                const auto_trade = false;
 
                 await fetch('/api/update_api', {
                     method: 'POST',
@@ -1520,27 +1282,12 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
-                    // Duyarlılık Endeksleri
                     if (data.fear_and_greed) {
                         document.getElementById('fng-val').innerText = data.fear_and_greed.value;
                         document.getElementById('fng-text').innerText = data.fear_and_greed.classification;
                         document.getElementById('fng-bar').style.width = `${data.fear_and_greed.value}%`;
                     }
 
-                    // Haber Kilidi Durumu
-                    const newsBadge = document.getElementById('news-lock-badge');
-                    const newsStatus = document.getElementById('news-lock-status');
-                    if (data.news_filter_active) {
-                        newsBadge.classList.remove('hidden');
-                        newsStatus.innerText = `🔒 KİLİTLİ: ${data.news_lock_reason}`;
-                        newsStatus.className = "px-3 py-1 rounded bg-rose-500/20 text-rose-400 text-xs font-bold border border-rose-500/30";
-                    } else {
-                        newsBadge.classList.add('hidden');
-                        newsStatus.innerText = "GÜVENLİ (İŞLEM AÇILIYOR)";
-                        newsStatus.className = "px-3 py-1 rounded bg-emerald-500/20 text-emerald-400 text-xs font-bold border border-emerald-500/30";
-                    }
-
-                    // BTC Rejim Durumu
                     const btcBadge = document.getElementById('btc-regime-badge');
                     btcBadge.innerText = data.btc_regime || "BTC: AKTİF";
 
@@ -1583,7 +1330,6 @@ async def get_dashboard(request: Request):
                         </tr>
                     `}).join('');
 
-                    // Manuel Müdahale Listesi Tablosu
                     const manualTbody = document.getElementById('manual-pos-table');
                     manualTbody.innerHTML = data.active_positions.map(p => `
                         <tr>
@@ -1601,7 +1347,6 @@ async def get_dashboard(request: Request):
                         </tr>
                     `).join('') || '<tr><td colspan="7" class="py-3 text-slate-500 italic">Şu an açık pozisyon bulunmuyor...</td></tr>';
 
-                    // İşlem Günlüğü Tablosu
                     const journalTbody = document.getElementById('journal-table');
                     journalTbody.innerHTML = data.trade_history.map(h => `
                         <tr class="hover:bg-slate-800/40">
@@ -1612,10 +1357,24 @@ async def get_dashboard(request: Request):
                             <td class="font-bold ${h.realized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">
                                 ${h.realized_pnl >= 0 ? '+' : ''}$${h.realized_pnl.toFixed(2)} (%${h.pnl_pct})
                             </td>
-                            <td class="text-[10px] text-slate-300">${h.open_reasons.join(' | ')}</td>
                             <td class="text-[10px] text-sky-300 font-semibold">${h.close_reason}</td>
                         </tr>
-                    `).join('') || '<tr><td colspan="7" class="py-4 text-center text-slate-500 italic">Henüz kapanan bir işlem kaydı yok...</td></tr>';
+                    `).join('') || '<tr><td colspan="6" class="py-4 text-center text-slate-500 italic">Henüz kapanan bir işlem kaydı yok...</td></tr>';
+
+                    const radarTbody = document.getElementById('radar-table');
+                    if (data.radar_symbols && data.radar_symbols.length > 0) {
+                        const sortedRadar = [...data.radar_symbols].sort((a,b) => b.score - a.score);
+                        radarTbody.innerHTML = sortedRadar.map(r => `
+                            <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="currentSymbol='${r.symbol}'; switchTab('terminal'); loadChartCandles('${r.symbol}', null, false);">
+                                <td class="py-2 font-bold text-white">${r.symbol}</td>
+                                <td class="font-mono">$${r.price}</td>
+                                <td class="font-bold ${r.trend === 'LONG' ? 'text-emerald-400' : (r.trend === 'SHORT' ? 'text-red-400' : 'text-slate-400')}">${r.trend}</td>
+                                <td class="font-mono">${r.rsi}</td>
+                                <td class="font-mono text-amber-400">${r.vol_ratio}x</td>
+                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${r.score >= 65 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${r.score} Puan</span></td>
+                            </tr>
+                        `).join('');
+                    }
 
                     if (currentSymbol) loadChartCandles(currentSymbol, selectedPos, true);
 
