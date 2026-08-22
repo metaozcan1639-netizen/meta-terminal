@@ -614,8 +614,6 @@ async def manual_close_all():
     for pos in list(system_state["active_positions"]):
         curr_price = pos.get('current_price', pos['entry'])
         direction = pos['direction']
-        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100) # (Fixed typo in local thought below)
-        # correction for logic
         pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
         system_state["total_balance"] += realized_pnl
@@ -966,7 +964,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- YENİ EKLENEN FONLAMA ORANI KARTI -->
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div class="card p-4 rounded-xl space-y-2">
                     <div class="flex justify-between text-xs text-slate-400 uppercase">
@@ -1433,7 +1430,7 @@ async def get_dashboard(request: Request):
                         secondsVisible: false,
                         borderColor: '#1e293b'
                     },
-                    rightPriceScale: { autoScale: true, scaleMargins: { top: 0.1, bottom: 0.15 } }
+                    rightPriceScale: { autoScale: true, scaleMargins: { top: 0.1, bottom: 0.1 } }
                 });
 
                 candleSeries = chart.addCandlestickSeries({
