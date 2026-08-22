@@ -980,21 +980,10 @@ async def get_dashboard(request: Request):
                 </div>
 
                 <div class="card p-4 rounded-xl space-y-2">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">⚡ Fonlama Oranları (Funding Rates)</div>
-                    <div class="space-y-1.5 text-xs">
-                        <div class="flex justify-between bg-slate-900/80 p-1.5 rounded border border-slate-800">
-                            <span class="text-white font-bold">BTCUSDT</span>
-                            <span class="font-mono text-emerald-400">+0.0100%</span>
-                        </div>
-                        <div class="flex justify-between bg-slate-900/80 p-1.5 rounded border border-slate-800">
-                            <span class="text-white font-bold">ETHUSDT</span>
-                            <span class="font-mono text-emerald-400">+0.0125%</span>
-                        </div>
-                        <div class="flex justify-between bg-slate-900/80 p-1.5 rounded border border-slate-800">
-                            <span class="text-white font-bold">SOLUSDT</span>
-                            <span class="font-mono text-amber-400">+0.0250%</span>
-                        </div>
-                    </div>
+                    <div class="text-xs text-slate-400 uppercase">Likidite Isı Haritası Özeti</div>
+                    <p class="text-xs text-slate-300 leading-relaxed">
+                        Bot, altcoinlerdeki 5M/15M tepe ve dip likidite seviyelerini anlık süpürme (Sweep) ile arar. Aşırı yığılmış stop havuzlarına girildiğinde tetiklenen emirleri takip eder.
+                    </p>
                 </div>
             </div>
         </div>
