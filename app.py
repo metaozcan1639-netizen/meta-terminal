@@ -980,19 +980,19 @@ async def get_dashboard(request: Request):
                 </div>
 
                 <div class="card p-4 rounded-xl space-y-2">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">⚡ Majör Pariteler Fonlama Oranları (Funding Rates)</div>
+                    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">⚡ Fonlama Oranları (Funding Rates)</div>
                     <div class="space-y-1.5 text-xs">
                         <div class="flex justify-between bg-slate-900/80 p-1.5 rounded border border-slate-800">
                             <span class="text-white font-bold">BTCUSDT</span>
-                            <span class="font-mono text-emerald-400">+0.0100% (Normal)</span>
+                            <span class="font-mono text-emerald-400">+0.0100%</span>
                         </div>
                         <div class="flex justify-between bg-slate-900/80 p-1.5 rounded border border-slate-800">
                             <span class="text-white font-bold">ETHUSDT</span>
-                            <span class="font-mono text-emerald-400">+0.0125% (Normal)</span>
+                            <span class="font-mono text-emerald-400">+0.0125%</span>
                         </div>
                         <div class="flex justify-between bg-slate-900/80 p-1.5 rounded border border-slate-800">
                             <span class="text-white font-bold">SOLUSDT</span>
-                            <span class="font-mono text-amber-400">+0.0250% (Yüksek Long)</span>
+                            <span class="font-mono text-amber-400">+0.0250%</span>
                         </div>
                     </div>
                 </div>
@@ -1519,92 +1519,98 @@ async def get_dashboard(request: Request):
             }
 
             function recalculatePnlMetrics() {
-                const boundaries = getTurkeyTimeBoundaries();
-                let filtered = [];
+                try {
+                    const boundaries = getTurkeyTimeBoundaries();
+                    let filtered = [];
 
-                tradeHistoryCache.forEach(h => {
-                    const ts = h.close_timestamp || 0;
-                    if (currentPnlFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
-                    else if (currentPnlFilter === 'yesterday' && ts >= boundaries.yesterdayStartTs && ts < boundaries.yesterdayEndTs) filtered.push(h);
-                    else if (currentPnlFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
-                    else if (currentPnlFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
-                    else if (currentPnlFilter === 'all') filtered.push(h);
-                });
+                    tradeHistoryCache.forEach(h => {
+                        const ts = h.close_timestamp || 0;
+                        if (currentPnlFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'yesterday' && ts >= boundaries.yesterdayStartTs && ts < boundaries.yesterdayEndTs) filtered.push(h);
+                        else if (currentPnlFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'all') filtered.push(h);
+                    });
 
-                let periodPnl = 0;
-                let winCount = 0;
-                let totalWin = 0, totalLoss = 0, winOps = 0, lossOps = 0;
-                let longWins = 0, longTotal = 0, shortWins = 0, shortTotal = 0;
-                let totalDuration = 0;
-                let symbolPnlMap = {};
+                    let periodPnl = 0;
+                    let winCount = 0;
+                    let totalWin = 0, totalLoss = 0, winOps = 0, lossOps = 0;
+                    let longWins = 0, longTotal = 0, shortWins = 0, shortTotal = 0;
+                    let totalDuration = 0;
+                    let symbolPnlMap = {};
 
-                filtered.forEach(h => {
-                    periodPnl += h.realized_pnl;
-                    totalDuration += (h.duration_mins || 1);
+                    filtered.forEach(h => {
+                        periodPnl += h.realized_pnl;
+                        totalDuration += (h.duration_mins || 1);
 
-                    if (h.realized_pnl > 0) {
-                        winCount++;
-                        totalWin += h.realized_pnl;
-                        winOps++;
-                    } else {
-                        totalLoss += Math.abs(h.realized_pnl);
-                        lossOps++;
+                        if (h.realized_pnl > 0) {
+                            winCount++;
+                            totalWin += h.realized_pnl;
+                            winOps++;
+                        } else {
+                            totalLoss += Math.abs(h.realized_pnl);
+                            lossOps++;
+                        }
+
+                        if (h.direction === 'LONG') {
+                            longTotal++;
+                            if (h.realized_pnl > 0) longWins++;
+                        } else {
+                            shortTotal++;
+                            if (h.realized_pnl > 0) shortWins++;
+                        }
+
+                        symbolPnlMap[h.symbol] = (symbolPnlMap[h.symbol] || 0) + h.realized_pnl;
+                    });
+
+                    periodPnl = Math.round(periodPnl * 100) / 100;
+                    const winRate = filtered.length > 0 ? ((winCount / filtered.length) * 100).toFixed(1) : "0.0";
+
+                    const pnlElem = document.getElementById('stat-pnl');
+                    if (pnlElem) {
+                        pnlElem.innerText = `${periodPnl >= 0 ? '+' : ''}$${periodPnl.toFixed(2)}`;
+                        pnlElem.className = `text-sm font-extrabold font-mono ${periodPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
                     }
 
-                    if (h.direction === 'LONG') {
-                        longTotal++;
-                        if (h.realized_pnl > 0) longWins++;
-                    } else {
-                        shortTotal++;
-                        if (h.realized_pnl > 0) shortWins++;
+                    const winRateElem = document.getElementById('stat-winrate');
+                    if (winRateElem) winRateElem.innerText = `%${winRate}`;
+                    const tradesElem = document.getElementById('stat-trades');
+                    if (tradesElem) tradesElem.innerText = filtered.length;
+
+                    const pf = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : (totalWin > 0 ? "∞" : "0.00");
+                    const avgWin = winOps > 0 ? (totalWin / winOps).toFixed(2) : "0.00";
+                    const avgLoss = lossOps > 0 ? (totalLoss / lossOps).toFixed(2) : "0.00";
+                    const avgDur = filtered.length > 0 ? Math.round(totalDuration / filtered.length) : 0;
+
+                    const lPct = (longTotal + shortTotal) > 0 ? Math.round((longTotal / (longTotal + shortTotal)) * 100) : 50;
+
+                    const statPfElem = document.getElementById('stat-pf');
+                    if (statPfElem) statPfElem.innerText = pf;
+                    const statAvgWinElem = document.getElementById('stat-avg-win');
+                    if (statAvgWinElem) statAvgWinElem.innerText = `+$${avgWin}`;
+                    const statAvgLossElem = document.getElementById('stat-avg-loss');
+                    if (statAvgLossElem) statAvgLossElem.innerText = `-$${avgLoss}`;
+                    const statLsRatioElem = document.getElementById('stat-ls-ratio');
+                    if (statLsRatioElem) statLsRatioElem.innerText = `L: %${lPct} | S: %${100 - lPct}`;
+                    const statLsBar = document.getElementById('stat-ls-bar');
+                    if (statLsBar) statLsBar.style.width = `${lPct}%`;
+                    const statAvgDurElem = document.getElementById('stat-avg-duration');
+                    if (statAvgDurElem) statAvgDurElem.innerText = `${avgDur} Dakika`;
+                    const statWlCountElem = document.getElementById('stat-win-loss-count');
+                    if (statWlCountElem) statWlCountElem.innerText = `${winCount} Kazanç / ${lossOps} Kayıp`;
+
+                    const topSymbolsTbody = document.getElementById('top-symbols-table');
+                    if (topSymbolsTbody) {
+                        const sortedSymbols = Object.keys(symbolPnlMap).sort((a,b) => symbolPnlMap[b] - symbolPnlMap[a]);
+                        topSymbolsTbody.innerHTML = sortedSymbols.slice(0, 8).map(sym => `
+                            <tr>
+                                <td class="py-2 font-bold text-white">${sym}</td>
+                                <td class="text-slate-400">${tradeHistoryCache.filter(h => h.symbol === sym).length}</td>
+                                <td class="font-bold ${symbolPnlMap[sym] >= 0 ? 'text-emerald-400' : 'text-red-400'}">${symbolPnlMap[sym] >= 0 ? '+' : ''}$${symbolPnlMap[sym].toFixed(2)}</td>
+                            </tr>
+                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri bulunmuyor...</td></tr>';
                     }
-
-                    symbolPnlMap[h.symbol] = (symbolPnlMap[h.symbol] || 0) + h.realized_pnl;
-                });
-
-                periodPnl = Math.round(periodPnl * 100) / 100;
-                const winRate = filtered.length > 0 ? ((winCount / filtered.length) * 100).toFixed(1) : "0.0";
-
-                const pnlElem = document.getElementById('stat-pnl');
-                pnlElem.innerText = `${periodPnl >= 0 ? '+' : ''}$${periodPnl.toFixed(2)}`;
-                pnlElem.className = `text-sm font-extrabold font-mono ${periodPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
-
-                document.getElementById('stat-winrate').innerText = `%${winRate}`;
-                document.getElementById('stat-trades').innerText = filtered.length;
-
-                const pf = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : (totalWin > 0 ? "∞" : "0.00");
-                const avgWin = winOps > 0 ? (totalWin / winOps).toFixed(2) : "0.00";
-                const avgLoss = lossOps > 0 ? (totalLoss / lossOps).toFixed(2) : "0.00";
-                const avgDur = filtered.length > 0 ? Math.round(totalDuration / filtered.length) : 0;
-
-                const lPct = (longTotal + shortTotal) > 0 ? Math.round((longTotal / (longTotal + shortTotal)) * 100) : 50;
-
-                const statPfElem = document.getElementById('stat-pf');
-                if (statPfElem) statPfElem.innerText = pf;
-                const statAvgWinElem = document.getElementById('stat-avg-win');
-                if (statAvgWinElem) statAvgWinElem.innerText = `+$${avgWin}`;
-                const statAvgLossElem = document.getElementById('stat-avg-loss');
-                if (statAvgLossElem) statAvgLossElem.innerText = `-$${avgLoss}`;
-                const statLsRatioElem = document.getElementById('stat-ls-ratio');
-                if (statLsRatioElem) statLsRatioElem.innerText = `L: %${lPct} | S: %${100 - lPct}`;
-                const statLsBar = document.getElementById('stat-ls-bar');
-                if (statLsBar) statLsBar.style.width = `${lPct}%`;
-                const statAvgDurElem = document.getElementById('stat-avg-duration');
-                if (statAvgDurElem) statAvgDurElem.innerText = `${avgDur} Dakika`;
-                const statWlCountElem = document.getElementById('stat-win-loss-count');
-                if (statWlCountElem) statWlCountElem.innerText = `${winCount} Kazanç / ${lossOps} Kayıp`;
-
-                const topSymbolsTbody = document.getElementById('top-symbols-table');
-                if (topSymbolsTbody) {
-                    const sortedSymbols = Object.keys(symbolPnlMap).sort((a,b) => symbolPnlMap[b] - symbolPnlMap[a]);
-                    topSymbolsTbody.innerHTML = sortedSymbols.slice(0, 8).map(sym => `
-                        <tr>
-                            <td class="py-2 font-bold text-white">${sym}</td>
-                            <td class="text-slate-400">${tradeHistoryCache.filter(h => h.symbol === sym).length}</td>
-                            <td class="font-bold ${symbolPnlMap[sym] >= 0 ? 'text-emerald-400' : 'text-red-400'}">${symbolPnlMap[sym] >= 0 ? '+' : ''}$${symbolPnlMap[sym].toFixed(2)}</td>
-                        </tr>
-                    `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri bulunmuyor...</td></tr>';
-                }
+                } catch(e) {}
             }
 
             async function loadReportsList() {
@@ -1647,7 +1653,7 @@ async def get_dashboard(request: Request):
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
                     const candles = await fetchCandlesDirect(symbol, currentTimeframe);
-                    if (candles.length > 0) {
+                    if (candles.length > 0 && candleSeries) {
                         const lastCandle = candles[candles.length - 1];
                         const pConf = getPrecisionConfig(lastCandle.close);
                         candleSeries.applyOptions({
@@ -1658,7 +1664,6 @@ async def get_dashboard(request: Request):
                         if (!isLiveTick) {
                             chart.priceScale('right').applyOptions({ autoScale: true });
                             chart.timeScale().fitContent();
-                            chart.timeScale().resetTimeScale();
 
                             const dec = lastCandle.close < 1 ? pConf.precision : 2;
                             document.getElementById('bar-open').innerText = `$${lastCandle.open.toFixed(dec)}`;
@@ -1677,7 +1682,7 @@ async def get_dashboard(request: Request):
                         const tfLabel = currentTimeframe === '60' ? '1H' : (currentTimeframe === '240' ? '4H' : (currentTimeframe === 'D' ? '1D' : `${currentTimeframe}M`));
                         document.getElementById('chart-title').innerText = `${symbol} (${tfLabel})`;
 
-                        if (posData) {
+                        if (posData && candleSeries) {
                             const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
                             const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP (SL)' });
                             const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1 (15M)' });
@@ -1863,80 +1868,88 @@ async def get_dashboard(request: Request):
                     }
 
                     const btcBadge = document.getElementById('btc-regime-badge');
-                    btcBadge.innerText = data.btc_regime || "BTC: AKTİF";
+                    if (btcBadge) btcBadge.innerText = data.btc_regime || "BTC: AKTİF";
 
                     const totalUsedMargin = data.active_positions.reduce((acc, p) => acc + p.margin, 0);
                     const usedPct = data.total_balance > 0 ? ((totalUsedMargin / data.total_balance) * 100).toFixed(1) : "0.0";
-                    document.getElementById('stat-used-margin').innerText = `$${totalUsedMargin.toFixed(1)} (%${usedPct})`;
+                    const usedMarginElem = document.getElementById('stat-used-margin');
+                    if (usedMarginElem) usedMarginElem.innerText = `$${totalUsedMargin.toFixed(1)} (%${usedPct})`;
 
                     tradeHistoryCache = data.trade_history;
                     recalculatePnlMetrics();
 
-                    if (data.equity_curve && data.equity_curve.length > 0) equitySeries.setData(data.equity_curve);
+                    if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) {
+                        equitySeries.setData(data.equity_curve);
+                    }
 
                     const logBox = document.getElementById('log-box');
-                    logBox.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
+                    if (logBox) logBox.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
 
                     lastPositions = data.active_positions;
                     const activeTbody = document.getElementById('active-pos-table');
-                    activeTbody.innerHTML = data.active_positions.map((p, idx) => {
-                        const dec = p.entry < 1 ? 6 : 4;
-                        const modeStr = p.margin_mode === "ISOLATED" ? "İzole" : "Cross";
-                        const pnlVal = (p.unrealized_pnl !== undefined) ? p.unrealized_pnl : 0.0;
-                        const pnlColor = pnlVal >= 0 ? "text-emerald-400" : "text-red-400";
-                        const progVal = (p.progress_pct !== undefined) ? p.progress_pct : 0.0;
+                    if (activeTbody) {
+                        activeTbody.innerHTML = data.active_positions.map((p, idx) => {
+                            const modeStr = p.margin_mode === "ISOLATED" ? "İzole" : "Cross";
+                            const pnlVal = (p.unrealized_pnl !== undefined) ? p.unrealized_pnl : 0.0;
+                            const pnlColor = pnlVal >= 0 ? "text-emerald-400" : "text-red-400";
+                            const progVal = (p.progress_pct !== undefined) ? p.progress_pct : 0.0;
 
-                        return `
-                        <tr class="hover:bg-slate-800/80 cursor-pointer ${selectedPos && selectedPos.symbol === p.symbol ? 'bg-slate-800/60' : ''}" onclick="selectPosition(lastPositions[${idx}])">
-                            <td class="py-2 font-bold text-white">${p.symbol}</td>
-                            <td class="text-slate-400 font-mono text-[10px]">${p.open_time}</td>
-                            <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction} (${p.leverage}x ${modeStr})</td>
-                            <td class="text-white font-mono">$${p.margin}</td>
-                            <td class="font-mono text-slate-300">${p.entry}</td>
-                            <td class="font-mono text-white font-bold">${p.current_price || p.entry}</td>
-                            <td class="font-mono font-bold ${pnlColor}">${pnlVal >= 0 ? '+' : ''}$${pnlVal.toFixed(2)}</td>
-                            <td class="w-24">
-                                <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                                    <div class="bg-emerald-500 h-1.5 rounded-full" style="width: ${progVal}%"></div>
-                                </div>
-                                <span class="text-[9px] text-slate-400 font-mono">%${progVal.toFixed(1)}</span>
-                            </td>
-                        </tr>
-                    `}).join('');
+                            return `
+                            <tr class="hover:bg-slate-800/80 cursor-pointer ${selectedPos && selectedPos.symbol === p.symbol ? 'bg-slate-800/60' : ''}" onclick="selectPosition(lastPositions[${idx}])">
+                                <td class="py-2 font-bold text-white">${p.symbol}</td>
+                                <td class="text-slate-400 font-mono text-[10px]">${p.open_time}</td>
+                                <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction} (${p.leverage}x ${modeStr})</td>
+                                <td class="text-white font-mono">$${p.margin}</td>
+                                <td class="font-mono text-slate-300">${p.entry}</td>
+                                <td class="font-mono text-white font-bold">${p.current_price || p.entry}</td>
+                                <td class="font-mono font-bold ${pnlColor}">${pnlVal >= 0 ? '+' : ''}$${pnlVal.toFixed(2)}</td>
+                                <td class="w-24">
+                                    <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                        <div class="bg-emerald-500 h-1.5 rounded-full" style="width: ${progVal}%"></div>
+                                    </div>
+                                    <span class="text-[9px] text-slate-400 font-mono">%${progVal.toFixed(1)}</span>
+                                </td>
+                            </tr>
+                        `}).join('');
+                    }
 
                     const manualTbody = document.getElementById('manual-pos-table');
-                    manualTbody.innerHTML = data.active_positions.map(p => `
-                        <tr>
-                            <td class="py-2 font-bold text-white">${p.symbol}</td>
-                            <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction}</td>
-                            <td class="font-mono text-slate-300">${p.entry} / ${p.current_price || p.entry}</td>
-                            <td class="font-bold ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}</td>
-                            <td><input id="manual-sl-${p.symbol}" type="number" step="any" value="${p.sl}" class="bg-slate-900 border border-slate-700 w-20 px-1 py-0.5 rounded text-white font-mono"></td>
-                            <td><input id="manual-tp-${p.symbol}" type="number" step="any" value="${p.tp2}" class="bg-slate-900 border border-slate-700 w-20 px-1 py-0.5 rounded text-white font-mono"></td>
-                            <td class="text-right space-x-1">
-                                <button onclick="manualUpdateSlTp('${p.symbol}')" class="bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-[10px] text-white">Kaydet</button>
-                                <button onclick="manualBreakeven('${p.symbol}')" class="bg-sky-600 hover:bg-sky-500 px-2 py-1 rounded text-[10px] text-white">Başa Baş</button>
-                                <button onclick="manualClosePos('${p.symbol}')" class="bg-rose-600 hover:bg-rose-500 px-2 py-1 rounded text-[10px] text-white font-bold">Kapat</button>
-                            </td>
-                        </tr>
-                    `}).join('') || '<tr><td colspan="7" class="py-3 text-slate-500 italic">Şu an açık pozisyon bulunmuyor...</td></tr>';
+                    if (manualTbody) {
+                        manualTbody.innerHTML = data.active_positions.map(p => `
+                            <tr>
+                                <td class="py-2 font-bold text-white">${p.symbol}</td>
+                                <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction}</td>
+                                <td class="font-mono text-slate-300">${p.entry} / ${p.current_price || p.entry}</td>
+                                <td class="font-bold ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}</td>
+                                <td><input id="manual-sl-${p.symbol}" type="number" step="any" value="${p.sl}" class="bg-slate-900 border border-slate-700 w-20 px-1 py-0.5 rounded text-white font-mono"></td>
+                                <td><input id="manual-tp-${p.symbol}" type="number" step="any" value="${p.tp2}" class="bg-slate-900 border border-slate-700 w-20 px-1 py-0.5 rounded text-white font-mono"></td>
+                                <td class="text-right space-x-1">
+                                    <button onclick="manualUpdateSlTp('${p.symbol}')" class="bg-slate-700 hover:bg-slate-600 px-2 py-1 rounded text-[10px] text-white">Kaydet</button>
+                                    <button onclick="manualBreakeven('${p.symbol}')" class="bg-sky-600 hover:bg-sky-500 px-2 py-1 rounded text-[10px] text-white">Başa Baş</button>
+                                    <button onclick="manualClosePos('${p.symbol}')" class="bg-rose-600 hover:bg-rose-500 px-2 py-1 rounded text-[10px] text-white font-bold">Kapat</button>
+                                </td>
+                            </tr>
+                        `).join('') || '<tr><td colspan="7" class="py-3 text-slate-500 italic">Şu an açık pozisyon bulunmuyor...</td></tr>';
+                    }
 
                     const journalTbody = document.getElementById('journal-table');
-                    journalTbody.innerHTML = data.trade_history.map(h => `
-                        <tr class="hover:bg-slate-800/40">
-                            <td class="py-2 font-mono text-slate-400">${h.close_time}</td>
-                            <td class="font-bold text-white">${h.symbol}</td>
-                            <td class="${h.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${h.direction}</td>
-                            <td class="font-mono">${h.entry} ➔ ${h.close_price}</td>
-                            <td class="font-bold ${h.realized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">
-                                ${h.realized_pnl >= 0 ? '+' : ''}$${h.realized_pnl.toFixed(2)} (%${h.pnl_pct})
-                            </td>
-                            <td class="text-[10px] text-sky-300 font-semibold">${h.close_reason}</td>
-                        </tr>
-                    `}).join('') || '<tr><td colspan="6" class="py-4 text-center text-slate-500 italic">Henüz kapanan bir işlem kaydı yok...</td></tr>';
+                    if (journalTbody) {
+                        journalTbody.innerHTML = data.trade_history.map(h => `
+                            <tr class="hover:bg-slate-800/40">
+                                <td class="py-2 font-mono text-slate-400">${h.close_time}</td>
+                                <td class="font-bold text-white">${h.symbol}</td>
+                                <td class="${h.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${h.direction}</td>
+                                <td class="font-mono">${h.entry} ➔ ${h.close_price}</td>
+                                <td class="font-bold ${h.realized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">
+                                    ${h.realized_pnl >= 0 ? '+' : ''}$${h.realized_pnl.toFixed(2)} (%${h.pnl_pct})
+                                </td>
+                                <td class="text-[10px] text-sky-300 font-semibold">${h.close_reason}</td>
+                            </tr>
+                        `).join('') || '<tr><td colspan="6" class="py-4 text-center text-slate-500 italic">Henüz kapanan bir işlem kaydı yok...</td></tr>';
+                    }
 
                     const radarTbody = document.getElementById('radar-table');
-                    if (data.radar_symbols && data.radar_symbols.length > 0) {
+                    if (radarTbody && data.radar_symbols && data.radar_symbols.length > 0) {
                         const sortedRadar = [...data.radar_symbols].sort((a,b) => b.score - a.score);
                         radarTbody.innerHTML = sortedRadar.map(r => `
                             <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="currentSymbol='${r.symbol}'; switchTab('terminal'); loadChartCandles('${r.symbol}', null, false);">
