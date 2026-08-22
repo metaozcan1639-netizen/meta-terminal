@@ -27,13 +27,15 @@ system_state = {
     "total_balance": 1000.0,
     "risk_pct": 5.0,
     "leverage": 50,
-    "margin_mode": "ISOLATED",   # ISOLATED veya CROSS
-    "max_open_positions": 5,     # 0 ise SINIRSIZ
-    "max_total_margin_pct": 50.0,# Açık işlemlerin toplam kasa payı limiti (%)
+    "margin_mode": "ISOLATED",
+    "max_open_positions": 5,
+    "max_total_margin_pct": 50.0,
+    "btc_regime": "YÜKLENİYOR...",
     "scanned_count": 0,
     "last_scan_time": "-",
     "active_positions": [],
     "trade_history": [],
+    "equity_curve": [{"time": int(get_now_datetime().timestamp()), "value": 1000.0}],
     "logs": []
 }
 
@@ -83,6 +85,20 @@ def compute_position_metrics(entry, sl):
     margin_required = position_notional / leverage
 
     return round(position_notional, 2), round(margin_required, 2), round(risk_amount, 2)
+
+async def update_btc_regime(exchange):
+    try:
+        candles_1h = await exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=60)
+        df_btc = calculate_indicators(pd.DataFrame(candles_1h, columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        last = df_btc.iloc[-1]
+        if last['close'] > last['ema50'] and last['ema20'] > last['ema50']:
+            system_state["btc_regime"] = "🟢 BOĞA (YÜKSELİŞ)"
+        elif last['close'] < last['ema50'] and last['ema20'] < last['ema50']:
+            system_state["btc_regime"] = "🔴 AYI (DÜŞÜŞ)"
+        else:
+            system_state["btc_regime"] = "🟡 NÖTR / YATAY"
+    except Exception:
+        system_state["btc_regime"] = "BTC AKTİF"
 
 async def analyze_symbol(exchange, symbol):
     try:
@@ -153,37 +169,32 @@ async def analyze_symbol(exchange, symbol):
             entry = float(c_5m['close'])
             atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.005
 
-            # Dinamik Stop-Loss
             if direction == "LONG":
                 sl = float(df_5m['low'].iloc[-6:].min() - (1.5 * atr))
                 if (entry - sl) / entry < 0.008:
                     sl = entry * 0.992
                 risk_dist = entry - sl
 
-                # Dinamik TP1: 15M Likidite & Son Swing Tepe
                 dyn_tp1 = float(df_15m['high'].iloc[-20:-2].max())
                 if (dyn_tp1 - entry) < (1.2 * risk_dist):
                     dyn_tp1 = entry + (1.5 * risk_dist)
 
-                # Dinamik TP2: 1H / 4H Majör Likidite Havuzu (BSL)
                 dyn_tp2 = float(df_1h['high'].iloc[-30:-2].max())
                 if (dyn_tp2 - entry) < (2.0 * risk_dist):
                     dyn_tp2 = entry + (3.0 * risk_dist)
 
                 tp1, tp2 = dyn_tp1, dyn_tp2
 
-            else: # SHORT
+            else:
                 sl = float(df_5m['high'].iloc[-6:].max() + (1.5 * atr))
                 if (sl - entry) / entry < 0.008:
                     sl = entry * 1.008
                 risk_dist = sl - entry
 
-                # Dinamik TP1: 15M Likidite & Son Swing Dip
                 dyn_tp1 = float(df_15m['low'].iloc[-20:-2].min())
                 if (entry - dyn_tp1) < (1.2 * risk_dist):
                     dyn_tp1 = entry - (1.5 * risk_dist)
 
-                # Dinamik TP2: 1H / 4H Majör Likidite Havuzu (SSL)
                 dyn_tp2 = float(df_1h['low'].iloc[-30:-2].min())
                 if (entry - dyn_tp2) < (2.0 * risk_dist):
                     dyn_tp2 = entry - (3.0 * risk_dist)
@@ -205,6 +216,11 @@ async def analyze_symbol(exchange, symbol):
                 "max_loss": max_loss,
                 "leverage": system_state["leverage"],
                 "margin_mode": system_state["margin_mode"],
+                "tp1_hit": False,
+                "active_size": pos_size,
+                "current_price": entry,
+                "unrealized_pnl": 0.0,
+                "progress_pct": 0.0,
                 "reasons": reasons,
                 "open_time": get_now_str(),
                 "open_timestamp": int(get_now_datetime().timestamp())
@@ -225,7 +241,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: Piyasa Yapısına Dayalı Likidite TP Taraması Aktif...")
+    add_log("Quant Motoru: Canlı Akış, Dinamik Likidite & Kısmi Kâr Motoru Aktif...")
 
     while True:
         exchange = ccxt.bybit({
@@ -234,6 +250,7 @@ async def market_scanner_loop():
             'timeout': 8000
         })
         try:
+            await update_btc_regime(exchange)
             markets = await exchange.load_markets()
             crypto_symbols = [
                 s for s, m in markets.items() 
@@ -275,25 +292,42 @@ async def market_scanner_loop():
                 try:
                     ticker = await exchange.fetch_ticker(pos['symbol'])
                     curr_price = ticker['last']
+                    pos['current_price'] = curr_price
                     direction = pos['direction']
                     close_reason = None
+
+                    # Canlı Anlık Kâr/Zarar (Unrealized PnL) ve İlerleme Hesabı
+                    pnl_raw = ((curr_price - pos['entry']) / pos['entry']) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'])
+                    pos['unrealized_pnl'] = round(pos['active_size'] * pnl_raw, 2)
+
+                    total_range = abs(pos['tp2'] - pos['sl'])
+                    current_dist = (curr_price - pos['sl']) if direction == "LONG" else (pos['sl'] - curr_price)
+                    pos['progress_pct'] = max(0, min(100, round((current_dist / (total_range + 1e-9)) * 100, 1)))
 
                     if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
                         close_reason = "❌ Stop-Loss Tetiklendi"
                     elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
-                        close_reason = "🎯 TP2 Likidite Havuzu Hedefine Ulaşıldı"
+                        close_reason = "🎯 TP2 Likidite Havuzu Alındı"
                     elif (direction == "LONG" and curr_price >= pos['tp1']) or (direction == "SHORT" and curr_price <= pos['tp1']):
                         if not pos.get("tp1_hit"):
                             pos["tp1_hit"] = True
                             pos["sl"] = pos["entry"]
-                            add_log(f"⚡ TP1 Likiditesi Alındı ({pos['symbol']}): Stop Başabaşa (Girişe) Çekildi.")
+                            # %50 Kısmi Kâr Alma Gerçekleşti
+                            partial_pnl = round((pos['pos_size'] * 0.5) * pnl_raw, 2)
+                            pos['active_size'] = pos['pos_size'] * 0.5
+                            system_state["total_balance"] += partial_pnl
+                            now_ts = int(get_now_datetime().timestamp())
+                            system_state["equity_curve"].append({"time": now_ts, "value": round(system_state["total_balance"], 2)})
+                            add_log(f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi.")
 
                     if close_reason:
                         pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
-                        realized_pnl = round(pos['pos_size'] * (pnl_pct / 100.0), 2)
+                        realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
                         system_state["total_balance"] += realized_pnl
 
                         now_dt = get_now_datetime()
+                        system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
+                        
                         history_item = {
                             "symbol": pos['symbol'],
                             "direction": pos['direction'],
@@ -371,7 +405,7 @@ async def get_dashboard(request: Request):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Meta Quant Terminal</title>
+        <title>Meta Quant Terminal Pro</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
         <style>
@@ -391,8 +425,11 @@ async def get_dashboard(request: Request):
             <div class="flex items-center space-x-3">
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
                 <div>
-                    <h1 class="text-lg font-bold tracking-wider text-emerald-400">META QUANT PRO TERMINAL</h1>
-                    <div class="text-[11px] text-slate-400">Multi-Timeframe & Likidite Karakter Kırılımı (MSS) Motoru</div>
+                    <div class="flex items-center space-x-2">
+                        <h1 class="text-lg font-bold tracking-wider text-emerald-400">META QUANT PRO TERMINAL</h1>
+                        <span id="btc-regime-badge" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">BTC: YÜKLENİYOR</span>
+                    </div>
+                    <div class="text-[11px] text-slate-400">Smart Money, Dinamik Likidite & Kısmi Kâr Motoru</div>
                 </div>
             </div>
 
@@ -497,7 +534,7 @@ async def get_dashboard(request: Request):
 
         <!-- GRAFİK VE GEREKÇE ALANI -->
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div class="card p-3 rounded-xl lg:col-span-2 h-[520px] flex flex-col">
+            <div class="card p-3 rounded-xl lg:col-span-2 h-[540px] flex flex-col">
                 <div class="flex flex-wrap justify-between items-center mb-2 px-1 gap-2">
                     <div class="flex items-center space-x-3">
                         <span id="chart-title" class="text-xs font-bold text-emerald-400 tracking-wider">GRAFİK</span>
@@ -512,11 +549,12 @@ async def get_dashboard(request: Request):
                             <button onclick="changeTimeframe('D')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-D">1D</button>
                         </div>
 
-                        <!-- GRAFİK ÜSTÜ YÜKSEK / DÜŞÜK GÖSTERGESİ -->
-                        <div class="flex items-center space-x-2 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 text-[11px] font-mono">
-                            <span class="text-amber-400 font-semibold">Yüksek (H): <span id="bar-high" class="text-white">-</span></span>
-                            <span class="text-slate-600">|</span>
-                            <span class="text-indigo-400 font-semibold">Düşük (L): <span id="bar-low" class="text-white">-</span></span>
+                        <!-- GRAFİK ÜSTÜ OHLC VE YÜKSEK / DÜŞÜK GÖSTERGESİ -->
+                        <div id="ohlc-box" class="flex items-center space-x-2 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 text-[10px] font-mono text-slate-300">
+                            <span>O: <b id="bar-open" class="text-white">-</b></span>
+                            <span>H: <b id="bar-high" class="text-amber-400">-</b></span>
+                            <span>L: <b id="bar-low" class="text-indigo-400">-</b></span>
+                            <span>C: <b id="bar-close" class="text-white">-</b></span>
                         </div>
                     </div>
                     <span id="chart-levels" class="text-[11px] text-slate-400 space-x-2"></span>
@@ -524,7 +562,7 @@ async def get_dashboard(request: Request):
                 <div id="tv-container" class="w-full flex-1 rounded overflow-hidden"></div>
             </div>
 
-            <div class="card p-4 rounded-xl flex flex-col justify-between h-[520px]">
+            <div class="card p-4 rounded-xl flex flex-col justify-between h-[540px]">
                 <div>
                     <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
                     <div id="active-rationale" class="space-y-2 text-xs">
@@ -538,11 +576,12 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- TABLOLAR -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            <div class="card p-4 rounded-xl">
-                <h2 class="text-xs font-semibold text-emerald-400 mb-3 flex items-center">
-                    <span class="w-2 h-2 bg-emerald-400 rounded-full mr-2"></span> AKTİF POZİSYONLAR (Grafik için Tıkla)
+        <!-- TABLOLAR VE KASA BÜYÜME GRAFİĞİ -->
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <div class="card p-4 rounded-xl lg:col-span-2">
+                <h2 class="text-xs font-semibold text-emerald-400 mb-3 flex items-center justify-between">
+                    <span class="flex items-center"><span class="w-2 h-2 bg-emerald-400 rounded-full mr-2"></span> AKTİF POZİSYONLAR (Grafik için Tıkla)</span>
+                    <span class="text-[10px] text-slate-500">Canlı PnL & TP2 İlerlemesi</span>
                 </h2>
                 <div class="overflow-x-auto max-h-72 overflow-y-auto">
                     <table class="w-full text-left text-[11px]">
@@ -553,8 +592,9 @@ async def get_dashboard(request: Request):
                                 <th class="pb-2">YÖN/KALDIRAÇ/MOD</th>
                                 <th class="pb-2">TEMİNAT (M.)</th>
                                 <th class="pb-2">GİRİŞ</th>
-                                <th class="pb-2">STOP (SL)</th>
-                                <th class="pb-2">TP1 / TP2 (Dinamik)</th>
+                                <th class="pb-2">CANLI FİYAT</th>
+                                <th class="pb-2">ANLIK PnL ($)</th>
+                                <th class="pb-2">HEDEF İLERLEME</th>
                             </tr>
                         </thead>
                         <tbody id="active-pos-table" class="divide-y divide-slate-800/50"></tbody>
@@ -562,29 +602,41 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <div class="card p-4 rounded-xl">
-                <h2 class="text-xs font-semibold text-sky-400 mb-3 flex items-center">
-                    <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> KAPANAN İŞLEMLER RAPORU
+            <!-- KASA BÜYÜME GRAFİĞİ (EQUITY CURVE) -->
+            <div class="card p-4 rounded-xl flex flex-col h-80">
+                <h2 class="text-xs font-semibold text-sky-400 mb-2 flex items-center">
+                    <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> KASA BÜYÜME EĞRİSİ (EQUITY)
                 </h2>
-                <div class="overflow-x-auto max-h-72 overflow-y-auto">
-                    <table class="w-full text-left text-[11px]">
-                        <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
-                            <tr>
-                                <th class="pb-2">PARİTE</th>
-                                <th class="pb-2">PNL ($)</th>
-                                <th class="pb-2">NEDEN AÇILDI?</th>
-                                <th class="pb-2">NEDEN KAPANDI?</th>
-                            </tr>
-                        </thead>
-                        <tbody id="history-table" class="divide-y divide-slate-800/50"></tbody>
-                    </table>
-                </div>
+                <div id="equity-container" class="w-full flex-1 rounded overflow-hidden"></div>
+            </div>
+        </div>
+
+        <!-- KAPANAN İŞLEMLER RAPORU -->
+        <div class="card p-4 rounded-xl">
+            <h2 class="text-xs font-semibold text-sky-400 mb-3 flex items-center">
+                <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> KAPANAN İŞLEMLER RAPORU
+            </h2>
+            <div class="overflow-x-auto max-h-72 overflow-y-auto">
+                <table class="w-full text-left text-[11px]">
+                    <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
+                        <tr>
+                            <th class="pb-2">PARİTE</th>
+                            <th class="pb-2">PNL ($)</th>
+                            <th class="pb-2">NEDEN AÇILDI?</th>
+                            <th class="pb-2">NEDEN KAPANDI?</th>
+                        </tr>
+                    </thead>
+                    <tbody id="history-table" class="divide-y divide-slate-800/50"></tbody>
+                </table>
             </div>
         </div>
 
         <script>
             let chart = null;
             let candleSeries = null;
+            let equityChart = null;
+            let equitySeries = null;
+
             let currentSymbol = localStorage.getItem("selected_sym") || "BTC/USDT:USDT";
             let currentTimeframe = "5";
             let currentPnlFilter = "today";
@@ -592,6 +644,24 @@ async def get_dashboard(request: Request):
             let priceLines = [];
             let lastPositions = [];
             let tradeHistoryCache = [];
+            let lastKnownPosCount = 0;
+
+            function playAlertSound() {
+                try {
+                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    osc.type = "sine";
+                    osc.frequency.setValueAtTime(880, ctx.currentTime);
+                    osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.15);
+                    gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                    gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start();
+                    osc.stop(ctx.currentTime + 0.25);
+                } catch(e) {}
+            }
 
             function getPrecisionConfig(price) {
                 if (price < 0.001) return { precision: 6, minMove: 0.000001 };
@@ -600,7 +670,7 @@ async def get_dashboard(request: Request):
                 return { precision: 2, minMove: 0.01 };
             }
 
-            function initChart() {
+            function initCharts() {
                 const container = document.getElementById('tv-container');
                 container.innerHTML = '';
                 chart = LightweightCharts.createChart(container, {
@@ -617,6 +687,35 @@ async def get_dashboard(request: Request):
                     upColor: '#10b981', downColor: '#ef4444',
                     borderUpColor: '#10b981', borderDownColor: '#ef4444',
                     wickUpColor: '#10b981', wickDownColor: '#ef4444'
+                });
+
+                // İmleç Mum Üzerindeyken OHLC Bilgisi
+                chart.subscribeCrosshairMove(param => {
+                    if (!param.time || !param.seriesData.get(candleSeries)) {
+                        return;
+                    }
+                    const data = param.seriesData.get(candleSeries);
+                    const dec = data.close < 1 ? 6 : 2;
+                    document.getElementById('bar-open').innerText = `$${data.open.toFixed(dec)}`;
+                    document.getElementById('bar-high').innerText = `$${data.high.toFixed(dec)}`;
+                    document.getElementById('bar-low').innerText = `$${data.low.toFixed(dec)}`;
+                    document.getElementById('bar-close').innerText = `$${data.close.toFixed(dec)}`;
+                });
+
+                // Kasa Büyüme Eğrisi Grafiği
+                const eqContainer = document.getElementById('equity-container');
+                eqContainer.innerHTML = '';
+                equityChart = LightweightCharts.createChart(eqContainer, {
+                    layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
+                    grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
+                    timeScale: { timeVisible: true, secondsVisible: false },
+                    rightPriceScale: { autoScale: true }
+                });
+                equitySeries = equityChart.addAreaSeries({
+                    topColor: 'rgba(56, 189, 248, 0.4)',
+                    bottomColor: 'rgba(56, 189, 248, 0.0)',
+                    lineColor: '#38bdf8',
+                    lineWidth: 2
                 });
             }
 
@@ -651,7 +750,7 @@ async def get_dashboard(request: Request):
 
             function getTurkeyTimeBoundaries() {
                 const now = new Date();
-                const trOffset = 3 * 60; // UTC+3
+                const trOffset = 3 * 60;
                 const localOffset = now.getTimezoneOffset();
                 const trNow = new Date(now.getTime() + (trOffset + localOffset) * 60 * 1000);
 
@@ -680,12 +779,9 @@ async def get_dashboard(request: Request):
             function recalculatePnlMetrics() {
                 const boundaries = getTurkeyTimeBoundaries();
                 let filtered = [];
-                let totalAllPnl = 0;
 
                 tradeHistoryCache.forEach(h => {
-                    totalAllPnl += h.realized_pnl;
                     const ts = h.close_timestamp || 0;
-
                     if (currentPnlFilter === 'today' && ts >= boundaries.todayStartTs) {
                         filtered.push(h);
                     } else if (currentPnlFilter === 'yesterday' && ts >= boundaries.yesterdayStartTs && ts < boundaries.yesterdayEndTs) {
@@ -740,8 +836,8 @@ async def get_dashboard(request: Request):
                 try {
                     const candles = await fetchCandlesDirect(symbol, currentTimeframe);
                     if (candles.length > 0) {
-                        const lastPrice = candles[candles.length - 1].close;
-                        const pConf = getPrecisionConfig(lastPrice);
+                        const lastCandle = candles[candles.length - 1];
+                        const pConf = getPrecisionConfig(lastCandle.close);
                         candleSeries.applyOptions({
                             priceFormat: {
                                 type: 'price',
@@ -756,13 +852,13 @@ async def get_dashboard(request: Request):
                             chart.priceScale('right').applyOptions({ autoScale: true });
                             chart.timeScale().fitContent();
                             chart.timeScale().resetTimeScale();
-                        }
 
-                        let maxPrice = Math.max(...candles.map(c => c.high));
-                        let minPrice = Math.min(...candles.map(c => c.low));
-                        const dec = lastPrice < 1 ? pConf.precision : 2;
-                        document.getElementById('bar-high').innerText = `$${maxPrice.toFixed(dec)}`;
-                        document.getElementById('bar-low').innerText = `$${minPrice.toFixed(dec)}`;
+                            const dec = lastCandle.close < 1 ? pConf.precision : 2;
+                            document.getElementById('bar-open').innerText = `$${lastCandle.open.toFixed(dec)}`;
+                            document.getElementById('bar-high').innerText = `$${lastCandle.high.toFixed(dec)}`;
+                            document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
+                            document.getElementById('bar-close').innerText = `$${lastCandle.close.toFixed(dec)}`;
+                        }
                     }
 
                     if (!isLiveTick) {
@@ -795,7 +891,7 @@ async def get_dashboard(request: Request):
                                 lineWidth: 2,
                                 lineStyle: LightweightCharts.LineStyle.Dashed,
                                 axisLabelVisible: true,
-                                title: 'TP1 (Dinamik 15M)',
+                                title: 'TP1 (15M)',
                             });
                             const tp2Line = candleSeries.createPriceLine({
                                 price: posData.tp2,
@@ -803,7 +899,7 @@ async def get_dashboard(request: Request):
                                 lineWidth: 2,
                                 lineStyle: LightweightCharts.LineStyle.Dashed,
                                 axisLabelVisible: true,
-                                title: 'TP2 (Majör Likidite)',
+                                title: 'TP2 (Likidite)',
                             });
                             priceLines.push(entryLine, slLine, tp1Line, tp2Line);
 
@@ -844,7 +940,7 @@ async def get_dashboard(request: Request):
                     <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1">
                         <div class="text-slate-400">Giriş Saati: <span class="text-white font-bold">${pos.open_time}</span></div>
                         <div class="text-slate-400">Kaldıraç & Mod: <span class="text-white font-bold">${pos.leverage}x ${modeLabel} ($${pos.margin})</span></div>
-                        <div class="text-red-400">Stop-Loss: <span class="font-mono">${pos.sl.toFixed(p)}</span> (Maks Kayıp: $${pos.max_loss})</div>
+                        <div class="text-red-400">Stop-Loss: <span class="font-mono">${pos.sl.toFixed(p)}</span> (Maks Risk: $${pos.max_loss})</div>
                         <div class="text-emerald-400">TP1 / TP2 (Dinamik): <span class="font-mono">${pos.tp1.toFixed(p)} / ${pos.tp2.toFixed(p)}</span></div>
                     </div>
                 `;
@@ -870,15 +966,38 @@ async def get_dashboard(request: Request):
                     const res = await fetch('/api/state');
                     const data = await res.json();
 
+                    // Sinyal Sesi Uyarısı
+                    if (data.active_positions.length > lastKnownPosCount) {
+                        playAlertSound();
+                    }
+                    lastKnownPosCount = data.active_positions.length;
+
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
+                    // BTC Rejim Durumu
+                    const btcBadge = document.getElementById('btc-regime-badge');
+                    btcBadge.innerText = data.btc_regime || "BTC: AKTİF";
+                    if (data.btc_regime.includes("BOĞA")) {
+                        btcBadge.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800";
+                    } else if (data.btc_regime.includes("AYI")) {
+                        btcBadge.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-800";
+                    } else {
+                        btcBadge.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700";
+                    }
+
+                    // Toplam Kullanılan Marjin Hesabı
                     const totalUsedMargin = data.active_positions.reduce((acc, p) => acc + p.margin, 0);
                     const usedPct = data.total_balance > 0 ? ((totalUsedMargin / data.total_balance) * 100).toFixed(1) : "0.0";
                     document.getElementById('stat-used-margin').innerText = `$${totalUsedMargin.toFixed(1)} (%${usedPct})`;
 
                     tradeHistoryCache = data.trade_history;
                     recalculatePnlMetrics();
+
+                    // Kasa Büyüme Eğrisini Güncelle
+                    if (data.equity_curve && data.equity_curve.length > 0) {
+                        equitySeries.setData(data.equity_curve);
+                    }
 
                     const logBox = document.getElementById('log-box');
                     logBox.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
@@ -888,15 +1007,22 @@ async def get_dashboard(request: Request):
                     activeTbody.innerHTML = data.active_positions.map((p, idx) => {
                         const dec = p.entry < 1 ? 6 : 4;
                         const modeStr = p.margin_mode === "ISOLATED" ? "İzole" : "Cross";
+                        const pnlColor = p.unrealized_pnl >= 0 ? "text-emerald-400" : "text-red-400";
                         return `
                         <tr class="hover:bg-slate-800/80 cursor-pointer ${selectedPos && selectedPos.symbol === p.symbol ? 'bg-slate-800/60' : ''}" onclick="selectPosition(lastPositions[${idx}])">
                             <td class="py-2 font-bold text-white">${p.symbol}</td>
                             <td class="text-slate-400 font-mono text-[10px]">${p.open_time}</td>
                             <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction} (${p.leverage}x ${modeStr})</td>
                             <td class="text-white font-mono">$${p.margin}</td>
-                            <td class="font-mono">${p.entry}</td>
-                            <td class="text-red-400 font-mono">${p.sl.toFixed(dec)}</td>
-                            <td class="text-emerald-400 font-mono">${p.tp1.toFixed(dec)} / ${p.tp2.toFixed(dec)}</td>
+                            <td class="font-mono text-slate-300">${p.entry}</td>
+                            <td class="font-mono text-white font-bold">${p.current_price || p.entry}</td>
+                            <td class="font-mono font-bold ${pnlColor}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl}</td>
+                            <td class="w-24">
+                                <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                                    <div class="bg-emerald-500 h-1.5 rounded-full" style="width: ${p.progress_pct}%"></div>
+                                </div>
+                                <span class="text-[9px] text-slate-400 font-mono">%${p.progress_pct}</span>
+                            </td>
                         </tr>
                     `}).join('');
 
@@ -930,7 +1056,7 @@ async def get_dashboard(request: Request):
                 } catch (e) {}
             }
 
-            initChart();
+            initCharts();
             loadChartCandles(currentSymbol, null, false);
             setInterval(updateDashboard, 2000);
         </script>
