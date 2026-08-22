@@ -132,8 +132,7 @@ async def analyze_symbol(exchange, symbol):
         tasks = [
             exchange.fetch_ohlcv(symbol, timeframe='5m', limit=35),
             exchange.fetch_ohlcv(symbol, timeframe='15m', limit=35),
-            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=35),
-            exchange.fetch_ohlcv(symbol, timeframe='4h', limit=35)
+            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=35)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         if any(isinstance(r, Exception) or not r or len(r) < 20 for r in results):
@@ -142,15 +141,10 @@ async def analyze_symbol(exchange, symbol):
         df_5m = calculate_indicators(pd.DataFrame(results[0], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         df_15m = calculate_indicators(pd.DataFrame(results[1], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         df_1h = calculate_indicators(pd.DataFrame(results[2], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
-        df_4h = calculate_indicators(pd.DataFrame(results[3], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
 
         c_5m = df_5m.iloc[-1]
         c_15m = df_15m.iloc[-1]
         c_1h = df_1h.iloc[-1]
-        c_4h = df_4h.iloc[-1]
-
-        bull_trend = (c_4h['close'] > c_4h['ema50']) and (c_1h['close'] > c_1h['ema50']) and (c_15m['ema20'] > c_15m['ema50'])
-        bear_trend = (c_4h['close'] < c_4h['ema50']) and (c_1h['close'] < c_1h['ema50']) and (c_15m['ema20'] < c_15m['ema50'])
 
         swing_low = df_5m['low'].iloc[-18:-2].min()
         swing_high = df_5m['high'].iloc[-18:-2].max()
@@ -161,29 +155,30 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
-        if bull_trend:
-            bull_mss = (df_5m['low'].iloc[-5:].min() <= swing_low) or (c_5m['close'] > recent_high and c_5m['close'] > c_5m['open'])
-            if bull_mss and c_5m['close'] > df_5m['ema20'].iloc[-1]:
-                direction = "LONG"
-                score += 40
-                reasons.append("⚡ 5M Dip Likiditesi + MSS Kırılımı")
-                reasons.append("📈 4H / 1H / 15M Üçlü Boğa Trend Uyumu")
+        bull_signal = (c_5m['close'] > c_5m['open'] and (df_5m['low'].iloc[-5:].min() <= swing_low or c_5m['close'] > recent_high)) or (c_5m['close'] > df_5m['ema20'].iloc[-1] and c_15m['close'] > c_15m['ema50'])
+        bear_signal = (c_5m['close'] < c_5m['open'] and (df_5m['high'].iloc[-5:].max() >= swing_high or c_5m['close'] < recent_low)) or (c_5m['close'] < df_5m['ema20'].iloc[-1] and c_15m['close'] < c_15m['ema50'])
+
+        if bull_signal:
+            direction = "LONG"
+            score += 40
+            reasons.append("⚡ 5M MSS Kırılımı / Dip Likiditesi")
+            if c_1h['close'] > c_1h['ema50']:
                 score += 30
-        elif bear_trend:
-            bear_mss = (df_5m['high'].iloc[-5:].max() >= swing_high) or (c_5m['close'] < recent_low and c_5m['close'] < c_5m['open'])
-            if bear_mss and c_5m['close'] < df_5m['ema20'].iloc[-1]:
-                direction = "SHORT"
-                score += 40
-                reasons.append("⚡ 5M Tepe Likiditesi + MSS Kırılımı")
-                reasons.append("📉 4H / 1H / 15M Üçlü Ayı Trend Uyumu")
+                reasons.append("📈 1H / 15M Trend Desteği")
+        elif bear_signal:
+            direction = "SHORT"
+            score += 40
+            reasons.append("⚡ 5M MSS Kırılımı / Tepe Likiditesi")
+            if c_1h['close'] < c_1h['ema50']:
                 score += 30
+                reasons.append("📉 1H / 15M Trend Desteği")
 
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
-        if vol_ratio >= 1.1:
+        if vol_ratio >= 1.05:
             score += 20
             reasons.append(f"🔥 Hacim Desteği ({vol_ratio:.1f}x)")
 
-        if 35 <= c_5m['rsi'] <= 65:
+        if 30 <= c_5m['rsi'] <= 75:
             score += 10
             reasons.append(f"🎯 Momentum RSI ({c_5m['rsi']:.1f})")
 
@@ -192,7 +187,7 @@ async def analyze_symbol(exchange, symbol):
             "price": float(c_5m['close']),
             "rsi": round(float(c_5m['rsi']), 1) if pd.notnull(c_5m['rsi']) else 50.0,
             "vol_ratio": round(vol_ratio, 2),
-            "trend": direction if direction else ("LONG" if bull_trend else ("SHORT" if bear_trend else "YATAY")),
+            "trend": direction if direction else ("LONG" if c_5m['close'] > c_5m['ema50'] else "SHORT"),
             "score": score
         }
         system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
@@ -213,10 +208,12 @@ async def analyze_symbol(exchange, symbol):
             risk_dist = entry - sl
 
             dyn_tp1 = float(df_15m['high'].iloc[-25:-1].max())
-            dyn_tp2 = float(max(df_1h['high'].iloc[-25:-1].max(), df_4h['high'].iloc[-15:-1].max()))
+            if (dyn_tp1 - entry) < (1.2 * risk_dist):
+                dyn_tp1 = entry + (1.5 * risk_dist)
 
-            if (dyn_tp1 - entry) < (1.2 * risk_dist) or dyn_tp2 <= dyn_tp1:
-                return None
+            dyn_tp2 = float(df_1h['high'].iloc[-25:-1].max())
+            if dyn_tp2 <= dyn_tp1 or (dyn_tp2 - entry) < (2.0 * risk_dist):
+                dyn_tp2 = entry + (3.0 * risk_dist)
 
             tp1, tp2 = dyn_tp1, dyn_tp2
 
@@ -227,10 +224,12 @@ async def analyze_symbol(exchange, symbol):
             risk_dist = sl - entry
 
             dyn_tp1 = float(df_15m['low'].iloc[-25:-1].min())
-            dyn_tp2 = float(min(df_1h['low'].iloc[-25:-1].min(), df_4h['low'].iloc[-15:-1].min()))
+            if (entry - dyn_tp1) < (1.2 * risk_dist):
+                dyn_tp1 = entry - (1.5 * risk_dist)
 
-            if (entry - dyn_tp1) < (1.2 * risk_dist) or dyn_tp2 >= dyn_tp1:
-                return None
+            dyn_tp2 = float(df_1h['low'].iloc[-25:-1].min())
+            if dyn_tp2 >= dyn_tp1 or (entry - dyn_tp2) < (2.0 * risk_dist):
+                dyn_tp2 = entry - (3.0 * risk_dist)
 
             tp1, tp2 = dyn_tp1, dyn_tp2
 
@@ -274,7 +273,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: 5M / 15M / 1H / 4H Saf SMC Likidite Taraması Aktif...")
+    add_log("Quant Motoru: SMC Taraması Aktif...")
 
     while True:
         exchange = None
@@ -436,11 +435,17 @@ async def update_settings(payload: SettingsPayload):
     system_state["margin_mode"] = payload.margin_mode
     system_state["max_open_positions"] = payload.max_open_positions
     system_state["max_total_margin_pct"] = payload.max_total_margin_pct
+    
+    pos_limit_str = "Sınırsız" if payload.max_open_positions == 0 else f"{payload.max_open_positions} Adet"
+    mode_str = "İzole" if payload.margin_mode == "ISOLATED" else "Cross"
+    add_log(f"⚙️ AYARLAR GÜNCELLENDİ: Kasa: ${payload.total_balance} | Mod: {mode_str} | Risk: %{payload.risk_pct} | Kaldıraç: {payload.leverage}x | Max Poz: {pos_limit_str} | Max Marjin: %{payload.max_total_margin_pct}")
     return {"status": "success"}
 
 @app.post("/api/update_api")
 async def update_api(payload: ApiPayload):
     system_state["api_settings"] = payload.dict()
+    status_str = "AKTİF" if payload.auto_trade else "DEVRE DIŞI"
+    add_log(f"🔑 API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | Otomatik Emir: {status_str}")
     return {"status": "success"}
 
 @app.post("/api/manual/close_position")
@@ -986,7 +991,6 @@ async def get_dashboard(request: Request):
                 const timeScale = chart.timeScale();
                 const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp);
                 
-                // Sağ kenara kadar kutuyu genişlet (sağ eksene kadar)
                 const rightX = canvas.width - 55;
                 const boxStartX = startX !== null ? Math.max(0, startX) : 40;
                 const boxWidth = rightX - boxStartX;
@@ -1356,6 +1360,7 @@ async def get_dashboard(request: Request):
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({total_balance, risk_pct, leverage, margin_mode, max_open_positions, max_total_margin_pct})
                 });
+                updateDashboard();
             }
 
             async function saveApiSettings() {
@@ -1371,6 +1376,7 @@ async def get_dashboard(request: Request):
                     body: JSON.stringify({exchange, mode, api_key, api_secret, auto_trade})
                 });
                 alert("API Ayarları Kaydedildi!");
+                updateDashboard();
             }
 
             async function updateDashboard() {
