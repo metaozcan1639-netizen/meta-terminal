@@ -36,9 +36,6 @@ system_state = {
     "max_total_margin_pct": 50.0,
     "btc_regime": "YÜKLENİYOR...",
     "fear_and_greed": {"value": 55, "classification": "Nötr"},
-    "news_filter_enabled": False,
-    "news_filter_active": False,
-    "news_lock_reason": "",
     "scanned_count": 0,
     "last_scan_time": "-",
     "active_positions": [],
@@ -63,7 +60,7 @@ EXCLUDED_KEYWORDS = [
 def add_log(msg: str):
     ts = get_now_str()
     system_state["logs"].insert(0, f"[{ts}] {msg}")
-    if len(system_state["logs"]) > 70:
+    if len(system_state["logs"]) > 60:
         system_state["logs"].pop()
 
 def calculate_indicators(df):
@@ -103,7 +100,7 @@ def compute_position_metrics(entry, sl):
 async def fetch_fear_greed():
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.get("https://api.alternative.me/fng/?limit=1", timeout=4) as res:
+            async with session.get("https://api.alternative.me/fng/?limit=1", timeout=3) as res:
                 if res.status == 200:
                     data = await res.json()
                     item = data['data'][0]
@@ -116,7 +113,7 @@ async def fetch_fear_greed():
 
 async def update_btc_regime(exchange):
     try:
-        candles_1h = await exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=50)
+        candles_1h = await exchange.fetch_ohlcv('BTC/USDT:USDT', timeframe='1h', limit=40)
         df_btc = calculate_indicators(pd.DataFrame(candles_1h, columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         last = df_btc.iloc[-1]
         if last['close'] > last['ema50']:
@@ -132,16 +129,33 @@ async def analyze_symbol(exchange, symbol):
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
 
-        # Hızlı ve Güvenilir: 5M ve 1H Klines
-        c_5m_raw = await exchange.fetch_ohlcv(symbol, timeframe='5m', limit=35)
-        if not c_5m_raw or len(c_5m_raw) < 25:
+        # 4 Zaman Dilimi: 5M, 15M, 1H, 4H
+        tasks = [
+            exchange.fetch_ohlcv(symbol, timeframe='5m', limit=35),
+            exchange.fetch_ohlcv(symbol, timeframe='15m', limit=35),
+            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=35),
+            exchange.fetch_ohlcv(symbol, timeframe='4h', limit=35)
+        ]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if any(isinstance(r, Exception) or not r or len(r) < 20 for r in results):
             return None
 
-        df_5m = calculate_indicators(pd.DataFrame(c_5m_raw, columns=['t', 'open', 'high', 'low', 'close', 'volume']))
-        c_5m = df_5m.iloc[-1]
+        df_5m = calculate_indicators(pd.DataFrame(results[0], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        df_15m = calculate_indicators(pd.DataFrame(results[1], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        df_1h = calculate_indicators(pd.DataFrame(results[2], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        df_4h = calculate_indicators(pd.DataFrame(results[3], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
 
-        swing_low = df_5m['low'].iloc[-20:-3].min()
-        swing_high = df_5m['high'].iloc[-20:-3].max()
+        c_5m = df_5m.iloc[-1]
+        c_15m = df_15m.iloc[-1]
+        c_1h = df_1h.iloc[-1]
+        c_4h = df_4h.iloc[-1]
+
+        # 4H, 1H ve 15M Trend Kontrolü
+        bull_trend = (c_4h['close'] > c_4h['ema50']) and (c_1h['close'] > c_1h['ema50']) and (c_15m['ema20'] > c_15m['ema50'])
+        bear_trend = (c_4h['close'] < c_4h['ema50']) and (c_1h['close'] < c_1h['ema50']) and (c_15m['ema20'] < c_15m['ema50'])
+
+        swing_low = df_5m['low'].iloc[-18:-2].min()
+        swing_high = df_5m['high'].iloc[-18:-2].max()
         recent_high = df_5m['high'].iloc[-5:-1].max()
         recent_low = df_5m['low'].iloc[-5:-1].min()
 
@@ -150,73 +164,87 @@ async def analyze_symbol(exchange, symbol):
         reasons = []
 
         # 5M Likidite & Karakter Kırılımı (MSS)
-        bull_mss = (df_5m['low'].iloc[-5:-1].min() < swing_low) and (c_5m['close'] > recent_high)
-        bear_mss = (df_5m['high'].iloc[-5:-1].max() > swing_high) and (c_5m['close'] < recent_low)
-
-        if bull_mss and c_5m['close'] > c_5m['open']:
-            direction = "LONG"
-            score += 45
-            reasons.append("⚡ Dip Likiditesi + 5M Karakter Kırılımı (MSS)")
-        elif bear_mss and c_5m['close'] < c_5m['open']:
-            direction = "SHORT"
-            score += 45
-            reasons.append("⚡ Tepe Likiditesi + 5M Karakter Kırılımı (MSS)")
-
-        # EMA Trend Teyidi
-        if direction == "LONG" and c_5m['close'] > c_5m['ema50']:
-            score += 30
-            reasons.append("📈 5M / 15M EMA50 Üzeri Trend Onayı")
-        elif direction == "SHORT" and c_5m['close'] < c_5m['ema50']:
-            score += 30
-            reasons.append("📉 5M / 15M EMA50 Altı Trend Onayı")
+        if bull_trend:
+            bull_mss = (df_5m['low'].iloc[-5:].min() <= swing_low) or (c_5m['close'] > recent_high and c_5m['close'] > c_5m['open'])
+            if bull_mss and c_5m['close'] > df_5m['ema20'].iloc[-1]:
+                direction = "LONG"
+                score += 40
+                reasons.append("⚡ 5M Dip Likiditesi + MSS Kırılımı")
+                reasons.append("📈 4H / 1H / 15M Üçlü Boğa Trend Uyumu")
+                score += 30
+        elif bear_trend:
+            bear_mss = (df_5m['high'].iloc[-5:].max() >= swing_high) or (c_5m['close'] < recent_low and c_5m['close'] < c_5m['open'])
+            if bear_mss and c_5m['close'] < df_5m['ema20'].iloc[-1]:
+                direction = "SHORT"
+                score += 40
+                reasons.append("⚡ 5M Tepe Likiditesi + MSS Kırılımı")
+                reasons.append("📉 4H / 1H / 15M Üçlü Ayı Trend Uyumu")
+                score += 30
 
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
-        if vol_ratio >= 1.2:
+        if vol_ratio >= 1.1:
             score += 20
-            reasons.append(f"🔥 Hacim Artışı ({vol_ratio:.1f}x MA20)")
+            reasons.append(f"🔥 Hacim Desteği ({vol_ratio:.1f}x)")
 
         if 35 <= c_5m['rsi'] <= 65:
             score += 10
-            reasons.append(f"🎯 Dengeli Momentum (RSI: {c_5m['rsi']:.1f})")
+            reasons.append(f"🎯 Momentum RSI ({c_5m['rsi']:.1f})")
 
-        # Radar Listesi Güncellemesi
+        # Radar Listesi
         radar_item = {
             "symbol": symbol,
             "price": float(c_5m['close']),
             "rsi": round(float(c_5m['rsi']), 1) if pd.notnull(c_5m['rsi']) else 50.0,
             "vol_ratio": round(vol_ratio, 2),
-            "trend": direction if direction else ("LONG" if c_5m['close'] > c_5m['ema50'] else "SHORT"),
+            "trend": direction if direction else ("LONG" if bull_trend else ("SHORT" if bear_trend else "YATAY")),
             "score": score
         }
         system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
         system_state["radar_symbols"].append(radar_item)
-        if len(system_state["radar_symbols"]) > 80:
+        if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
-        if not direction or score < 65:
+        # 60 Puan Barajı
+        if not direction or score < 60:
             return None
 
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.005
 
+        # SAF SMC LİKİDİTE TP VE 1.2R RİSK/ÖDÜL ELEME MOTORU
         if direction == "LONG":
             sl = float(df_5m['low'].iloc[-6:].min() - (1.2 * atr))
             if (entry - sl) / entry < 0.006:
                 sl = entry * 0.994
             risk_dist = entry - sl
-            tp1 = float(df_5m['high'].iloc[-20:-2].max())
-            if (tp1 - entry) < (1.2 * risk_dist):
-                tp1 = entry + (1.5 * risk_dist)
-            tp2 = entry + (3.0 * risk_dist)
-        else:
+
+            # 15M Direnç / Son Swing Tepe (TP1)
+            dyn_tp1 = float(df_15m['high'].iloc[-25:-1].max())
+            # 1H / 4H Majör Likidite Havuzu (TP2 - BSL)
+            dyn_tp2 = float(max(df_1h['high'].iloc[-25:-1].max(), df_4h['high'].iloc[-15:-1].max()))
+
+            # Asgari 1.2R Barajı Kontrolü (Potansiyel kâr riski karşılamıyorsa işlemi ele)
+            if (dyn_tp1 - entry) < (1.2 * risk_dist) or dyn_tp2 <= dyn_tp1:
+                return None
+
+            tp1, tp2 = dyn_tp1, dyn_tp2
+
+        else: # SHORT
             sl = float(df_5m['high'].iloc[-6:].max() + (1.2 * atr))
             if (sl - entry) / entry < 0.006:
                 sl = entry * 1.006
             risk_dist = sl - entry
-            tp1 = float(df_5m['low'].iloc[-20:-2].min())
-            if (entry - tp1) < (1.2 * risk_dist):
-                tp1 = entry - (1.5 * risk_dist)
-            tp2 = entry - (3.0 * risk_dist)
+
+            # 15M Destek / Son Swing Dip (TP1)
+            dyn_tp1 = float(df_15m['low'].iloc[-25:-1].min())
+            # 1H / 4H Majör Likidite Havuzu (TP2 - SSL)
+            dyn_tp2 = float(min(df_1h['low'].iloc[-25:-1].min(), df_4h['low'].iloc[-15:-1].min()))
+
+            # Asgari 1.2R Barajı Kontrolü
+            if (entry - dyn_tp1) < (1.2 * risk_dist) or dyn_tp2 >= dyn_tp1:
+                return None
+
+            tp1, tp2 = dyn_tp1, dyn_tp2
 
         pos_size, margin, max_loss = compute_position_metrics(entry, sl)
 
@@ -258,16 +286,17 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru Başlatıldı: Bybit Linear Taraması Devrede...")
-
-    exchange = ccxt.bybit({
-        'options': {'defaultType': 'linear'},
-        'enableRateLimit': True,
-        'timeout': 10000
-    })
+    add_log("Quant Motoru: 5M / 15M / 1H / 4H Saf SMC Likidite Taraması Aktif...")
 
     while True:
+        exchange = None
         try:
+            exchange = ccxt.bybit({
+                'options': {'defaultType': 'linear'},
+                'enableRateLimit': True,
+                'timeout': 10000
+            })
+
             await update_btc_regime(exchange)
             await fetch_fear_greed()
 
@@ -280,7 +309,7 @@ async def market_scanner_loop():
             ]
             system_state["scanned_count"] = len(crypto_symbols)
 
-            batch_size = 12
+            batch_size = 10
             for i in range(0, len(crypto_symbols), batch_size):
                 chunk = crypto_symbols[i:i + batch_size]
                 tasks = [analyze_symbol(exchange, s) for s in chunk]
@@ -304,9 +333,9 @@ async def market_scanner_loop():
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}")
 
                 system_state["last_scan_time"] = get_now_str()
-                await asyncio.sleep(0.15)
+                await asyncio.sleep(0.1)
 
-            # Aktif Pozisyonları Güncelle
+            # Pozisyon Güncellemeleri
             for pos in list(system_state["active_positions"]):
                 try:
                     ticker = await exchange.fetch_ticker(pos['symbol'])
@@ -325,7 +354,7 @@ async def market_scanner_loop():
                     if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
                         close_reason = "❌ Stop-Loss Tetiklendi"
                     elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
-                        close_reason = "🎯 TP2 Likidite Hedefi Alındı"
+                        close_reason = "🎯 TP2 Likidite Havuzuna Ulaşıldı"
                     elif (direction == "LONG" and curr_price >= pos['tp1']) or (direction == "SHORT" and curr_price <= pos['tp1']):
                         if not pos.get("tp1_hit"):
                             pos["tp1_hit"] = True
@@ -364,10 +393,16 @@ async def market_scanner_loop():
                 except Exception:
                     pass
 
-            await asyncio.sleep(2)
+            await exchange.close()
+            await asyncio.sleep(1)
         except Exception as e:
-            add_log(f"Tarama Uyarısı: {str(e)[:45]}")
-            await asyncio.sleep(3)
+            add_log(f"Döngü Uyarısı: {str(e)[:45]}")
+            if exchange:
+                try:
+                    await exchange.close()
+                except Exception:
+                    pass
+            await asyncio.sleep(2)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -419,8 +454,6 @@ async def update_settings(payload: SettingsPayload):
 @app.post("/api/update_api")
 async def update_api(payload: ApiPayload):
     system_state["api_settings"] = payload.dict()
-    status_str = "AKTİF" if payload.auto_trade else "DEVRE DIŞI"
-    add_log(f"🔑 API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | Otomatik Emir: {status_str}")
     return {"status": "success"}
 
 @app.post("/api/manual/close_position")
@@ -489,7 +522,7 @@ async def manual_breakeven(payload: ClosePosPayload):
     if target:
         target['sl'] = target['entry']
         target['tp1_hit'] = True
-        add_log(f"🛡️ BAŞABAŞ: {target['symbol']} Stop seviyesi Girişe çekildi!")
+        add_log(f"🛡️ BAŞABAŞ: {target['symbol']} Stop Girişe çekildi!")
         return {"status": "success"}
     return {"status": "error"}
 
@@ -557,7 +590,7 @@ async def get_dashboard(request: Request):
     </head>
     <body class="p-3 space-y-3 pb-16">
         
-        <!-- ÜST NAVİGASYON VE SEKME MENÜSÜ -->
+        <!-- ÜST MENÜ -->
         <div class="card p-3 rounded-xl flex flex-wrap justify-between items-center gap-3 border-emerald-500/30">
             <div class="flex items-center space-x-3">
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
@@ -572,19 +605,19 @@ async def get_dashboard(request: Request):
             <!-- SAYFA SEKMELERİ -->
             <div class="flex items-center flex-wrap gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs">
                 <button onclick="switchTab('terminal')" id="tab-terminal" class="nav-tab active px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📊 Terminal</button>
-                <button onclick="switchTab('sentiment')" id="tab-sentiment" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🧠 Duyarlılık & Endeksler</button>
-                <button onclick="switchTab('news')" id="tab-news" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📰 Haber & Takvim</button>
-                <button onclick="switchTab('manual')" id="tab-manual" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🎮 Manuel Müdahale</button>
-                <button onclick="switchTab('excel')" id="tab-excel" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📑 Günlük Excel Arşivi</button>
+                <button onclick="switchTab('sentiment')" id="tab-sentiment" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🧠 Duyarlılık</button>
+                <button onclick="switchTab('news')" id="tab-news" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📰 Takvim</button>
+                <button onclick="switchTab('manual')" id="tab-manual" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🎮 Manuel Kontrol</button>
+                <button onclick="switchTab('excel')" id="tab-excel" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📑 Excel Arşivi</button>
                 <button onclick="switchTab('stats')" id="tab-stats" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📈 İstatistik</button>
                 <button onclick="switchTab('radar')" id="tab-radar" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🔥 Radar</button>
                 <button onclick="switchTab('journal')" id="tab-journal" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📖 Günlük</button>
-                <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ API Masası</button>
+                <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ API</button>
             </div>
 
             <div class="flex space-x-3 text-xs text-slate-400">
                 <div>Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
-                <div>Tarama: <span id="last-scan" class="text-white font-bold">-</span></div>
+                <div>Son: <span id="last-scan" class="text-white font-bold">-</span></div>
             </div>
         </div>
 
@@ -756,7 +789,7 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- DİĞER SAYFALAR (STATİK ŞABLONLAR) -->
+        <!-- DİĞER MODÜLLER -->
         <div id="page-sentiment" class="hidden space-y-3">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div class="card p-4 rounded-xl flex flex-col items-center justify-center text-center">
@@ -772,10 +805,6 @@ async def get_dashboard(request: Request):
                     <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded border border-slate-800">
                         <span class="text-xs">BTC Trend Skoru:</span>
                         <span class="font-bold text-emerald-400">BOĞA</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded border border-slate-800">
-                        <span class="text-xs">Tavsiye Edilen Strateji:</span>
-                        <span class="font-bold text-amber-400">Trend Yönlü Scalp / MSS</span>
                     </div>
                 </div>
                 <div class="card p-4 rounded-xl flex flex-col justify-between">
@@ -1156,17 +1185,19 @@ async def get_dashboard(request: Request):
 
                         if (posData) {
                             const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
+                            
+                            // SL: Kırmızı, TP1: Açık Yeşil, TP2: Koyu Yeşil
                             const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP (SL)' });
-                            const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1 (15M)' });
-                            const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#059669', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2 (Likidite)' });
+                            const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1 (15M)' });
+                            const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2 (Likidite)' });
                             priceLines.push(entryLine, slLine, tp1Line, tp2Line);
 
                             const p = posData.entry < 1 ? 6 : 2;
                             document.getElementById('chart-levels').innerHTML = `
                                 <span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | 
                                 <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span> | 
-                                <span class="text-emerald-400 font-mono">TP1: ${posData.tp1.toFixed(p)}</span> | 
-                                <span class="text-emerald-500 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>
+                                <span class="text-green-400 font-mono">TP1: ${posData.tp1.toFixed(p)}</span> | 
+                                <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>
                             `;
                         } else {
                             document.getElementById('chart-levels').innerHTML = '';
@@ -1371,7 +1402,7 @@ async def get_dashboard(request: Request):
                                 <td class="font-bold ${r.trend === 'LONG' ? 'text-emerald-400' : (r.trend === 'SHORT' ? 'text-red-400' : 'text-slate-400')}">${r.trend}</td>
                                 <td class="font-mono">${r.rsi}</td>
                                 <td class="font-mono text-amber-400">${r.vol_ratio}x</td>
-                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${r.score >= 65 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${r.score} Puan</span></td>
+                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${r.score >= 60 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${r.score} Puan</span></td>
                             </tr>
                         `).join('');
                     }
