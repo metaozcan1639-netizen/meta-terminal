@@ -146,42 +146,61 @@ async def analyze_symbol(exchange, symbol):
         c_15m = df_15m.iloc[-1]
         c_1h = df_1h.iloc[-1]
 
-        swing_low = df_5m['low'].iloc[-18:-2].min()
-        swing_high = df_5m['high'].iloc[-18:-2].max()
-        recent_high = df_5m['high'].iloc[-5:-1].max()
-        recent_low = df_5m['low'].iloc[-5:-1].min()
+        # 5M Swing Dip/Tepe (Son 15 mumun referansı)
+        swing_low = df_5m['low'].iloc[-18:-3].min()
+        swing_high = df_5m['high'].iloc[-18:-3].max()
+        recent_breakout_high = df_5m['high'].iloc[-5:-1].max()
+        recent_breakout_low = df_5m['low'].iloc[-5:-1].min()
 
         score = 0
         direction = None
         reasons = []
 
-        bull_signal = (c_5m['close'] > c_5m['open'] and (df_5m['low'].iloc[-5:].min() <= swing_low or c_5m['close'] > recent_high)) or (c_5m['close'] > df_5m['ema20'].iloc[-1] and c_15m['close'] > c_15m['ema50'])
-        bear_signal = (c_5m['close'] < c_5m['open'] and (df_5m['high'].iloc[-5:].max() >= swing_high or c_5m['close'] < recent_low)) or (c_5m['close'] < df_5m['ema20'].iloc[-1] and c_15m['close'] < c_15m['ema50'])
+        # Gerçek Likidite Süpürmesi (Sweep) & Karakter Kırılımı (MSS)
+        sweep_low = df_5m['low'].iloc[-4:].min() < swing_low
+        mss_bull = c_5m['close'] > recent_breakout_high and c_5m['close'] > c_5m['open']
 
-        if bull_signal:
+        sweep_high = df_5m['high'].iloc[-4:].max() > swing_high
+        mss_bear = c_5m['close'] < recent_breakout_low and c_5m['close'] < c_5m['open']
+
+        # Yön ve Likidite Puanı (Zorunlu Tetikleyici)
+        if sweep_low and mss_bull:
             direction = "LONG"
-            score += 40
-            reasons.append("⚡ 5M MSS Kırılımı / Dip Likiditesi")
-            if c_1h['close'] > c_1h['ema50']:
-                score += 30
-                reasons.append("📈 1H / 15M Trend Desteği")
-        elif bear_signal:
+            score += 45
+            reasons.append("⚡ 5M Dip Likiditesi Alındı + MSS Kırılımı")
+        elif sweep_high and mss_bear:
             direction = "SHORT"
-            score += 40
-            reasons.append("⚡ 5M MSS Kırılımı / Tepe Likiditesi")
-            if c_1h['close'] < c_1h['ema50']:
+            score += 45
+            reasons.append("⚡ 5M Tepe Likiditesi Alındı + MSS Kırılımı")
+
+        # Trend Uyumu (1H ve 15M birlikte teyit ederse tam puan)
+        if direction == "LONG":
+            if c_1h['close'] > c_1h['ema50'] and c_15m['close'] > c_15m['ema50']:
                 score += 30
-                reasons.append("📉 1H / 15M Trend Desteği")
+                reasons.append("📈 1H & 15M Çift Trend Uyumu")
+            elif c_1h['close'] > c_1h['ema50'] or c_15m['close'] > c_15m['ema50']:
+                score += 15
+                reasons.append("📈 15M Trend Desteği")
+        elif direction == "SHORT":
+            if c_1h['close'] < c_1h['ema50'] and c_15m['close'] < c_15m['ema50']:
+                score += 30
+                reasons.append("📉 1H & 15M Çift Trend Uyumu")
+            elif c_1h['close'] < c_1h['ema50'] or c_15m['close'] < c_15m['ema50']:
+                score += 15
+                reasons.append("📉 15M Trend Desteği")
 
+        # Hacim Patlaması (En az %20 artış)
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
-        if vol_ratio >= 1.05:
-            score += 20
-            reasons.append(f"🔥 Hacim Desteği ({vol_ratio:.1f}x)")
+        if vol_ratio >= 1.20:
+            score += 15
+            reasons.append(f"🔥 Onay Hacmi ({vol_ratio:.1f}x)")
 
-        if 30 <= c_5m['rsi'] <= 75:
+        # RSI Momentum (Aşırı alım/satım dışı)
+        if 40 <= c_5m['rsi'] <= 65:
             score += 10
-            reasons.append(f"🎯 Momentum RSI ({c_5m['rsi']:.1f})")
+            reasons.append(f"🎯 Sağlıklı RSI ({c_5m['rsi']:.1f})")
 
+        # Radar Listesi
         radar_item = {
             "symbol": symbol,
             "price": float(c_5m['close']),
@@ -195,7 +214,8 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
-        if not direction or score < 60:
+        # KALİTE BARAJI: En az 75 Puan ve Gerçek Yön
+        if not direction or score < 75:
             return None
 
         entry = float(c_5m['close'])
@@ -273,7 +293,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: SMC Taraması Aktif...")
+    add_log("Quant Motoru: Yüksek Kaliteli SMC Taraması Aktif (Baraj: 75 Puan)...")
 
     while True:
         exchange = None
@@ -317,7 +337,7 @@ async def market_scanner_loop():
 
                             system_state["active_positions"].append(sig)
                             mode_label = "İzole" if sig['margin_mode'] == "ISOLATED" else "Cross"
-                            add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}")
+                            add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['score']} Puan | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}")
 
                 system_state["last_scan_time"] = get_now_str()
                 await asyncio.sleep(0.1)
@@ -1479,7 +1499,7 @@ async def get_dashboard(request: Request):
                                 <td class="font-bold ${r.trend === 'LONG' ? 'text-emerald-400' : (r.trend === 'SHORT' ? 'text-red-400' : 'text-slate-400')}">${r.trend}</td>
                                 <td class="font-mono">${r.rsi}</td>
                                 <td class="font-mono text-amber-400">${r.vol_ratio}x</td>
-                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${r.score >= 60 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${r.score} Puan</span></td>
+                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${r.score >= 75 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${r.score} Puan</span></td>
                             </tr>
                         `).join('');
                     }
