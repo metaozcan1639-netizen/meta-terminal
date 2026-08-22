@@ -91,10 +91,10 @@ async def analyze_symbol(exchange, symbol):
             return None
 
         tfs = ['5m', '15m', '1h', '4h']
-        tasks = [exchange.fetch_ohlcv(symbol, timeframe=tf, limit=40) for tf in tfs]
+        tasks = [exchange.fetch_ohlcv(symbol, timeframe=tf, limit=50) for tf in tfs]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        if any(isinstance(r, Exception) or not r or len(r) < 25 for r in results):
+        if any(isinstance(r, Exception) or not r or len(r) < 30 for r in results):
             return None
 
         dfs = {tf: calculate_indicators(pd.DataFrame(results[i], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
@@ -153,18 +153,42 @@ async def analyze_symbol(exchange, symbol):
             entry = float(c_5m['close'])
             atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.005
 
+            # Dinamik Stop-Loss
             if direction == "LONG":
                 sl = float(df_5m['low'].iloc[-6:].min() - (1.5 * atr))
                 if (entry - sl) / entry < 0.008:
                     sl = entry * 0.992
-                tp1 = float(entry + (1.5 * (entry - sl)))
-                tp2 = float(entry + (3.0 * (entry - sl)))
-            else:
+                risk_dist = entry - sl
+
+                # Dinamik TP1: 15M Likidite & Son Swing Tepe
+                dyn_tp1 = float(df_15m['high'].iloc[-20:-2].max())
+                if (dyn_tp1 - entry) < (1.2 * risk_dist):
+                    dyn_tp1 = entry + (1.5 * risk_dist)
+
+                # Dinamik TP2: 1H / 4H Majör Likidite Havuzu (BSL)
+                dyn_tp2 = float(df_1h['high'].iloc[-30:-2].max())
+                if (dyn_tp2 - entry) < (2.0 * risk_dist):
+                    dyn_tp2 = entry + (3.0 * risk_dist)
+
+                tp1, tp2 = dyn_tp1, dyn_tp2
+
+            else: # SHORT
                 sl = float(df_5m['high'].iloc[-6:].max() + (1.5 * atr))
                 if (sl - entry) / entry < 0.008:
                     sl = entry * 1.008
-                tp1 = float(entry - (1.5 * (sl - entry)))
-                tp2 = float(entry - (3.0 * (sl - entry)))
+                risk_dist = sl - entry
+
+                # Dinamik TP1: 15M Likidite & Son Swing Dip
+                dyn_tp1 = float(df_15m['low'].iloc[-20:-2].min())
+                if (entry - dyn_tp1) < (1.2 * risk_dist):
+                    dyn_tp1 = entry - (1.5 * risk_dist)
+
+                # Dinamik TP2: 1H / 4H Majör Likidite Havuzu (SSL)
+                dyn_tp2 = float(df_1h['low'].iloc[-30:-2].min())
+                if (entry - dyn_tp2) < (2.0 * risk_dist):
+                    dyn_tp2 = entry - (3.0 * risk_dist)
+
+                tp1, tp2 = dyn_tp1, dyn_tp2
 
             pos_size, margin, max_loss = compute_position_metrics(entry, sl)
 
@@ -201,7 +225,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru Başlatıldı: Multi-Timeframe Trend & MSS Taraması Aktif...")
+    add_log("Quant Motoru: Piyasa Yapısına Dayalı Likidite TP Taraması Aktif...")
 
     while True:
         exchange = ccxt.bybit({
@@ -229,20 +253,17 @@ async def market_scanner_loop():
                     if sig:
                         exists = any(p['symbol'] == sig['symbol'] for p in system_state["active_positions"])
                         if not exists:
-                            # 1. Maksimum Açık Pozisyon Limiti Kontrolü
                             max_pos = system_state["max_open_positions"]
                             current_pos_count = len(system_state["active_positions"])
                             if max_pos > 0 and current_pos_count >= max_pos:
                                 continue
 
-                            # 2. Toplam Kasa Teminat (Marjin) Tavanı Kontrolü
                             current_total_margin = sum(p['margin'] for p in system_state["active_positions"])
                             allowed_margin_ceiling = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
 
                             if (current_total_margin + sig['margin']) > allowed_margin_ceiling:
                                 continue
 
-                            # Kurallar sağlandı, pozisyon aç
                             system_state["active_positions"].append(sig)
                             mode_label = "İzole" if sig['margin_mode'] == "ISOLATED" else "Cross"
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Maks Risk: ${sig['max_loss']}")
@@ -260,12 +281,12 @@ async def market_scanner_loop():
                     if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
                         close_reason = "❌ Stop-Loss Tetiklendi"
                     elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
-                        close_reason = "🎯 TP2 Majör Hedefe Ulaşıldı"
+                        close_reason = "🎯 TP2 Likidite Havuzu Hedefine Ulaşıldı"
                     elif (direction == "LONG" and curr_price >= pos['tp1']) or (direction == "SHORT" and curr_price <= pos['tp1']):
                         if not pos.get("tp1_hit"):
                             pos["tp1_hit"] = True
                             pos["sl"] = pos["entry"]
-                            add_log(f"⚡ TP1 Alındı ({pos['symbol']}): Stop Girişe Çekildi.")
+                            add_log(f"⚡ TP1 Likiditesi Alındı ({pos['symbol']}): Stop Başabaşa (Girişe) Çekildi.")
 
                     if close_reason:
                         pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
@@ -533,7 +554,7 @@ async def get_dashboard(request: Request):
                                 <th class="pb-2">TEMİNAT (M.)</th>
                                 <th class="pb-2">GİRİŞ</th>
                                 <th class="pb-2">STOP (SL)</th>
-                                <th class="pb-2">TP1 / TP2</th>
+                                <th class="pb-2">TP1 / TP2 (Dinamik)</th>
                             </tr>
                         </thead>
                         <tbody id="active-pos-table" class="divide-y divide-slate-800/50"></tbody>
@@ -631,7 +652,7 @@ async def get_dashboard(request: Request):
             function getTurkeyTimeBoundaries() {
                 const now = new Date();
                 const trOffset = 3 * 60; // UTC+3
-                const localOffset = now.getTimezoneOffset(); // dakika
+                const localOffset = now.getTimezoneOffset();
                 const trNow = new Date(now.getTime() + (trOffset + localOffset) * 60 * 1000);
 
                 const todayStart = new Date(trNow.getFullYear(), trNow.getMonth(), trNow.getDate(), 0, 0, 0);
@@ -774,7 +795,7 @@ async def get_dashboard(request: Request):
                                 lineWidth: 2,
                                 lineStyle: LightweightCharts.LineStyle.Dashed,
                                 axisLabelVisible: true,
-                                title: 'TP1',
+                                title: 'TP1 (Dinamik 15M)',
                             });
                             const tp2Line = candleSeries.createPriceLine({
                                 price: posData.tp2,
@@ -782,7 +803,7 @@ async def get_dashboard(request: Request):
                                 lineWidth: 2,
                                 lineStyle: LightweightCharts.LineStyle.Dashed,
                                 axisLabelVisible: true,
-                                title: 'TP2',
+                                title: 'TP2 (Majör Likidite)',
                             });
                             priceLines.push(entryLine, slLine, tp1Line, tp2Line);
 
@@ -824,7 +845,7 @@ async def get_dashboard(request: Request):
                         <div class="text-slate-400">Giriş Saati: <span class="text-white font-bold">${pos.open_time}</span></div>
                         <div class="text-slate-400">Kaldıraç & Mod: <span class="text-white font-bold">${pos.leverage}x ${modeLabel} ($${pos.margin})</span></div>
                         <div class="text-red-400">Stop-Loss: <span class="font-mono">${pos.sl.toFixed(p)}</span> (Maks Kayıp: $${pos.max_loss})</div>
-                        <div class="text-emerald-400">TP1 / TP2: <span class="font-mono">${pos.tp1.toFixed(p)} / ${pos.tp2.toFixed(p)}</span></div>
+                        <div class="text-emerald-400">TP1 / TP2 (Dinamik): <span class="font-mono">${pos.tp1.toFixed(p)} / ${pos.tp2.toFixed(p)}</span></div>
                     </div>
                 `;
             }
@@ -852,7 +873,6 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
-                    // Toplam Kullanılan Marjin Hesabı
                     const totalUsedMargin = data.active_positions.reduce((acc, p) => acc + p.margin, 0);
                     const usedPct = data.total_balance > 0 ? ((totalUsedMargin / data.total_balance) * 100).toFixed(1) : "0.0";
                     document.getElementById('stat-used-margin').innerText = `$${totalUsedMargin.toFixed(1)} (%${usedPct})`;
