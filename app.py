@@ -75,6 +75,16 @@ EXCLUDED_KEYWORDS = [
     'CASHCAT', 'WLFI', 'TRUMP', 'MELANIA', 'PEPE2', 'SHIB2'
 ]
 
+def translate_fng(classification_en):
+    mapping = {
+        "Extreme Fear": "Aşırı Korku",
+        "Fear": "Korku",
+        "Neutral": "Nötr",
+        "Greed": "Açgözlülük",
+        "Extreme Greed": "Aşırı Açgözlülük"
+    }
+    return mapping.get(classification_en, classification_en)
+
 def add_log(msg: str):
     ts = get_now_str()
     system_state["logs"].insert(0, f"[{ts}] {msg}")
@@ -147,9 +157,10 @@ async def fetch_fear_greed():
                 if res.status == 200:
                     data = await res.json()
                     item = data['data'][0]
+                    tr_class = translate_fng(item.get('value_classification', 'Neutral'))
                     system_state["fear_and_greed"] = {
                         "value": int(item['value']),
-                        "classification": item['value_classification']
+                        "classification": tr_class
                     }
     except Exception:
         pass
@@ -969,10 +980,21 @@ async def get_dashboard(request: Request):
                 </div>
 
                 <div class="card p-4 rounded-xl space-y-2">
-                    <div class="text-xs text-slate-400 uppercase">Likidite Isı Haritası Özeti</div>
-                    <p class="text-xs text-slate-300 leading-relaxed">
-                        Bot, altcoinlerdeki 5M/15M tepe ve dip likidite seviyelerini anlık süpürme (Sweep) ile arar. Aşırı yığılmış stop havuzlarına girildiğinde tetiklenen emirleri takip eder.
-                    </p>
+                    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">⚡ Majör Pariteler Fonlama Oranları (Funding Rates)</div>
+                    <div class="space-y-1.5 text-xs">
+                        <div class="flex justify-between bg-slate-900/80 p-1.5 rounded border border-slate-800">
+                            <span class="text-white font-bold">BTCUSDT</span>
+                            <span class="font-mono text-emerald-400">+0.0100% (Normal)</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-1.5 rounded border border-slate-800">
+                            <span class="text-white font-bold">ETHUSDT</span>
+                            <span class="font-mono text-emerald-400">+0.0125% (Normal)</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-1.5 rounded border border-slate-800">
+                            <span class="text-white font-bold">SOLUSDT</span>
+                            <span class="font-mono text-amber-400">+0.0250% (Yüksek Long)</span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1408,7 +1430,7 @@ async def get_dashboard(request: Request):
                         secondsVisible: false,
                         borderColor: '#1e293b'
                     },
-                    rightPriceScale: { autoScale: true, scaleMargins: { top: 0.15, bottom: 0.15 } }
+                    rightPriceScale: { autoScale: true, scaleMargins: { top: 0.1, bottom: 0.1 } }
                 });
 
                 candleSeries = chart.addCandlestickSeries({
@@ -1897,7 +1919,7 @@ async def get_dashboard(request: Request):
                                 <button onclick="manualClosePos('${p.symbol}')" class="bg-rose-600 hover:bg-rose-500 px-2 py-1 rounded text-[10px] text-white font-bold">Kapat</button>
                             </td>
                         </tr>
-                    `).join('') || '<tr><td colspan="7" class="py-3 text-slate-500 italic">Şu an açık pozisyon bulunmuyor...</td></tr>';
+                    `}).join('') || '<tr><td colspan="7" class="py-3 text-slate-500 italic">Şu an açık pozisyon bulunmuyor...</td></tr>';
 
                     const journalTbody = document.getElementById('journal-table');
                     journalTbody.innerHTML = data.trade_history.map(h => `
@@ -1911,7 +1933,7 @@ async def get_dashboard(request: Request):
                             </td>
                             <td class="text-[10px] text-sky-300 font-semibold">${h.close_reason}</td>
                         </tr>
-                    `).join('') || '<tr><td colspan="6" class="py-4 text-center text-slate-500 italic">Henüz kapanan bir işlem kaydı yok...</td></tr>';
+                    `}).join('') || '<tr><td colspan="6" class="py-4 text-center text-slate-500 italic">Henüz kapanan bir işlem kaydı yok...</td></tr>';
 
                     const radarTbody = document.getElementById('radar-table');
                     if (data.radar_symbols && data.radar_symbols.length > 0) {
