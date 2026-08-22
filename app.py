@@ -129,7 +129,6 @@ async def analyze_symbol(exchange, symbol):
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
 
-        # 4 Zaman Dilimi: 5M, 15M, 1H, 4H
         tasks = [
             exchange.fetch_ohlcv(symbol, timeframe='5m', limit=35),
             exchange.fetch_ohlcv(symbol, timeframe='15m', limit=35),
@@ -150,7 +149,6 @@ async def analyze_symbol(exchange, symbol):
         c_1h = df_1h.iloc[-1]
         c_4h = df_4h.iloc[-1]
 
-        # 4H, 1H ve 15M Trend Kontrolü
         bull_trend = (c_4h['close'] > c_4h['ema50']) and (c_1h['close'] > c_1h['ema50']) and (c_15m['ema20'] > c_15m['ema50'])
         bear_trend = (c_4h['close'] < c_4h['ema50']) and (c_1h['close'] < c_1h['ema50']) and (c_15m['ema20'] < c_15m['ema50'])
 
@@ -163,7 +161,6 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
-        # 5M Likidite & Karakter Kırılımı (MSS)
         if bull_trend:
             bull_mss = (df_5m['low'].iloc[-5:].min() <= swing_low) or (c_5m['close'] > recent_high and c_5m['close'] > c_5m['open'])
             if bull_mss and c_5m['close'] > df_5m['ema20'].iloc[-1]:
@@ -190,7 +187,6 @@ async def analyze_symbol(exchange, symbol):
             score += 10
             reasons.append(f"🎯 Momentum RSI ({c_5m['rsi']:.1f})")
 
-        # Radar Listesi
         radar_item = {
             "symbol": symbol,
             "price": float(c_5m['close']),
@@ -204,43 +200,35 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
-        # 60 Puan Barajı
         if not direction or score < 60:
             return None
 
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.005
 
-        # SAF SMC LİKİDİTE TP VE 1.2R RİSK/ÖDÜL ELEME MOTORU
         if direction == "LONG":
             sl = float(df_5m['low'].iloc[-6:].min() - (1.2 * atr))
             if (entry - sl) / entry < 0.006:
                 sl = entry * 0.994
             risk_dist = entry - sl
 
-            # 15M Direnç / Son Swing Tepe (TP1)
             dyn_tp1 = float(df_15m['high'].iloc[-25:-1].max())
-            # 1H / 4H Majör Likidite Havuzu (TP2 - BSL)
             dyn_tp2 = float(max(df_1h['high'].iloc[-25:-1].max(), df_4h['high'].iloc[-15:-1].max()))
 
-            # Asgari 1.2R Barajı Kontrolü (Potansiyel kâr riski karşılamıyorsa işlemi ele)
             if (dyn_tp1 - entry) < (1.2 * risk_dist) or dyn_tp2 <= dyn_tp1:
                 return None
 
             tp1, tp2 = dyn_tp1, dyn_tp2
 
-        else: # SHORT
+        else:
             sl = float(df_5m['high'].iloc[-6:].max() + (1.2 * atr))
             if (sl - entry) / entry < 0.006:
                 sl = entry * 1.006
             risk_dist = sl - entry
 
-            # 15M Destek / Son Swing Dip (TP1)
             dyn_tp1 = float(df_15m['low'].iloc[-25:-1].min())
-            # 1H / 4H Majör Likidite Havuzu (TP2 - SSL)
             dyn_tp2 = float(min(df_1h['low'].iloc[-25:-1].min(), df_4h['low'].iloc[-15:-1].min()))
 
-            # Asgari 1.2R Barajı Kontrolü
             if (entry - dyn_tp1) < (1.2 * risk_dist) or dyn_tp2 >= dyn_tp1:
                 return None
 
@@ -335,7 +323,6 @@ async def market_scanner_loop():
                 system_state["last_scan_time"] = get_now_str()
                 await asyncio.sleep(0.1)
 
-            # Pozisyon Güncellemeleri
             for pos in list(system_state["active_positions"]):
                 try:
                     ticker = await exchange.fetch_ticker(pos['symbol'])
@@ -965,6 +952,11 @@ async def get_dashboard(request: Request):
             let equityChart = null;
             let equitySeries = null;
 
+            // Risk/Reward Kutu Alan Serileri (TradingView Kutusu)
+            let slBoxSeries = null;
+            let tp1BoxSeries = null;
+            let tp2BoxSeries = null;
+
             let currentSymbol = localStorage.getItem("selected_sym") || "BTC/USDT:USDT";
             let currentTimeframe = "5";
             let currentPnlFilter = "today";
@@ -1029,6 +1021,34 @@ async def get_dashboard(request: Request):
                     timeScale: { timeVisible: true, secondsVisible: false },
                     rightPriceScale: { autoScale: true, scaleMargins: { top: 0.15, bottom: 0.15 } }
                 });
+
+                // 1. SL Risk Kutusu (Yarı Saydam Kırmızı)
+                slBoxSeries = chart.addAreaSeries({
+                    topColor: 'rgba(239, 68, 68, 0.25)',
+                    bottomColor: 'rgba(239, 68, 68, 0.25)',
+                    lineColor: 'rgba(239, 68, 68, 0.5)',
+                    lineWidth: 1,
+                    priceScaleId: 'right'
+                });
+
+                // 2. TP1 Kâr Kutusu (Açık Yeşil)
+                tp1BoxSeries = chart.addAreaSeries({
+                    topColor: 'rgba(74, 222, 128, 0.25)',
+                    bottomColor: 'rgba(74, 222, 128, 0.25)',
+                    lineColor: 'rgba(74, 222, 128, 0.5)',
+                    lineWidth: 1,
+                    priceScaleId: 'right'
+                });
+
+                // 3. TP2 Kâr Kutusu (Koyu Yeşil)
+                tp2BoxSeries = chart.addAreaSeries({
+                    topColor: 'rgba(4, 120, 87, 0.35)',
+                    bottomColor: 'rgba(4, 120, 87, 0.35)',
+                    lineColor: 'rgba(4, 120, 87, 0.7)',
+                    lineWidth: 1,
+                    priceScaleId: 'right'
+                });
+
                 candleSeries = chart.addCandlestickSeries({
                     upColor: '#10b981', downColor: '#ef4444',
                     borderUpColor: '#10b981', borderDownColor: '#ef4444',
@@ -1163,6 +1183,27 @@ async def get_dashboard(request: Request):
                             priceFormat: { type: 'price', precision: pConf.precision, minMove: pConf.minMove }
                         });
                         candleSeries.setData(candles);
+
+                        // TradingView Tarzı Yarı Saydam Kutu (Risk/Reward Box) Çizimi
+                        if (posData && posData.open_timestamp) {
+                            const startTs = posData.open_timestamp;
+                            const futurePad = 30 * 60; // 30 Dk ileriye uzat
+                            const endTs = Math.max(lastCandle.time, startTs) + futurePad;
+
+                            const relevantCandles = candles.filter(c => c.time >= startTs && c.time <= endTs);
+                            let timePoints = relevantCandles.map(c => c.time);
+                            if (!timePoints.includes(startTs)) timePoints.unshift(startTs);
+                            if (!timePoints.includes(endTs)) timePoints.push(endTs);
+                            timePoints = [...new Set(timePoints)].sort((a, b) => a - b);
+
+                            slBoxSeries.setData(timePoints.map(t => ({ time: t, value: posData.sl })));
+                            tp1BoxSeries.setData(timePoints.map(t => ({ time: t, value: posData.tp1 })));
+                            tp2BoxSeries.setData(timePoints.map(t => ({ time: t, value: posData.tp2 })));
+                        } else {
+                            slBoxSeries.setData([]);
+                            tp1BoxSeries.setData([]);
+                            tp2BoxSeries.setData([]);
+                        }
 
                         if (!isLiveTick) {
                             chart.priceScale('right').applyOptions({ autoScale: true });
