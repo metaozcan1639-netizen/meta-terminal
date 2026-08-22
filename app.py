@@ -1430,7 +1430,7 @@ async def get_dashboard(request: Request):
                         secondsVisible: false,
                         borderColor: '#1e293b'
                     },
-                    rightPriceScale: { autoScale: true, scaleMargins: { top: 0.1, bottom: 0.1 } }
+                    rightPriceScale: { autoScale: true, scaleMargins: { top: 0.15, bottom: 0.15 } }
                 });
 
                 candleSeries = chart.addCandlestickSeries({
@@ -1956,12 +1956,6 @@ async def get_dashboard(request: Request):
                         const saved = localStorage.getItem("selected_sym");
                         const target = data.active_positions.find(p => p.symbol === saved) || data.active_positions[0];
                         selectPosition(target);
-                    } else if (selectedPos) {
-                        const updated = data.active_positions.find(p => p.symbol === selectedPos.symbol);
-                        if (updated) {
-                            selectedPos = updated;
-                            renderRationale(updated);
-                        }
                     }
                 } catch (e) {}
             }
