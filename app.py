@@ -89,7 +89,6 @@ def check_daily_drawdown():
         system_state["daily_loss_locked"] = False
         add_log("🌅 TSİ 00:00: Günlük Kasa Dengesi ve Drawdown Limiti Sıfırlandı.")
 
-    # Max Drawdown Hesabı (Peak to Valley)
     if system_state["total_balance"] > system_state["peak_balance"]:
         system_state["peak_balance"] = system_state["total_balance"]
     
@@ -191,11 +190,8 @@ async def update_btc_metrics(exchange):
         vol_quote = ticker.get('quoteVolume', 0)
         vol_str = f"${vol_quote/1e9:.2f} Milyar" if vol_quote > 1e9 else f"${vol_quote/1e6:.1f} Milyon"
 
-        # Volatilite Derecesi (ATR / Fiyat)
         vol_ratio = (last_1h['atr'] / last_1h['close']) * 100 if pd.notnull(last_1h['atr']) else 0.5
         vol_level = "YÜKSEK" if vol_ratio > 1.2 else ("ORTA" if vol_ratio > 0.6 else "DÜŞÜK")
-
-        # Long/Short Oranı Simülasyonu (Bybit Ticker Tabanlı)
         ls_ratio = 52.4 if last_1h['close'] > last_1h['ema20'] else 47.6
 
         system_state["sentiment_data"] = {
@@ -216,14 +212,6 @@ async def analyze_symbol(exchange, symbol):
         base = symbol.split('/')[0].upper()
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
-
-        ticker = await exchange.fetch_ticker(symbol)
-        bid = ticker.get('bid')
-        ask = ticker.get('ask')
-        if bid and ask and bid > 0:
-            spread_pct = ((ask - bid) / bid) * 100
-            if spread_pct > 0.08:
-                return None
 
         tasks = [
             exchange.fetch_ohlcv(symbol, timeframe='5m', limit=35),
@@ -1330,7 +1318,6 @@ async def get_dashboard(request: Request):
 
                 if (entryY === null || slY === null) return;
 
-                // 1. SL Risk Kutusu (Açık Orta Kırmızı)
                 const slTop = Math.min(entryY, slY);
                 const slHeight = Math.abs(slY - entryY);
                 ctx.fillStyle = 'rgba(239, 68, 68, 0.28)';
@@ -1339,7 +1326,6 @@ async def get_dashboard(request: Request):
                 ctx.lineWidth = 1;
                 ctx.strokeRect(boxStartX, slTop, boxWidth, slHeight);
 
-                // 2. TP1 Kâr Kutusu (Açık Yeşil)
                 if (tp1Y !== null) {
                     const tp1Top = Math.min(entryY, tp1Y);
                     const tp1Height = Math.abs(tp1Y - entryY);
@@ -1349,7 +1335,6 @@ async def get_dashboard(request: Request):
                     ctx.strokeRect(boxStartX, tp1Top, boxWidth, tp1Height);
                 }
 
-                // 3. TP2 Kâr Kutusu (TP1'den Daha Koyu Zümrüt Yeşili)
                 if (tp2Y !== null && tp1Y !== null) {
                     const tp2Top = Math.min(tp1Y, tp2Y);
                     const tp2Height = Math.abs(tp2Y - tp1Y);
@@ -1577,7 +1562,6 @@ async def get_dashboard(request: Request):
                 document.getElementById('stat-winrate').innerText = `%${winRate}`;
                 document.getElementById('stat-trades').innerText = filtered.length;
 
-                // İstatistik Sayfası Gelişmiş Metrikleri
                 const pf = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : (totalWin > 0 ? "∞" : "0.00");
                 const avgWin = winOps > 0 ? (totalWin / winOps).toFixed(2) : "0.00";
                 const avgLoss = lossOps > 0 ? (totalLoss / lossOps).toFixed(2) : "0.00";
