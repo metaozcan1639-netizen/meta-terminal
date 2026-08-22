@@ -62,7 +62,9 @@ system_state = {
 
 EXCLUDED_KEYWORDS = [
     'NVDA', 'GOOGL', 'AAPL', 'TSLA', 'MSFT', 'AMZN', 'META', 'NFLX', 'AMD', 'COIN',
-    'BABA', 'PLTR', 'SOXS', 'SOXL', 'QQQ', 'SPY', 'WDC', 'DELL', 'IONQ', 'GLW', 'BIRB'
+    'BABA', 'PLTR', 'SOXS', 'SOXL', 'QQQ', 'SPY', 'WDC', 'DELL', 'IONQ', 'GLW', 'BIRB',
+    'TBT', 'TLT', 'PDD', 'NIO', 'BILI', 'LI', 'XPEV', 'MSTR', 'MARA', 'RIOT', 'CLSK',
+    'CASHCAT', 'WLFI', 'TRUMP', 'MELANIA', 'PEPE2', 'SHIB2'
 ]
 
 def add_log(msg: str):
@@ -129,23 +131,21 @@ async def update_btc_metrics(exchange):
         
         last_1h = df_1h.iloc[-1]
         
-        # BTC 15 Dakikalık Değişim (Şok Filtresi)
         c_now = df_15m['close'].iloc[-1]
         c_prev = df_15m['open'].iloc[-1]
         pct_15m = ((c_now - c_prev) / c_prev) * 100
         system_state["btc_15m_change"] = round(pct_15m, 2)
 
-        if pct_15m <= -1.5:
+        if pct_15m <= -1.2:
             system_state["btc_shock_lock"] = True
             system_state["btc_shock_reason"] = f"🔴 BTC Ani Düşüş Şoku (%{pct_15m:.2f}) | LONG Kilitlendi"
-        elif pct_15m >= 1.5:
+        elif pct_15m >= 1.2:
             system_state["btc_shock_lock"] = True
             system_state["btc_shock_reason"] = f"🟢 BTC Ani Yükseliş Şoku (+%{pct_15m:.2f}) | SHORT Kilitlendi"
         else:
             system_state["btc_shock_lock"] = False
             system_state["btc_shock_reason"] = ""
 
-        # Rejim Durumu
         if last_1h['close'] > last_1h['ema50']:
             system_state["btc_regime"] = "🟢 BOĞA (YÜKSELİŞ)"
             bias = "BOĞA / LONG AĞIRLIKLI"
@@ -171,6 +171,7 @@ async def analyze_symbol(exchange, symbol):
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
 
+        # 15M, 1H ve 4H Çoklu Zaman Dilimi Analizi
         tasks = [
             exchange.fetch_ohlcv(symbol, timeframe='5m', limit=35),
             exchange.fetch_ohlcv(symbol, timeframe='15m', limit=35),
@@ -188,58 +189,57 @@ async def analyze_symbol(exchange, symbol):
         c_15m = df_15m.iloc[-1]
         c_1h = df_1h.iloc[-1]
 
-        swing_low = df_5m['low'].iloc[-18:-3].min()
-        swing_high = df_5m['high'].iloc[-18:-3].max()
-        recent_breakout_high = df_5m['high'].iloc[-5:-1].max()
-        recent_breakout_low = df_5m['low'].iloc[-5:-1].min()
+        # 15M ve 5M Swing Seviyeleri
+        swing_low_15m = df_15m['low'].iloc[-20:-3].min()
+        swing_high_15m = df_15m['high'].iloc[-20:-3].max()
+        recent_breakout_high = df_5m['high'].iloc[-8:-1].max()
+        recent_breakout_low = df_5m['low'].iloc[-8:-1].min()
 
         score = 0
         direction = None
         reasons = []
 
-        # 2 Kademeli Likidite Süpürmesi & MSS Karakter Kırılımı
-        sweep_low = df_5m['low'].iloc[-4:].min() < swing_low
-        mss_bull = c_5m['close'] > recent_breakout_high and c_5m['close'] > c_5m['open']
+        # Gerçek Likidite Süpürmesi + 5M/15M Yapı Kırılımı (MSS)
+        sweep_low = df_15m['low'].iloc[-4:].min() < swing_low_15m
+        mss_bull = c_5m['close'] > recent_breakout_high and c_5m['close'] > df_5m['ema20'].iloc[-1] and c_5m['close'] > c_5m['open']
 
-        sweep_high = df_5m['high'].iloc[-4:].max() > swing_high
-        mss_bear = c_5m['close'] < recent_breakout_low and c_5m['close'] < c_5m['open']
+        sweep_high = df_15m['high'].iloc[-4:].max() > swing_high_15m
+        mss_bear = c_5m['close'] < recent_breakout_low and c_5m['close'] < df_5m['ema20'].iloc[-1] and c_5m['close'] < c_5m['open']
 
         if sweep_low and mss_bull:
-            # BTC Şok Kilidi Kontrolü (Düşüş anında LONG açma)
-            if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] <= -1.5):
+            if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] <= -1.2):
                 direction = "LONG"
                 score += 45
-                reasons.append("⚡ 5M Dip Likiditesi Alındı + MSS Kırılımı")
+                reasons.append("⚡ 15M Dip Likiditesi Alındı + 5M MSS Kırılımı")
         elif sweep_high and mss_bear:
-            # BTC Şok Kilidi Kontrolü (Yükseliş anında SHORT açma)
-            if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] >= 1.5):
+            if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] >= 1.2):
                 direction = "SHORT"
                 score += 45
-                reasons.append("⚡ 5M Tepe Likiditesi Alındı + MSS Kırılımı")
+                reasons.append("⚡ 15M Tepe Likiditesi Alındı + 5M MSS Kırılımı")
 
         if direction == "LONG":
             if c_1h['close'] > c_1h['ema50'] and c_15m['close'] > c_15m['ema50']:
                 score += 30
-                reasons.append("📈 1H & 15M Çift Trend Uyumu")
+                reasons.append("📈 1H & 15M Güçlü Boğa Trend Uyumu")
             elif c_1h['close'] > c_1h['ema50'] or c_15m['close'] > c_15m['ema50']:
                 score += 15
-                reasons.append("📈 15M Trend Desteği")
+                reasons.append("📈 Trend Desteği")
         elif direction == "SHORT":
             if c_1h['close'] < c_1h['ema50'] and c_15m['close'] < c_15m['ema50']:
                 score += 30
-                reasons.append("📉 1H & 15M Çift Trend Uyumu")
+                reasons.append("📉 1H & 15M Güçlü Ayı Trend Uyumu")
             elif c_1h['close'] < c_1h['ema50'] or c_15m['close'] < c_15m['ema50']:
                 score += 15
-                reasons.append("📉 15M Trend Desteği")
+                reasons.append("📉 Trend Desteği")
 
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
-        if vol_ratio >= 1.20:
+        if vol_ratio >= 1.30:
             score += 15
-            reasons.append(f"🔥 Onay Hacmi ({vol_ratio:.1f}x)")
+            reasons.append(f"🔥 Yüksek Hacim Onayı ({vol_ratio:.1f}x)")
 
-        if 40 <= c_5m['rsi'] <= 65:
+        if 42 <= c_5m['rsi'] <= 62:
             score += 10
-            reasons.append(f"🎯 Sağlıklı RSI ({c_5m['rsi']:.1f})")
+            reasons.append(f"🎯 Dengeli Momentum RSI ({c_5m['rsi']:.1f})")
 
         radar_item = {
             "symbol": symbol,
@@ -254,41 +254,42 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
-        # KALİTE BARAJI: En az 75 Puan
+        # 75 Puan Barajı
         if not direction or score < 75:
             return None
 
         entry = float(c_5m['close'])
-        atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.005
+        atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
+        # Akıllı Stop & Hedef Motoru (Minimum %1.2 Güvenlik Mesafesi)
         if direction == "LONG":
-            sl = float(df_5m['low'].iloc[-6:].min() - (1.2 * atr))
-            if (entry - sl) / entry < 0.006:
-                sl = entry * 0.994
+            sl = float(df_5m['low'].iloc[-8:].min() - (1.8 * atr))
+            if (entry - sl) / entry < 0.012:
+                sl = entry * 0.988
             risk_dist = entry - sl
 
             dyn_tp1 = float(df_15m['high'].iloc[-25:-1].max())
-            if (dyn_tp1 - entry) < (1.2 * risk_dist):
+            if (dyn_tp1 - entry) < (1.5 * risk_dist):
                 dyn_tp1 = entry + (1.5 * risk_dist)
 
             dyn_tp2 = float(df_1h['high'].iloc[-25:-1].max())
-            if dyn_tp2 <= dyn_tp1 or (dyn_tp2 - entry) < (2.0 * risk_dist):
+            if dyn_tp2 <= dyn_tp1 or (dyn_tp2 - entry) < (2.5 * risk_dist):
                 dyn_tp2 = entry + (3.0 * risk_dist)
 
             tp1, tp2 = dyn_tp1, dyn_tp2
 
         else:
-            sl = float(df_5m['high'].iloc[-6:].max() + (1.2 * atr))
-            if (sl - entry) / entry < 0.006:
-                sl = entry * 1.006
+            sl = float(df_5m['high'].iloc[-8:].max() + (1.8 * atr))
+            if (sl - entry) / entry < 0.012:
+                sl = entry * 1.012
             risk_dist = sl - entry
 
             dyn_tp1 = float(df_15m['low'].iloc[-25:-1].min())
-            if (entry - dyn_tp1) < (1.2 * risk_dist):
+            if (entry - dyn_tp1) < (1.5 * risk_dist):
                 dyn_tp1 = entry - (1.5 * risk_dist)
 
             dyn_tp2 = float(df_1h['low'].iloc[-25:-1].min())
-            if dyn_tp2 >= dyn_tp1 or (entry - dyn_tp2) < (2.0 * risk_dist):
+            if dyn_tp2 >= dyn_tp1 or (entry - dyn_tp2) < (2.5 * risk_dist):
                 dyn_tp2 = entry - (3.0 * risk_dist)
 
             tp1, tp2 = dyn_tp1, dyn_tp2
@@ -333,7 +334,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: Çift Yönlü BTC Şok Korumalı SMC Taraması Aktif...")
+    add_log("Quant Motoru: Yüksek Hacimli Likit Kripto Taraması Devrede...")
 
     while True:
         exchange = None
@@ -348,12 +349,19 @@ async def market_scanner_loop():
             await fetch_fear_greed()
 
             markets = await exchange.load_markets()
-            crypto_symbols = [
-                s for s, m in markets.items() 
-                if m.get('quote') == 'USDT' and m.get('linear') and m.get('active') 
-                and not m.get('delivery') and not '-' in s
-                and not any(exc in s.split('/')[0].upper() for exc in EXCLUDED_KEYWORDS)
-            ]
+            tickers = await exchange.fetch_tickers()
+
+            # Sadece 24 Saatlik Hacmi 10M+ Olan Gerçek Kripto Pariteleri
+            crypto_symbols = []
+            for s, m in markets.items():
+                if m.get('quote') == 'USDT' and m.get('linear') and m.get('active') and not m.get('delivery') and not '-' in s:
+                    base = s.split('/')[0].upper()
+                    if not any(exc in base for exc in EXCLUDED_KEYWORDS):
+                        t_data = tickers.get(s, {})
+                        quote_vol = t_data.get('quoteVolume', 0) or 0
+                        if quote_vol >= 10_000_000:
+                            crypto_symbols.append(s)
+
             system_state["scanned_count"] = len(crypto_symbols)
 
             batch_size = 10
@@ -1621,7 +1629,6 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
-                    // Canlı Duyarlılık Verileri
                     if (data.fear_and_greed) {
                         document.getElementById('fng-val').innerText = data.fear_and_greed.value;
                         document.getElementById('fng-text').innerText = data.fear_and_greed.classification;
@@ -1649,7 +1656,6 @@ async def get_dashboard(request: Request):
                         }
                     }
 
-                    // BTC Şok Rozeti
                     const shockBadge = document.getElementById('btc-shock-badge');
                     if (shockBadge) {
                         if (data.btc_shock_lock) {
