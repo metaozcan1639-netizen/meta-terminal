@@ -573,6 +573,8 @@ async def get_dashboard(request: Request):
             .tf-btn.active { background-color: #10b981; color: #000; font-weight: bold; }
             .pnl-tf-btn.active { background-color: #38bdf8; color: #000; font-weight: bold; }
             .nav-tab.active { background-color: #10b981; color: #000; font-weight: bold; }
+            #tv-wrapper { position: relative; width: 100%; height: 100%; }
+            #box-canvas { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 2; }
         </style>
     </head>
     <body class="p-3 space-y-3 pb-16">
@@ -725,7 +727,10 @@ async def get_dashboard(request: Request):
                         </div>
                         <span id="chart-levels" class="text-[11px] text-slate-400 space-x-2"></span>
                     </div>
-                    <div id="tv-container" class="w-full flex-1 rounded overflow-hidden"></div>
+                    <div id="tv-wrapper" class="w-full flex-1 rounded overflow-hidden">
+                        <div id="tv-container" class="w-full h-full"></div>
+                        <canvas id="box-canvas"></canvas>
+                    </div>
                 </div>
 
                 <div class="card p-3 rounded-xl flex flex-col justify-between h-[520px]">
@@ -952,11 +957,6 @@ async def get_dashboard(request: Request):
             let equityChart = null;
             let equitySeries = null;
 
-            // Risk/Reward Kutu Alan Serileri (TradingView Kutusu)
-            let slBoxSeries = null;
-            let tp1BoxSeries = null;
-            let tp2BoxSeries = null;
-
             let currentSymbol = localStorage.getItem("selected_sym") || "BTC/USDT:USDT";
             let currentTimeframe = "5";
             let currentPnlFilter = "today";
@@ -965,6 +965,70 @@ async def get_dashboard(request: Request):
             let lastPositions = [];
             let tradeHistoryCache = [];
             let lastKnownPosCount = 0;
+
+            function resizeCanvas() {
+                const wrapper = document.getElementById('tv-wrapper');
+                const canvas = document.getElementById('box-canvas');
+                if (wrapper && canvas) {
+                    canvas.width = wrapper.clientWidth;
+                    canvas.height = wrapper.clientHeight;
+                }
+            }
+
+            function drawPositionBoxes() {
+                const canvas = document.getElementById('box-canvas');
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+                if (!selectedPos || !candleSeries || !chart) return;
+
+                const timeScale = chart.timeScale();
+                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp);
+                
+                // Sağ kenara kadar kutuyu genişlet (sağ eksene kadar)
+                const rightX = canvas.width - 55;
+                const boxStartX = startX !== null ? Math.max(0, startX) : 40;
+                const boxWidth = rightX - boxStartX;
+
+                if (boxWidth <= 0) return;
+
+                const entryY = candleSeries.priceToCoordinate(selectedPos.entry);
+                const slY = candleSeries.priceToCoordinate(selectedPos.sl);
+                const tp1Y = candleSeries.priceToCoordinate(selectedPos.tp1);
+                const tp2Y = candleSeries.priceToCoordinate(selectedPos.tp2);
+
+                if (entryY === null || slY === null) return;
+
+                // 1. SL Risk Kutusu (Açık Orta Kırmızı)
+                const slTop = Math.min(entryY, slY);
+                const slHeight = Math.abs(slY - entryY);
+                ctx.fillStyle = 'rgba(239, 68, 68, 0.28)';
+                ctx.fillRect(boxStartX, slTop, boxWidth, slHeight);
+                ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(boxStartX, slTop, boxWidth, slHeight);
+
+                // 2. TP1 Kâr Kutusu (Açık Yeşil)
+                if (tp1Y !== null) {
+                    const tp1Top = Math.min(entryY, tp1Y);
+                    const tp1Height = Math.abs(tp1Y - entryY);
+                    ctx.fillStyle = 'rgba(74, 222, 128, 0.25)';
+                    ctx.fillRect(boxStartX, tp1Top, boxWidth, tp1Height);
+                    ctx.strokeStyle = 'rgba(74, 222, 128, 0.6)';
+                    ctx.strokeRect(boxStartX, tp1Top, boxWidth, tp1Height);
+                }
+
+                // 3. TP2 Kâr Kutusu (TP1'den Daha Koyu Zümrüt Yeşili)
+                if (tp2Y !== null && tp1Y !== null) {
+                    const tp2Top = Math.min(tp1Y, tp2Y);
+                    const tp2Height = Math.abs(tp2Y - tp1Y);
+                    ctx.fillStyle = 'rgba(4, 120, 87, 0.40)';
+                    ctx.fillRect(boxStartX, tp2Top, boxWidth, tp2Height);
+                    ctx.strokeStyle = 'rgba(4, 120, 87, 0.8)';
+                    ctx.strokeRect(boxStartX, tp2Top, boxWidth, tp2Height);
+                }
+            }
 
             function switchTab(tabId) {
                 const pages = ['terminal', 'sentiment', 'news', 'manual', 'excel', 'stats', 'radar', 'journal', 'api'];
@@ -983,6 +1047,8 @@ async def get_dashboard(request: Request):
                     setTimeout(() => {
                         if (chart) chart.timeScale().fitContent();
                         if (equityChart) equityChart.timeScale().fitContent();
+                        resizeCanvas();
+                        drawPositionBoxes();
                     }, 50);
                 }
             }
@@ -1022,37 +1088,19 @@ async def get_dashboard(request: Request):
                     rightPriceScale: { autoScale: true, scaleMargins: { top: 0.15, bottom: 0.15 } }
                 });
 
-                // 1. SL Risk Kutusu (Yarı Saydam Kırmızı)
-                slBoxSeries = chart.addAreaSeries({
-                    topColor: 'rgba(239, 68, 68, 0.25)',
-                    bottomColor: 'rgba(239, 68, 68, 0.25)',
-                    lineColor: 'rgba(239, 68, 68, 0.5)',
-                    lineWidth: 1,
-                    priceScaleId: 'right'
-                });
-
-                // 2. TP1 Kâr Kutusu (Açık Yeşil)
-                tp1BoxSeries = chart.addAreaSeries({
-                    topColor: 'rgba(74, 222, 128, 0.25)',
-                    bottomColor: 'rgba(74, 222, 128, 0.25)',
-                    lineColor: 'rgba(74, 222, 128, 0.5)',
-                    lineWidth: 1,
-                    priceScaleId: 'right'
-                });
-
-                // 3. TP2 Kâr Kutusu (Koyu Yeşil)
-                tp2BoxSeries = chart.addAreaSeries({
-                    topColor: 'rgba(4, 120, 87, 0.35)',
-                    bottomColor: 'rgba(4, 120, 87, 0.35)',
-                    lineColor: 'rgba(4, 120, 87, 0.7)',
-                    lineWidth: 1,
-                    priceScaleId: 'right'
-                });
-
                 candleSeries = chart.addCandlestickSeries({
                     upColor: '#10b981', downColor: '#ef4444',
                     borderUpColor: '#10b981', borderDownColor: '#ef4444',
                     wickUpColor: '#10b981', wickDownColor: '#ef4444'
+                });
+
+                chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+                    drawPositionBoxes();
+                });
+
+                window.addEventListener('resize', () => {
+                    resizeCanvas();
+                    drawPositionBoxes();
                 });
 
                 chart.subscribeCrosshairMove(param => {
@@ -1079,6 +1127,8 @@ async def get_dashboard(request: Request):
                     lineColor: '#38bdf8',
                     lineWidth: 2
                 });
+
+                resizeCanvas();
             }
 
             function parseBybitSymbol(symbol) {
@@ -1184,27 +1234,6 @@ async def get_dashboard(request: Request):
                         });
                         candleSeries.setData(candles);
 
-                        // TradingView Tarzı Yarı Saydam Kutu (Risk/Reward Box) Çizimi
-                        if (posData && posData.open_timestamp) {
-                            const startTs = posData.open_timestamp;
-                            const futurePad = 30 * 60; // 30 Dk ileriye uzat
-                            const endTs = Math.max(lastCandle.time, startTs) + futurePad;
-
-                            const relevantCandles = candles.filter(c => c.time >= startTs && c.time <= endTs);
-                            let timePoints = relevantCandles.map(c => c.time);
-                            if (!timePoints.includes(startTs)) timePoints.unshift(startTs);
-                            if (!timePoints.includes(endTs)) timePoints.push(endTs);
-                            timePoints = [...new Set(timePoints)].sort((a, b) => a - b);
-
-                            slBoxSeries.setData(timePoints.map(t => ({ time: t, value: posData.sl })));
-                            tp1BoxSeries.setData(timePoints.map(t => ({ time: t, value: posData.tp1 })));
-                            tp2BoxSeries.setData(timePoints.map(t => ({ time: t, value: posData.tp2 })));
-                        } else {
-                            slBoxSeries.setData([]);
-                            tp1BoxSeries.setData([]);
-                            tp2BoxSeries.setData([]);
-                        }
-
                         if (!isLiveTick) {
                             chart.priceScale('right').applyOptions({ autoScale: true });
                             chart.timeScale().fitContent();
@@ -1216,6 +1245,9 @@ async def get_dashboard(request: Request):
                             document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
                             document.getElementById('bar-close').innerText = `$${lastCandle.close.toFixed(dec)}`;
                         }
+
+                        resizeCanvas();
+                        drawPositionBoxes();
                     }
 
                     if (!isLiveTick) {
@@ -1226,8 +1258,6 @@ async def get_dashboard(request: Request):
 
                         if (posData) {
                             const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
-                            
-                            // SL: Kırmızı, TP1: Açık Yeşil, TP2: Koyu Yeşil
                             const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP (SL)' });
                             const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1 (15M)' });
                             const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2 (Likidite)' });
