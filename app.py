@@ -296,13 +296,14 @@ async def market_scanner_loop():
                     direction = pos['direction']
                     close_reason = None
 
-                    # Canlı Anlık Kâr/Zarar (Unrealized PnL) ve İlerleme Hesabı
+                    # Canlı Anlık Kâr/Zarar (Unrealized PnL)
                     pnl_raw = ((curr_price - pos['entry']) / pos['entry']) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'])
                     pos['unrealized_pnl'] = round(pos['active_size'] * pnl_raw, 2)
 
-                    total_range = abs(pos['tp2'] - pos['sl'])
-                    current_dist = (curr_price - pos['sl']) if direction == "LONG" else (pos['sl'] - curr_price)
-                    pos['progress_pct'] = max(0, min(100, round((current_dist / (total_range + 1e-9)) * 100, 1)))
+                    # Girişten TP2'ye olan gerçek hedef ilerlemesi
+                    target_dist = abs(pos['tp2'] - pos['entry'])
+                    favorable_move = (curr_price - pos['entry']) if direction == "LONG" else (pos['entry'] - curr_price)
+                    pos['progress_pct'] = max(0.0, min(100.0, round((favorable_move / (target_dist + 1e-9)) * 100, 1)))
 
                     if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
                         close_reason = "❌ Stop-Loss Tetiklendi"
@@ -312,7 +313,6 @@ async def market_scanner_loop():
                         if not pos.get("tp1_hit"):
                             pos["tp1_hit"] = True
                             pos["sl"] = pos["entry"]
-                            # %50 Kısmi Kâr Alma Gerçekleşti
                             partial_pnl = round((pos['pos_size'] * 0.5) * pnl_raw, 2)
                             pos['active_size'] = pos['pos_size'] * 0.5
                             system_state["total_balance"] += partial_pnl
@@ -365,7 +365,7 @@ async def lifespan(app: FastAPI):
     task1.cancel()
     task2.cancel()
 
-app = FastAPI(title="Meta Quant Terminal", lifespan=lifespan)
+app = FastAPI(title="Meta Quant Terminal Pro", lifespan=lifespan)
 
 @app.get("/api/health")
 async def health_check():
@@ -549,7 +549,7 @@ async def get_dashboard(request: Request):
                             <button onclick="changeTimeframe('D')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-D">1D</button>
                         </div>
 
-                        <!-- GRAFİK ÜSTÜ OHLC VE YÜKSEK / DÜŞÜK GÖSTERGESİ -->
+                        <!-- GRAFİK ÜSTÜ OHLC GÖSTERGESİ -->
                         <div id="ohlc-box" class="flex items-center space-x-2 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 text-[10px] font-mono text-slate-300">
                             <span>O: <b id="bar-open" class="text-white">-</b></span>
                             <span>H: <b id="bar-high" class="text-amber-400">-</b></span>
@@ -689,7 +689,6 @@ async def get_dashboard(request: Request):
                     wickUpColor: '#10b981', wickDownColor: '#ef4444'
                 });
 
-                // İmleç Mum Üzerindeyken OHLC Bilgisi
                 chart.subscribeCrosshairMove(param => {
                     if (!param.time || !param.seriesData.get(candleSeries)) {
                         return;
@@ -702,7 +701,6 @@ async def get_dashboard(request: Request):
                     document.getElementById('bar-close').innerText = `$${data.close.toFixed(dec)}`;
                 });
 
-                // Kasa Büyüme Eğrisi Grafiği
                 const eqContainer = document.getElementById('equity-container');
                 eqContainer.innerHTML = '';
                 equityChart = LightweightCharts.createChart(eqContainer, {
@@ -966,7 +964,6 @@ async def get_dashboard(request: Request):
                     const res = await fetch('/api/state');
                     const data = await res.json();
 
-                    // Sinyal Sesi Uyarısı
                     if (data.active_positions.length > lastKnownPosCount) {
                         playAlertSound();
                     }
@@ -975,7 +972,6 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
-                    // BTC Rejim Durumu
                     const btcBadge = document.getElementById('btc-regime-badge');
                     btcBadge.innerText = data.btc_regime || "BTC: AKTİF";
                     if (data.btc_regime.includes("BOĞA")) {
@@ -986,7 +982,6 @@ async def get_dashboard(request: Request):
                         btcBadge.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700";
                     }
 
-                    // Toplam Kullanılan Marjin Hesabı
                     const totalUsedMargin = data.active_positions.reduce((acc, p) => acc + p.margin, 0);
                     const usedPct = data.total_balance > 0 ? ((totalUsedMargin / data.total_balance) * 100).toFixed(1) : "0.0";
                     document.getElementById('stat-used-margin').innerText = `$${totalUsedMargin.toFixed(1)} (%${usedPct})`;
@@ -994,7 +989,6 @@ async def get_dashboard(request: Request):
                     tradeHistoryCache = data.trade_history;
                     recalculatePnlMetrics();
 
-                    // Kasa Büyüme Eğrisini Güncelle
                     if (data.equity_curve && data.equity_curve.length > 0) {
                         equitySeries.setData(data.equity_curve);
                     }
@@ -1007,7 +1001,10 @@ async def get_dashboard(request: Request):
                     activeTbody.innerHTML = data.active_positions.map((p, idx) => {
                         const dec = p.entry < 1 ? 6 : 4;
                         const modeStr = p.margin_mode === "ISOLATED" ? "İzole" : "Cross";
-                        const pnlColor = p.unrealized_pnl >= 0 ? "text-emerald-400" : "text-red-400";
+                        const pnlVal = (p.unrealized_pnl !== undefined) ? p.unrealized_pnl : 0.0;
+                        const pnlColor = pnlVal >= 0 ? "text-emerald-400" : "text-red-400";
+                        const progVal = (p.progress_pct !== undefined) ? p.progress_pct : 0.0;
+
                         return `
                         <tr class="hover:bg-slate-800/80 cursor-pointer ${selectedPos && selectedPos.symbol === p.symbol ? 'bg-slate-800/60' : ''}" onclick="selectPosition(lastPositions[${idx}])">
                             <td class="py-2 font-bold text-white">${p.symbol}</td>
@@ -1016,12 +1013,12 @@ async def get_dashboard(request: Request):
                             <td class="text-white font-mono">$${p.margin}</td>
                             <td class="font-mono text-slate-300">${p.entry}</td>
                             <td class="font-mono text-white font-bold">${p.current_price || p.entry}</td>
-                            <td class="font-mono font-bold ${pnlColor}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl}</td>
+                            <td class="font-mono font-bold ${pnlColor}">${pnlVal >= 0 ? '+' : ''}$${pnlVal.toFixed(2)}</td>
                             <td class="w-24">
                                 <div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
-                                    <div class="bg-emerald-500 h-1.5 rounded-full" style="width: ${p.progress_pct}%"></div>
+                                    <div class="bg-emerald-500 h-1.5 rounded-full" style="width: ${progVal}%"></div>
                                 </div>
-                                <span class="text-[9px] text-slate-400 font-mono">%${p.progress_pct}</span>
+                                <span class="text-[9px] text-slate-400 font-mono">%${progVal.toFixed(1)}</span>
                             </td>
                         </tr>
                     `}).join('');
@@ -1031,7 +1028,7 @@ async def get_dashboard(request: Request):
                         <tr class="hover:bg-slate-800/30">
                             <td class="py-2 font-bold">${h.symbol}<br><span class="text-[9px] text-slate-500">${h.close_time}</span></td>
                             <td class="font-bold ${h.realized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">
-                                ${h.realized_pnl >= 0 ? '+' : ''}$${h.realized_pnl}<br><span class="text-[9px]">%${h.pnl_pct}</span>
+                                ${h.realized_pnl >= 0 ? '+' : ''}$${h.realized_pnl.toFixed(2)}<br><span class="text-[9px]">%${h.pnl_pct}</span>
                             </td>
                             <td class="text-slate-300 text-[10px]">${h.open_reasons.join('<br>')}</td>
                             <td class="text-sky-300 text-[10px] font-semibold">${h.close_reason}</td>
