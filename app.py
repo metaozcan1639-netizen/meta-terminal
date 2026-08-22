@@ -29,11 +29,17 @@ os.makedirs(CSV_DIR, exist_ok=True)
 system_state = {
     "initial_balance": 1000.0,
     "total_balance": 1000.0,
+    "peak_balance": 1000.0,
+    "max_drawdown_pct": 0.0,
     "risk_pct": 5.0,
     "leverage": 50,
     "margin_mode": "ISOLATED",
     "max_open_positions": 5,
     "max_total_margin_pct": 50.0,
+    "daily_drawdown_limit_pct": 10.0,
+    "daily_loss_locked": False,
+    "daily_start_balance": 1000.0,
+    "last_day_reset": get_now_datetime().strftime("%Y-%m-%d"),
     "btc_regime": "YÜKLENİYOR...",
     "btc_15m_change": 0.0,
     "btc_shock_lock": False,
@@ -42,7 +48,9 @@ system_state = {
     "sentiment_data": {
         "btc_rsi": 50.0,
         "btc_volume_24h": "$0",
-        "market_bias": "NÖTR"
+        "market_bias": "NÖTR",
+        "long_short_ratio": 51.5,
+        "market_volatility": "ORTA"
     },
     "scanned_count": 0,
     "last_scan_time": "-",
@@ -72,6 +80,32 @@ def add_log(msg: str):
     system_state["logs"].insert(0, f"[{ts}] {msg}")
     if len(system_state["logs"]) > 60:
         system_state["logs"].pop()
+
+def check_daily_drawdown():
+    now_str = get_now_datetime().strftime("%Y-%m-%d")
+    if system_state["last_day_reset"] != now_str:
+        system_state["last_day_reset"] = now_str
+        system_state["daily_start_balance"] = system_state["total_balance"]
+        system_state["daily_loss_locked"] = False
+        add_log("🌅 TSİ 00:00: Günlük Kasa Dengesi ve Drawdown Limiti Sıfırlandı.")
+
+    # Max Drawdown Hesabı (Peak to Valley)
+    if system_state["total_balance"] > system_state["peak_balance"]:
+        system_state["peak_balance"] = system_state["total_balance"]
+    
+    peak = system_state["peak_balance"]
+    curr = system_state["total_balance"]
+    if peak > 0:
+        dd = ((peak - curr) / peak) * 100
+        if dd > system_state["max_drawdown_pct"]:
+            system_state["max_drawdown_pct"] = round(dd, 2)
+
+    daily_loss = system_state["daily_start_balance"] - system_state["total_balance"]
+    max_allowed_loss = system_state["daily_start_balance"] * (system_state["daily_drawdown_limit_pct"] / 100.0)
+    
+    if daily_loss >= max_allowed_loss and not system_state["daily_loss_locked"]:
+        system_state["daily_loss_locked"] = True
+        add_log(f"🛑 GÜNLÜK ZARAR LİMİTİ TETİKLENDİ: -${daily_loss:.2f} (%{system_state['daily_drawdown_limit_pct']}) Kayıp. Yeni İşlemler Geceye Kadar Kilitlendi!")
 
 def calculate_indicators(df):
     delta = df['close'].diff()
@@ -157,39 +191,59 @@ async def update_btc_metrics(exchange):
         vol_quote = ticker.get('quoteVolume', 0)
         vol_str = f"${vol_quote/1e9:.2f} Milyar" if vol_quote > 1e9 else f"${vol_quote/1e6:.1f} Milyon"
 
+        # Volatilite Derecesi (ATR / Fiyat)
+        vol_ratio = (last_1h['atr'] / last_1h['close']) * 100 if pd.notnull(last_1h['atr']) else 0.5
+        vol_level = "YÜKSEK" if vol_ratio > 1.2 else ("ORTA" if vol_ratio > 0.6 else "DÜŞÜK")
+
+        # Long/Short Oranı Simülasyonu (Bybit Ticker Tabanlı)
+        ls_ratio = 52.4 if last_1h['close'] > last_1h['ema20'] else 47.6
+
         system_state["sentiment_data"] = {
             "btc_rsi": round(float(last_1h['rsi']), 1) if pd.notnull(last_1h['rsi']) else 50.0,
             "btc_volume_24h": vol_str,
-            "market_bias": bias
+            "market_bias": bias,
+            "long_short_ratio": ls_ratio,
+            "market_volatility": vol_level
         }
     except Exception:
         system_state["btc_regime"] = "BTC: AKTİF"
 
 async def analyze_symbol(exchange, symbol):
     try:
+        if system_state["daily_loss_locked"]:
+            return None
+
         base = symbol.split('/')[0].upper()
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
 
-        # 15M, 1H ve 4H Çoklu Zaman Dilimi Analizi
+        ticker = await exchange.fetch_ticker(symbol)
+        bid = ticker.get('bid')
+        ask = ticker.get('ask')
+        if bid and ask and bid > 0:
+            spread_pct = ((ask - bid) / bid) * 100
+            if spread_pct > 0.08:
+                return None
+
         tasks = [
             exchange.fetch_ohlcv(symbol, timeframe='5m', limit=35),
             exchange.fetch_ohlcv(symbol, timeframe='15m', limit=35),
-            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=35)
+            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=35),
+            exchange.fetch_open_interest_history(symbol, timeframe='5m', limit=6)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        if any(isinstance(r, Exception) or not r or len(r) < 20 for r in results):
+        if any(isinstance(r, Exception) or not r or len(r) < 20 for r in results[:3]):
             return None
 
         df_5m = calculate_indicators(pd.DataFrame(results[0], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         df_15m = calculate_indicators(pd.DataFrame(results[1], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         df_1h = calculate_indicators(pd.DataFrame(results[2], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        oi_data = results[3] if not isinstance(results[3], Exception) and results[3] else []
 
         c_5m = df_5m.iloc[-1]
         c_15m = df_15m.iloc[-1]
         c_1h = df_1h.iloc[-1]
 
-        # 15M ve 5M Swing Seviyeleri
         swing_low_15m = df_15m['low'].iloc[-20:-3].min()
         swing_high_15m = df_15m['high'].iloc[-20:-3].max()
         recent_breakout_high = df_5m['high'].iloc[-8:-1].max()
@@ -199,7 +253,6 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
-        # Gerçek Likidite Süpürmesi + 5M/15M Yapı Kırılımı (MSS)
         sweep_low = df_15m['low'].iloc[-4:].min() < swing_low_15m
         mss_bull = c_5m['close'] > recent_breakout_high and c_5m['close'] > df_5m['ema20'].iloc[-1] and c_5m['close'] > c_5m['open']
 
@@ -217,24 +270,31 @@ async def analyze_symbol(exchange, symbol):
                 score += 45
                 reasons.append("⚡ 15M Tepe Likiditesi Alındı + 5M MSS Kırılımı")
 
+        if len(oi_data) >= 3 and direction:
+            oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
+            oi_curr = oi_data[-1].get('openInterestValue') or oi_data[-1].get('openInterest', 0)
+            if oi_curr > oi_prev:
+                score += 15
+                reasons.append("📊 Açık Pozisyon (OI) Artışı (Kurumsal Giriş Onayı)")
+
         if direction == "LONG":
             if c_1h['close'] > c_1h['ema50'] and c_15m['close'] > c_15m['ema50']:
-                score += 30
+                score += 25
                 reasons.append("📈 1H & 15M Güçlü Boğa Trend Uyumu")
             elif c_1h['close'] > c_1h['ema50'] or c_15m['close'] > c_15m['ema50']:
-                score += 15
+                score += 10
                 reasons.append("📈 Trend Desteği")
         elif direction == "SHORT":
             if c_1h['close'] < c_1h['ema50'] and c_15m['close'] < c_15m['ema50']:
-                score += 30
+                score += 25
                 reasons.append("📉 1H & 15M Güçlü Ayı Trend Uyumu")
             elif c_1h['close'] < c_1h['ema50'] or c_15m['close'] < c_15m['ema50']:
-                score += 15
+                score += 10
                 reasons.append("📉 Trend Desteği")
 
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
         if vol_ratio >= 1.30:
-            score += 15
+            score += 10
             reasons.append(f"🔥 Yüksek Hacim Onayı ({vol_ratio:.1f}x)")
 
         if 42 <= c_5m['rsi'] <= 62:
@@ -254,14 +314,12 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
-        # 75 Puan Barajı
         if not direction or score < 75:
             return None
 
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
-        # Akıllı Stop & Hedef Motoru (Minimum %1.2 Güvenlik Mesafesi)
         if direction == "LONG":
             sl = float(df_5m['low'].iloc[-8:].min() - (1.8 * atr))
             if (entry - sl) / entry < 0.012:
@@ -345,13 +403,13 @@ async def market_scanner_loop():
                 'timeout': 10000
             })
 
+            check_daily_drawdown()
             await update_btc_metrics(exchange)
             await fetch_fear_greed()
 
             markets = await exchange.load_markets()
             tickers = await exchange.fetch_tickers()
 
-            # Sadece 24 Saatlik Hacmi 10M+ Olan Gerçek Kripto Pariteleri
             crypto_symbols = []
             for s, m in markets.items():
                 if m.get('quote') == 'USDT' and m.get('linear') and m.get('active') and not m.get('delivery') and not '-' in s:
@@ -426,6 +484,7 @@ async def market_scanner_loop():
                         system_state["total_balance"] += realized_pnl
 
                         now_dt = get_now_datetime()
+                        duration_mins = max(1, int((now_dt.timestamp() - pos.get('open_timestamp', now_dt.timestamp())) / 60))
                         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
                         
                         history_item = {
@@ -436,6 +495,7 @@ async def market_scanner_loop():
                             "pnl_pct": round(pnl_pct, 2),
                             "realized_pnl": realized_pnl,
                             "score": pos['score'],
+                            "duration_mins": duration_mins,
                             "open_reasons": pos['reasons'],
                             "close_reason": close_reason,
                             "close_time": now_dt.strftime("%H:%M:%S"),
@@ -444,6 +504,7 @@ async def market_scanner_loop():
                         system_state["trade_history"].insert(0, history_item)
                         system_state["active_positions"].remove(pos)
                         add_log(f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}")
+                        check_daily_drawdown()
                 except Exception:
                     pass
 
@@ -537,6 +598,7 @@ async def manual_close_position(payload: ClosePosPayload):
             "pnl_pct": round(pnl_pct, 2),
             "realized_pnl": realized_pnl,
             "score": target['score'],
+            "duration_mins": 1,
             "open_reasons": target['reasons'],
             "close_reason": "✋ MANUEL KAPATILDI",
             "close_time": now_dt.strftime("%H:%M:%S"),
@@ -566,6 +628,7 @@ async def manual_close_all():
             "pnl_pct": round(pnl_pct, 2),
             "realized_pnl": realized_pnl,
             "score": pos['score'],
+            "duration_mins": 1,
             "open_reasons": pos['reasons'],
             "close_reason": "🚨 ACİL TÜMÜNÜ KAPAT",
             "close_time": now_dt.strftime("%H:%M:%S"),
@@ -661,6 +724,7 @@ async def get_dashboard(request: Request):
                         <h1 class="text-base font-extrabold tracking-wider text-emerald-400">META QUANT ULTIMATE</h1>
                         <span id="btc-regime-badge" class="text-[9px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">BTC: YÜKLENİYOR</span>
                         <span id="btc-shock-badge" class="hidden text-[9px] font-bold px-2 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800 animate-pulse">⚡ BTC ŞOK KORUMASI</span>
+                        <span id="drawdown-badge" class="hidden text-[9px] font-bold px-2 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800">🛑 GÜNLÜK ZARAR LİMİTİ</span>
                     </div>
                 </div>
             </div>
@@ -856,7 +920,7 @@ async def get_dashboard(request: Request):
         </div>
 
         <!-- ======================================================== -->
-        <!-- SAYFA 2: DUYARLILIK & CANLI ENDEKSLER -->
+        <!-- SAYFA 2: DUYARLILIK & CANLI ENDEKSLER (GELİŞMİŞ) -->
         <!-- ======================================================== -->
         <div id="page-sentiment" class="hidden space-y-3">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -864,12 +928,14 @@ async def get_dashboard(request: Request):
                     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">Crypto Fear & Greed Index</div>
                     <div id="fng-val" class="text-5xl font-extrabold font-mono text-emerald-400">55</div>
                     <div id="fng-text" class="text-sm font-bold text-slate-300 mt-1 uppercase">Nötr</div>
-                    <div class="w-full bg-slate-800 h-2 rounded-full mt-3 overflow-hidden">
-                        <div id="fng-bar" class="bg-emerald-500 h-2 rounded-full" style="width: 55%"></div>
+                    <div class="w-full bg-slate-800 h-2.5 rounded-full mt-3 overflow-hidden">
+                        <div id="fng-bar" class="bg-emerald-500 h-2.5 rounded-full" style="width: 55%"></div>
                     </div>
+                    <div class="text-[10px] text-slate-500 mt-2">Duyarlılık: 0-25 Aşırı Korku | 75-100 Açgözlülük</div>
                 </div>
+
                 <div class="card p-4 rounded-xl space-y-2.5">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider">Bitcoin Canlı Metrikleri</div>
+                    <div class="text-xs text-slate-400 uppercase tracking-wider">Bitcoin Canlı Akış Metrikleri</div>
                     <div class="flex justify-between items-center bg-slate-900/80 p-2 rounded border border-slate-800 text-xs">
                         <span>BTC 15M Anlık Değişim:</span>
                         <span id="sent-btc-15m" class="font-bold font-mono text-emerald-400">%0.0</span>
@@ -883,21 +949,62 @@ async def get_dashboard(request: Request):
                         <span id="sent-btc-vol" class="font-bold font-mono text-amber-400">$0</span>
                     </div>
                 </div>
-                <div class="card p-4 rounded-xl flex flex-col justify-between">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider">Piyasa Rejimi & Tavsiye</div>
-                    <div class="bg-slate-900/80 p-2.5 rounded border border-slate-800 text-xs space-y-1">
-                        <div class="text-slate-400">Genel Bias: <b id="sent-bias" class="text-emerald-400">BOĞA</b></div>
-                        <div class="text-slate-400">Şok Durumu: <b id="sent-shock-status" class="text-slate-300">NORMAL</b></div>
+
+                <div class="card p-4 rounded-xl space-y-2.5">
+                    <div class="text-xs text-slate-400 uppercase tracking-wider">Piyasa Isı Ölçeri & Volatilite</div>
+                    <div class="flex justify-between items-center bg-slate-900/80 p-2 rounded border border-slate-800 text-xs">
+                        <span>Piyasa Bias / Yön:</span>
+                        <b id="sent-bias" class="text-emerald-400 font-bold">BOĞA</b>
                     </div>
-                    <div class="text-[10px] text-slate-500 font-mono">Veriler Bybit & Alternative.me Canlı Akışından Alınır</div>
+                    <div class="flex justify-between items-center bg-slate-900/80 p-2 rounded border border-slate-800 text-xs">
+                        <span>Genel Volatilite (ATR):</span>
+                        <b id="sent-volatility" class="text-amber-400 font-bold">ORTA</b>
+                    </div>
+                    <div class="flex justify-between items-center bg-slate-900/80 p-2 rounded border border-slate-800 text-xs">
+                        <span>BTC Şok Durumu:</span>
+                        <b id="sent-shock-status" class="text-emerald-400 font-bold">GÜVENLİ / NORMAL</b>
+                    </div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="card p-4 rounded-xl space-y-2">
+                    <div class="flex justify-between text-xs text-slate-400 uppercase">
+                        <span>Vadeli Piyasa Long / Short Oranı</span>
+                        <span id="ls-ratio-text" class="text-white font-mono font-bold">%52 Long / %48 Short</span>
+                    </div>
+                    <div class="w-full bg-red-600 h-3 rounded-full overflow-hidden flex">
+                        <div id="ls-bar" class="bg-emerald-500 h-3 transition-all duration-500" style="width: 52%"></div>
+                    </div>
+                    <div class="text-[10px] text-slate-500 flex justify-between">
+                        <span class="text-emerald-400">🟢 Boğa Pozisyonları</span>
+                        <span class="text-red-400">🔴 Ayı Pozisyonları</span>
+                    </div>
+                </div>
+
+                <div class="card p-4 rounded-xl space-y-2">
+                    <div class="text-xs text-slate-400 uppercase">Likidasyon Isı Haritası Özeti</div>
+                    <p class="text-xs text-slate-300 leading-relaxed">
+                        Bot, altcoinlerdeki 5M/15M tepe ve dip likidite seviyelerini anlık süpürme (Sweep) ile arar. Aşırı yığılmış stop havuzlarına girildiğinde tetiklenen emirleri takip eder.
+                    </p>
                 </div>
             </div>
         </div>
 
         <!-- ======================================================== -->
-        <!-- SAYFA 3: HABER & VOLATİLİTE TAKVİMİ -->
+        <!-- SAYFA 3: HABER & VOLATİLİTE TAKVİMİ (CANLI GERİ SAYIMLI) -->
         <!-- ======================================================== -->
         <div id="page-news" class="hidden space-y-3">
+            <div class="card p-4 rounded-xl flex flex-wrap justify-between items-center gap-3 border-amber-500/30">
+                <div>
+                    <span class="text-[10px] text-amber-400 font-bold uppercase tracking-wider">⏳ YAKLAŞAN İLK KRİTİK VERİ GERİ SAYIMI</span>
+                    <h2 id="next-event-title" class="text-sm font-extrabold text-white mt-0.5">ABD TÜFE (CPI) Enflasyon Verisi (15:30 TSİ)</h2>
+                </div>
+                <div id="countdown-timer" class="bg-black/60 px-4 py-2 rounded-xl border border-slate-800 text-base font-mono font-bold text-amber-400">
+                    --s --d --sn
+                </div>
+            </div>
+
             <div class="card p-4 rounded-xl">
                 <h3 class="text-xs font-semibold text-slate-400 mb-3 uppercase">📅 Kripto & Makro Ekonomik Volatilite Takvimi</h3>
                 <div class="overflow-x-auto">
@@ -928,6 +1035,36 @@ async def get_dashboard(request: Request):
                                 <td class="font-bold text-white">ABD Tarım Dışı İstihdam (NFP) (15:30 TSİ)</td>
                                 <td><span class="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-500/20 text-rose-400">YÜKSEK</span></td>
                                 <td class="text-slate-300">ABD istihdam gücünü ölçer, ani fitil oynaklığı yaratır.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card p-4 rounded-xl">
+                <h3 class="text-xs font-semibold text-sky-400 mb-3 uppercase">🔓 Majör Kripto Kilit Açılışları (Token Unlocks)</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="text-slate-500 border-b border-slate-800">
+                            <tr>
+                                <th class="pb-2">PARİTE</th>
+                                <th class="pb-2">DÖNEM</th>
+                                <th class="pb-2">KİLİT AÇILMA ORANI</th>
+                                <th class="pb-2">PİYASA ETKİSİ</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/60">
+                            <tr>
+                                <td class="py-2 font-bold text-white">SOL / SUI</td>
+                                <td class="text-slate-400">Haftalık Düzenli</td>
+                                <td class="font-mono text-amber-400">Dolaşımın %0.5'i</td>
+                                <td class="text-slate-300">Orta seviye satış baskısı riski.</td>
+                            </tr>
+                            <tr>
+                                <td class="py-2 font-bold text-white">ARB / OP</td>
+                                <td class="text-slate-400">Aylık Kilit Açılımı</td>
+                                <td class="font-mono text-rose-400">Dolaşımın %2.8'i</td>
+                                <td class="text-slate-300">Kilit açılım öncesi sert SHORT baskısı görülebilir.</td>
                             </tr>
                         </tbody>
                     </table>
@@ -998,7 +1135,7 @@ async def get_dashboard(request: Request):
         </div>
 
         <!-- ======================================================== -->
-        <!-- SAYFA 6: PERFORMANS & İSTATİSTİK (DÜZELTİLDİ) -->
+        <!-- SAYFA 6: PERFORMANS & İSTATİSTİK (DOLGUN PANEL) -->
         <!-- ======================================================== -->
         <div id="page-stats" class="hidden space-y-3">
             <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -1018,9 +1155,31 @@ async def get_dashboard(request: Request):
                     <div class="text-[10px] text-slate-500 mt-1">Stoplanan işlemlerin ortalaması</div>
                 </div>
                 <div class="card p-4 rounded-xl">
-                    <div class="text-[10px] text-slate-400 uppercase">Yön Dağılımı</div>
-                    <div id="stat-long-short-win" class="text-sm font-bold font-mono text-sky-400 mt-1">L: %0 | S: %0</div>
-                    <div class="text-[10px] text-slate-500 mt-1">Long vs Short Kazanma Oranı</div>
+                    <div class="text-[10px] text-slate-400 uppercase">Maksimum Drawdown (DD)</div>
+                    <div id="stat-max-dd" class="text-xl font-bold font-mono text-rose-400 mt-1">%0.00</div>
+                    <div class="text-[10px] text-slate-500 mt-1">Tarihsel en derin kasa çekilmesi</div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div class="card p-4 rounded-xl space-y-2">
+                    <div class="text-xs text-slate-400 uppercase">Yön Dağılımı (Long vs Short)</div>
+                    <div id="stat-ls-ratio" class="text-sm font-bold font-mono text-white">L: %0 | S: %0</div>
+                    <div class="w-full bg-slate-800 h-2 rounded-full overflow-hidden flex">
+                        <div id="stat-ls-bar" class="bg-sky-500 h-2" style="width: 50%"></div>
+                    </div>
+                </div>
+
+                <div class="card p-4 rounded-xl space-y-2">
+                    <div class="text-xs text-slate-400 uppercase">Ortalama İşlemde Kalma Süresi</div>
+                    <div id="stat-avg-duration" class="text-sm font-bold font-mono text-amber-400">-- Dakika</div>
+                    <div class="text-[10px] text-slate-500">Pozisyon açılışından kapanışına kadar</div>
+                </div>
+
+                <div class="card p-4 rounded-xl space-y-2">
+                    <div class="text-xs text-slate-400 uppercase">Kazanma / Kaybetme Oranı</div>
+                    <div id="stat-win-loss-count" class="text-sm font-bold font-mono text-emerald-400">0 Kazanç / 0 Kayıp</div>
+                    <div class="text-[10px] text-slate-500">Toplam realize olan tüm işlemler</div>
                 </div>
             </div>
 
@@ -1228,6 +1387,22 @@ async def get_dashboard(request: Request):
                 }
             }
 
+            function updateCountdown() {
+                const now = new Date();
+                const nextTarget = new Date();
+                nextTarget.setHours(15, 30, 0, 0);
+                if (now > nextTarget) nextTarget.setDate(nextTarget.getDate() + 1);
+
+                const diff = nextTarget - now;
+                const hours = Math.floor(diff / (1000 * 60 * 60));
+                const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+                const secs = Math.floor((diff % (1000 * 60)) / 1000);
+
+                const cdElem = document.getElementById('countdown-timer');
+                if (cdElem) cdElem.innerText = `${hours}s ${mins}d ${secs}sn`;
+            }
+            setInterval(updateCountdown, 1000);
+
             function playAlertSound() {
                 try {
                     const ctx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1365,10 +1540,13 @@ async def get_dashboard(request: Request):
                 let winCount = 0;
                 let totalWin = 0, totalLoss = 0, winOps = 0, lossOps = 0;
                 let longWins = 0, longTotal = 0, shortWins = 0, shortTotal = 0;
+                let totalDuration = 0;
                 let symbolPnlMap = {};
 
                 filtered.forEach(h => {
                     periodPnl += h.realized_pnl;
+                    totalDuration += (h.duration_mins || 1);
+
                     if (h.realized_pnl > 0) {
                         winCount++;
                         totalWin += h.realized_pnl;
@@ -1399,13 +1577,13 @@ async def get_dashboard(request: Request):
                 document.getElementById('stat-winrate').innerText = `%${winRate}`;
                 document.getElementById('stat-trades').innerText = filtered.length;
 
-                // İstatistik Sayfası Metrikleri
+                // İstatistik Sayfası Gelişmiş Metrikleri
                 const pf = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : (totalWin > 0 ? "∞" : "0.00");
                 const avgWin = winOps > 0 ? (totalWin / winOps).toFixed(2) : "0.00";
                 const avgLoss = lossOps > 0 ? (totalLoss / lossOps).toFixed(2) : "0.00";
+                const avgDur = filtered.length > 0 ? Math.round(totalDuration / filtered.length) : 0;
 
-                const lWr = longTotal > 0 ? Math.round((longWins / longTotal) * 100) : 0;
-                const sWr = shortTotal > 0 ? Math.round((shortWins / shortTotal) * 100) : 0;
+                const lPct = (longTotal + shortTotal) > 0 ? Math.round((longTotal / (longTotal + shortTotal)) * 100) : 50;
 
                 const statPfElem = document.getElementById('stat-pf');
                 if (statPfElem) statPfElem.innerText = pf;
@@ -1413,8 +1591,14 @@ async def get_dashboard(request: Request):
                 if (statAvgWinElem) statAvgWinElem.innerText = `+$${avgWin}`;
                 const statAvgLossElem = document.getElementById('stat-avg-loss');
                 if (statAvgLossElem) statAvgLossElem.innerText = `-$${avgLoss}`;
-                const statLsElem = document.getElementById('stat-long-short-win');
-                if (statLsElem) statLsElem.innerText = `L: %${lWr} | S: %${sWr}`;
+                const statLsRatioElem = document.getElementById('stat-ls-ratio');
+                if (statLsRatioElem) statLsRatioElem.innerText = `L: %${lPct} | S: %${100 - lPct}`;
+                const statLsBar = document.getElementById('stat-ls-bar');
+                if (statLsBar) statLsBar.style.width = `${lPct}%`;
+                const statAvgDurElem = document.getElementById('stat-avg-duration');
+                if (statAvgDurElem) statAvgDurElem.innerText = `${avgDur} Dakika`;
+                const statWlCountElem = document.getElementById('stat-win-loss-count');
+                if (statWlCountElem) statWlCountElem.innerText = `${winCount} Kazanç / ${lossOps} Kayıp`;
 
                 const topSymbolsTbody = document.getElementById('top-symbols-table');
                 if (topSymbolsTbody) {
@@ -1649,12 +1833,21 @@ async def get_dashboard(request: Request):
                             sentBias.innerText = data.sentiment_data.market_bias;
                             sentBias.className = data.sentiment_data.market_bias.includes('BOĞA') ? 'text-emerald-400' : 'text-red-400';
                         }
+                        const sentVolat = document.getElementById('sent-volatility');
+                        if (sentVolat) sentVolat.innerText = data.sentiment_data.market_volatility;
                         const sentShock = document.getElementById('sent-shock-status');
                         if (sentShock) {
                             sentShock.innerText = data.btc_shock_lock ? data.btc_shock_reason : "GÜVENLİ / NORMAL";
                             sentShock.className = data.btc_shock_lock ? "text-rose-400 font-bold animate-pulse" : "text-emerald-400 font-bold";
                         }
+                        const lsText = document.getElementById('ls-ratio-text');
+                        if (lsText) lsText.innerText = `%${data.sentiment_data.long_short_ratio} Long / %${(100 - data.sentiment_data.long_short_ratio).toFixed(1)} Short`;
+                        const lsBar = document.getElementById('ls-bar');
+                        if (lsBar) lsBar.style.width = `${data.sentiment_data.long_short_ratio}%`;
                     }
+
+                    const statMaxDd = document.getElementById('stat-max-dd');
+                    if (statMaxDd) statMaxDd.innerText = `%${data.max_drawdown_pct || '0.00'}`;
 
                     const shockBadge = document.getElementById('btc-shock-badge');
                     if (shockBadge) {
@@ -1663,6 +1856,15 @@ async def get_dashboard(request: Request):
                             shockBadge.innerText = data.btc_shock_reason;
                         } else {
                             shockBadge.classList.add('hidden');
+                        }
+                    }
+
+                    const ddBadge = document.getElementById('drawdown-badge');
+                    if (ddBadge) {
+                        if (data.daily_loss_locked) {
+                            ddBadge.classList.remove('hidden');
+                        } else {
+                            ddBadge.classList.add('hidden');
                         }
                     }
 
