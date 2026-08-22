@@ -35,6 +35,14 @@ system_state = {
     "last_scan_time": "-",
     "active_positions": [],
     "trade_history": [],
+    "radar_symbols": [],
+    "api_settings": {
+        "exchange": "BINANCE",
+        "mode": "TESTNET",
+        "api_key": "",
+        "api_secret": "",
+        "auto_trade": False
+    },
     "equity_curve": [{"time": int(get_now_datetime().timestamp()), "value": 1000.0}],
     "logs": []
 }
@@ -150,13 +158,29 @@ async def analyze_symbol(exchange, symbol):
                 score += 40
                 reasons.append("⚡ Tepe Likiditesi + 5M Yapı Kırılımı (MSS/CHoCH)")
 
+        # Radar Listesine Kaydet
+        vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
+        radar_item = {
+            "symbol": symbol,
+            "price": float(c_5m['close']),
+            "rsi": round(float(c_5m['rsi']), 1) if pd.notnull(c_5m['rsi']) else 50.0,
+            "vol_ratio": round(vol_ratio, 2),
+            "trend": "LONG" if bull_trend else ("SHORT" if bear_trend else "YATAY"),
+            "score": score + (30 if (bull_trend or bear_trend) else 0)
+        }
+        
+        # Radar önbelleğini güncelle
+        system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
+        system_state["radar_symbols"].append(radar_item)
+        if len(system_state["radar_symbols"]) > 100:
+            system_state["radar_symbols"].pop(0)
+
         if not direction:
             return None
 
         score += 30
         reasons.append("📈 4H / 1H / 15M Üçlü Trend Uyumu")
 
-        vol_ratio = c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)
         if vol_ratio >= 1.25:
             score += 20
             reasons.append(f"🔥 Onay Hacmi Patlaması ({vol_ratio:.1f}x MA20)")
@@ -379,6 +403,13 @@ class SettingsPayload(BaseModel):
     max_open_positions: int
     max_total_margin_pct: float
 
+class ApiPayload(BaseModel):
+    exchange: str
+    mode: str
+    api_key: str
+    api_secret: str
+    auto_trade: bool
+
 @app.post("/api/update_settings")
 async def update_settings(payload: SettingsPayload):
     system_state["total_balance"] = payload.total_balance
@@ -391,6 +422,13 @@ async def update_settings(payload: SettingsPayload):
     pos_limit_str = "Sınırsız" if payload.max_open_positions == 0 else str(payload.max_open_positions)
     mode_label = "İzole" if payload.margin_mode == "ISOLATED" else "Cross"
     add_log(f"⚙️ AYARLAR: Kasa: ${payload.total_balance} | Mod: {mode_label} | Risk: %{payload.risk_pct} | Max Poz: {pos_limit_str} | Max Kasa Marjin: %{payload.max_total_margin_pct}")
+    return {"status": "success"}
+
+@app.post("/api/update_api")
+async def update_api(payload: ApiPayload):
+    system_state["api_settings"] = payload.dict()
+    status_str = "AKTİF" if payload.auto_trade else "DEVRE DIŞI"
+    add_log(f"🔑 BORSA API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | Otomatik Emir: {status_str}")
     return {"status": "success"}
 
 @app.get("/api/state")
@@ -417,217 +455,391 @@ async def get_dashboard(request: Request):
             ::-webkit-scrollbar-thumb:hover { background: #475569; }
             .tf-btn.active { background-color: #10b981; color: #000; font-weight: bold; }
             .pnl-tf-btn.active { background-color: #38bdf8; color: #000; font-weight: bold; }
+            .nav-tab.active { background-color: #10b981; color: #000; font-weight: bold; border-color: #10b981; }
         </style>
     </head>
     <body class="p-4 space-y-4 pb-16">
-        <!-- ÜST PANEL -->
-        <div class="card p-4 rounded-xl flex flex-wrap justify-between items-center gap-4 border-emerald-500/30">
+        
+        <!-- ÜST NAVİGASYON VE SEKME MENÜSÜ -->
+        <div class="card p-3 rounded-xl flex flex-wrap justify-between items-center gap-4 border-emerald-500/30">
             <div class="flex items-center space-x-3">
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
                 <div>
                     <div class="flex items-center space-x-2">
-                        <h1 class="text-lg font-bold tracking-wider text-emerald-400">META QUANT PRO TERMINAL</h1>
-                        <span id="btc-regime-badge" class="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">BTC: YÜKLENİYOR</span>
-                    </div>
-                    <div class="text-[11px] text-slate-400">Smart Money, Dinamik Likidite & Kısmi Kâr Motoru</div>
-                </div>
-            </div>
-
-            <!-- KÂR / ZARAR METRİKLERİ VE TSİ ZAMAN SEÇİCİ -->
-            <div class="flex flex-col space-y-1.5 bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
-                <div class="flex items-center justify-between gap-2 border-b border-slate-800/80 pb-1 text-[10px]">
-                    <span class="text-slate-400 font-semibold uppercase">Dönemsel PnL (TSİ 00:00):</span>
-                    <div class="flex space-x-1">
-                        <button onclick="changePnlFilter('today')" id="pnl-tf-today" class="pnl-tf-btn active px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Bugün</button>
-                        <button onclick="changePnlFilter('yesterday')" id="pnl-tf-yesterday" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Dün</button>
-                        <button onclick="changePnlFilter('week')" id="pnl-tf-week" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Bu Hafta</button>
-                        <button onclick="changePnlFilter('month')" id="pnl-tf-month" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Bu Ay</button>
-                        <button onclick="changePnlFilter('all')" id="pnl-tf-all" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Tümü</button>
-                    </div>
-                </div>
-
-                <div class="flex items-center space-x-4 pt-0.5">
-                    <div>
-                        <div class="text-[9px] text-slate-400 uppercase tracking-wider" id="pnl-label">Bugün Net PnL</div>
-                        <div id="stat-pnl" class="text-base font-extrabold font-mono text-emerald-400">$0.00</div>
-                    </div>
-                    <div class="border-r border-slate-800 h-7"></div>
-                    <div>
-                        <div class="text-[9px] text-slate-400 uppercase tracking-wider">Win Rate</div>
-                        <div id="stat-winrate" class="text-base font-extrabold font-mono text-sky-400">%0.0</div>
-                    </div>
-                    <div class="border-r border-slate-800 h-7"></div>
-                    <div>
-                        <div class="text-[9px] text-slate-400 uppercase tracking-wider">İşlem Adedi</div>
-                        <div id="stat-trades" class="text-base font-extrabold font-mono text-white">0</div>
-                    </div>
-                    <div class="border-r border-slate-800 h-7"></div>
-                    <div>
-                        <div class="text-[9px] text-slate-400 uppercase tracking-wider">Kullanılan Marjin</div>
-                        <div id="stat-used-margin" class="text-sm font-bold font-mono text-amber-400">$0 (%0)</div>
+                        <h1 class="text-base font-extrabold tracking-wider text-emerald-400">META QUANT PRO TERMINAL</h1>
+                        <span id="btc-regime-badge" class="text-[9px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">BTC: YÜKLENİYOR</span>
                     </div>
                 </div>
             </div>
 
-            <!-- GELİŞMİŞ RİSK & MARJİN AYARLARI -->
-            <div class="flex flex-wrap items-center gap-2.5 bg-slate-900/90 p-2.5 rounded-xl border border-slate-800 text-xs">
-                <div>
-                    <label class="text-slate-400 block text-[9px]">KASA ($)</label>
-                    <input id="input-balance" type="number" value="1000" class="bg-slate-800 text-white font-bold w-16 px-1.5 py-1 rounded outline-none border border-slate-700">
-                </div>
-                <div>
-                    <label class="text-slate-400 block text-[9px]">MARJİN MODU</label>
-                    <select id="input-margin-mode" class="bg-slate-800 text-cyan-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
-                        <option value="ISOLATED" selected>İzole</option>
-                        <option value="CROSS">Cross</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="text-slate-400 block text-[9px]">RİSK (%)</label>
-                    <select id="input-risk" class="bg-slate-800 text-white font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
-                        <option value="0.5">%0.5</option>
-                        <option value="1.0">%1.0</option>
-                        <option value="2.0">%2.0</option>
-                        <option value="3.0">%3.0</option>
-                        <option value="5.0" selected>%5.0</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="text-slate-400 block text-[9px]">KALDIRAÇ</label>
-                    <select id="input-leverage" class="bg-slate-800 text-emerald-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
-                        <option value="5">5x</option>
-                        <option value="10">10x</option>
-                        <option value="20">20x</option>
-                        <option value="50" selected>50x</option>
-                        <option value="75">75x</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="text-slate-400 block text-[9px]">MAX POZİSYON</label>
-                    <select id="input-max-pos" class="bg-slate-800 text-amber-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
-                        <option value="1">1 Adet</option>
-                        <option value="2">2 Adet</option>
-                        <option value="3">3 Adet</option>
-                        <option value="5" selected>5 Adet</option>
-                        <option value="10">10 Adet</option>
-                        <option value="0">Sınırsız</option>
-                    </select>
-                </div>
-                <div>
-                    <label class="text-slate-400 block text-[9px]">MAX KASA PAYI</label>
-                    <select id="input-max-margin-pct" class="bg-slate-800 text-fuchsia-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
-                        <option value="20">%20</option>
-                        <option value="35">%35</option>
-                        <option value="50" selected>%50</option>
-                        <option value="75">%75</option>
-                        <option value="100">%100</option>
-                    </select>
-                </div>
-                <button onclick="saveSettings()" class="mt-3 bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-2.5 py-1 rounded transition text-xs">KAYDET</button>
+            <!-- SAYFA SEKMELERİ -->
+            <div class="flex items-center space-x-1.5 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs">
+                <button onclick="switchTab('terminal')" id="tab-terminal" class="nav-tab active px-3 py-1.5 rounded-lg text-slate-400 hover:text-white transition">📊 Canlı Terminal</button>
+                <button onclick="switchTab('stats')" id="tab-stats" class="nav-tab px-3 py-1.5 rounded-lg text-slate-400 hover:text-white transition">📈 Performans & İstatistik</button>
+                <button onclick="switchTab('radar')" id="tab-radar" class="nav-tab px-3 py-1.5 rounded-lg text-slate-400 hover:text-white transition">🔥 Tarama Radarı & Isı Haritası</button>
+                <button onclick="switchTab('journal')" id="tab-journal" class="nav-tab px-3 py-1.5 rounded-lg text-slate-400 hover:text-white transition">📖 İşlem Günlüğü</button>
+                <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-3 py-1.5 rounded-lg text-slate-400 hover:text-white transition">⚙️ Borsa API & Masası</button>
             </div>
 
-            <div class="flex space-x-4 text-xs text-slate-400">
+            <div class="flex space-x-3 text-xs text-slate-400">
                 <div>Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
-                <div>Son Tarama: <span id="last-scan" class="text-white font-bold">-</span></div>
+                <div>Tarama: <span id="last-scan" class="text-white font-bold">-</span></div>
             </div>
         </div>
 
-        <!-- GRAFİK VE GEREKÇE ALANI -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div class="card p-3 rounded-xl lg:col-span-2 h-[540px] flex flex-col">
-                <div class="flex flex-wrap justify-between items-center mb-2 px-1 gap-2">
-                    <div class="flex items-center space-x-3">
-                        <span id="chart-title" class="text-xs font-bold text-emerald-400 tracking-wider">GRAFİK</span>
-                        
-                        <!-- ZAMAN DİLİMİ BUTONLARI -->
-                        <div class="flex space-x-1 bg-slate-900 p-0.5 rounded border border-slate-800 text-[10px]">
-                            <button onclick="changeTimeframe('1')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-1">1M</button>
-                            <button onclick="changeTimeframe('5')" class="tf-btn active px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-5">5M</button>
-                            <button onclick="changeTimeframe('15')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-15">15M</button>
-                            <button onclick="changeTimeframe('60')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-60">1H</button>
-                            <button onclick="changeTimeframe('240')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-240">4H</button>
-                            <button onclick="changeTimeframe('D')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-D">1D</button>
-                        </div>
-
-                        <!-- GRAFİK ÜSTÜ OHLC GÖSTERGESİ -->
-                        <div id="ohlc-box" class="flex items-center space-x-2 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 text-[10px] font-mono text-slate-300">
-                            <span>O: <b id="bar-open" class="text-white">-</b></span>
-                            <span>H: <b id="bar-high" class="text-amber-400">-</b></span>
-                            <span>L: <b id="bar-low" class="text-indigo-400">-</b></span>
-                            <span>C: <b id="bar-close" class="text-white">-</b></span>
+        <!-- ======================================================== -->
+        <!-- SAYFA 1: CANLI TERMİNAL (ANA SAYFA) -->
+        <!-- ======================================================== -->
+        <div id="page-terminal" class="space-y-4">
+            <!-- KÂR / ZARAR METRİKLERİ VE HIZLI AYARLAR -->
+            <div class="card p-4 rounded-xl flex flex-wrap justify-between items-center gap-4">
+                <div class="flex flex-col space-y-1.5 bg-slate-900/90 p-2.5 rounded-xl border border-slate-800">
+                    <div class="flex items-center justify-between gap-2 border-b border-slate-800/80 pb-1 text-[10px]">
+                        <span class="text-slate-400 font-semibold uppercase">Dönemsel PnL (TSİ 00:00):</span>
+                        <div class="flex space-x-1">
+                            <button onclick="changePnlFilter('today')" id="pnl-tf-today" class="pnl-tf-btn active px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Bugün</button>
+                            <button onclick="changePnlFilter('yesterday')" id="pnl-tf-yesterday" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Dün</button>
+                            <button onclick="changePnlFilter('week')" id="pnl-tf-week" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Bu Hafta</button>
+                            <button onclick="changePnlFilter('month')" id="pnl-tf-month" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Bu Ay</button>
+                            <button onclick="changePnlFilter('all')" id="pnl-tf-all" class="pnl-tf-btn px-1.5 py-0.5 rounded text-slate-400 hover:text-white">Tümü</button>
                         </div>
                     </div>
-                    <span id="chart-levels" class="text-[11px] text-slate-400 space-x-2"></span>
+
+                    <div class="flex items-center space-x-4 pt-0.5">
+                        <div>
+                            <div class="text-[9px] text-slate-400 uppercase tracking-wider" id="pnl-label">Bugün Net PnL</div>
+                            <div id="stat-pnl" class="text-base font-extrabold font-mono text-emerald-400">$0.00</div>
+                        </div>
+                        <div class="border-r border-slate-800 h-7"></div>
+                        <div>
+                            <div class="text-[9px] text-slate-400 uppercase tracking-wider">Win Rate</div>
+                            <div id="stat-winrate" class="text-base font-extrabold font-mono text-sky-400">%0.0</div>
+                        </div>
+                        <div class="border-r border-slate-800 h-7"></div>
+                        <div>
+                            <div class="text-[9px] text-slate-400 uppercase tracking-wider">İşlem Adedi</div>
+                            <div id="stat-trades" class="text-base font-extrabold font-mono text-white">0</div>
+                        </div>
+                        <div class="border-r border-slate-800 h-7"></div>
+                        <div>
+                            <div class="text-[9px] text-slate-400 uppercase tracking-wider">Kullanılan Marjin</div>
+                            <div id="stat-used-margin" class="text-sm font-bold font-mono text-amber-400">$0 (%0)</div>
+                        </div>
+                    </div>
                 </div>
-                <div id="tv-container" class="w-full flex-1 rounded overflow-hidden"></div>
+
+                <div class="flex flex-wrap items-center gap-2.5 bg-slate-900/90 p-2.5 rounded-xl border border-slate-800 text-xs">
+                    <div>
+                        <label class="text-slate-400 block text-[9px]">KASA ($)</label>
+                        <input id="input-balance" type="number" value="1000" class="bg-slate-800 text-white font-bold w-16 px-1.5 py-1 rounded outline-none border border-slate-700">
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block text-[9px]">MOD</label>
+                        <select id="input-margin-mode" class="bg-slate-800 text-cyan-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
+                            <option value="ISOLATED" selected>İzole</option>
+                            <option value="CROSS">Cross</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block text-[9px]">RİSK (%)</label>
+                        <select id="input-risk" class="bg-slate-800 text-white font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
+                            <option value="0.5">%0.5</option>
+                            <option value="1.0">%1.0</option>
+                            <option value="2.0">%2.0</option>
+                            <option value="3.0">%3.0</option>
+                            <option value="5.0" selected>%5.0</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block text-[9px]">KALDIRAÇ</label>
+                        <select id="input-leverage" class="bg-slate-800 text-emerald-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
+                            <option value="5">5x</option>
+                            <option value="10">10x</option>
+                            <option value="20">20x</option>
+                            <option value="50" selected>50x</option>
+                            <option value="75">75x</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block text-[9px]">MAX POZİSYON</label>
+                        <select id="input-max-pos" class="bg-slate-800 text-amber-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
+                            <option value="1">1 Adet</option>
+                            <option value="2">2 Adet</option>
+                            <option value="3">3 Adet</option>
+                            <option value="5" selected>5 Adet</option>
+                            <option value="10">10 Adet</option>
+                            <option value="0">Sınırsız</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-slate-400 block text-[9px]">MAX KASA PAYI</label>
+                        <select id="input-max-margin-pct" class="bg-slate-800 text-fuchsia-400 font-bold px-1.5 py-1 rounded outline-none border border-slate-700">
+                            <option value="20">%20</option>
+                            <option value="35">%35</option>
+                            <option value="50" selected>%50</option>
+                            <option value="75">%75</option>
+                            <option value="100">%100</option>
+                        </select>
+                    </div>
+                    <button onclick="saveSettings()" class="mt-3 bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-2.5 py-1 rounded transition text-xs">KAYDET</button>
+                </div>
             </div>
 
-            <div class="card p-4 rounded-xl flex flex-col justify-between h-[540px]">
-                <div>
-                    <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
-                    <div id="active-rationale" class="space-y-2 text-xs">
-                        <div class="text-slate-500 italic">Tablodan bir parite seçin...</div>
+            <!-- GRAFİK VE GEREKÇE ALANI -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div class="card p-3 rounded-xl lg:col-span-2 h-[520px] flex flex-col">
+                    <div class="flex flex-wrap justify-between items-center mb-2 px-1 gap-2">
+                        <div class="flex items-center space-x-3">
+                            <span id="chart-title" class="text-xs font-bold text-emerald-400 tracking-wider">GRAFİK</span>
+                            <div class="flex space-x-1 bg-slate-900 p-0.5 rounded border border-slate-800 text-[10px]">
+                                <button onclick="changeTimeframe('1')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-1">1M</button>
+                                <button onclick="changeTimeframe('5')" class="tf-btn active px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-5">5M</button>
+                                <button onclick="changeTimeframe('15')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-15">15M</button>
+                                <button onclick="changeTimeframe('60')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-60">1H</button>
+                                <button onclick="changeTimeframe('240')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-240">4H</button>
+                                <button onclick="changeTimeframe('D')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-D">1D</button>
+                            </div>
+                            <div id="ohlc-box" class="flex items-center space-x-2 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 text-[10px] font-mono text-slate-300">
+                                <span>O: <b id="bar-open" class="text-white">-</b></span>
+                                <span>H: <b id="bar-high" class="text-amber-400">-</b></span>
+                                <span>L: <b id="bar-low" class="text-indigo-400">-</b></span>
+                                <span>C: <b id="bar-close" class="text-white">-</b></span>
+                            </div>
+                        </div>
+                        <span id="chart-levels" class="text-[11px] text-slate-400 space-x-2"></span>
+                    </div>
+                    <div id="tv-container" class="w-full flex-1 rounded overflow-hidden"></div>
+                </div>
+
+                <div class="card p-4 rounded-xl flex flex-col justify-between h-[520px]">
+                    <div>
+                        <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
+                        <div id="active-rationale" class="space-y-2 text-xs">
+                            <div class="text-slate-500 italic">Tablodan bir parite seçin...</div>
+                        </div>
+                    </div>
+                    <div class="mt-4">
+                        <h3 class="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Sistem Logları</h3>
+                        <div id="log-box" class="bg-black/50 p-2 rounded text-[11px] text-emerald-500/80 font-mono h-32 overflow-y-auto space-y-1"></div>
                     </div>
                 </div>
-                <div class="mt-4">
-                    <h3 class="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Sistem Logları</h3>
-                    <div id="log-box" class="bg-black/50 p-2 rounded text-[11px] text-emerald-500/80 font-mono h-32 overflow-y-auto space-y-1"></div>
+            </div>
+
+            <!-- TABLOLAR VE KASA BÜYÜME GRAFİĞİ -->
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                <div class="card p-4 rounded-xl lg:col-span-2">
+                    <h2 class="text-xs font-semibold text-emerald-400 mb-3 flex items-center justify-between">
+                        <span class="flex items-center"><span class="w-2 h-2 bg-emerald-400 rounded-full mr-2"></span> AKTİF POZİSYONLAR (Grafik için Tıkla)</span>
+                        <span class="text-[10px] text-slate-500">Canlı PnL & TP2 İlerlemesi</span>
+                    </h2>
+                    <div class="overflow-x-auto max-h-72 overflow-y-auto">
+                        <table class="w-full text-left text-[11px]">
+                            <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
+                                <tr>
+                                    <th class="pb-2">PARİTE</th>
+                                    <th class="pb-2">GİRİŞ ZAMANI</th>
+                                    <th class="pb-2">YÖN/KALDIRAÇ/MOD</th>
+                                    <th class="pb-2">TEMİNAT (M.)</th>
+                                    <th class="pb-2">GİRİŞ</th>
+                                    <th class="pb-2">CANLI FİYAT</th>
+                                    <th class="pb-2">ANLIK PnL ($)</th>
+                                    <th class="pb-2">HEDEF İLERLEME</th>
+                                </tr>
+                            </thead>
+                            <tbody id="active-pos-table" class="divide-y divide-slate-800/50"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card p-4 rounded-xl flex flex-col h-80">
+                    <h2 class="text-xs font-semibold text-sky-400 mb-2 flex items-center">
+                        <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> KASA BÜYÜME EĞRİSİ (EQUITY)
+                    </h2>
+                    <div id="equity-container" class="w-full flex-1 rounded overflow-hidden"></div>
                 </div>
             </div>
         </div>
 
-        <!-- TABLOLAR VE KASA BÜYÜME GRAFİĞİ -->
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
-            <div class="card p-4 rounded-xl lg:col-span-2">
-                <h2 class="text-xs font-semibold text-emerald-400 mb-3 flex items-center justify-between">
-                    <span class="flex items-center"><span class="w-2 h-2 bg-emerald-400 rounded-full mr-2"></span> AKTİF POZİSYONLAR (Grafik için Tıkla)</span>
-                    <span class="text-[10px] text-slate-500">Canlı PnL & TP2 İlerlemesi</span>
-                </h2>
-                <div class="overflow-x-auto max-h-72 overflow-y-auto">
-                    <table class="w-full text-left text-[11px]">
+        <!-- ======================================================== -->
+        <!-- SAYFA 2: PERFORMANS & DERİN İSTATİSTİKLER -->
+        <!-- ======================================================== -->
+        <div id="page-stats" class="hidden space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                <div class="card p-4 rounded-xl">
+                    <div class="text-[10px] text-slate-400 uppercase">Kâr Faktörü (Profit Factor)</div>
+                    <div id="stat-pf" class="text-xl font-bold font-mono text-emerald-400 mt-1">0.00</div>
+                    <div class="text-[10px] text-slate-500 mt-1">Toplam Kazanç / Toplam Kayıp</div>
+                </div>
+                <div class="card p-4 rounded-xl">
+                    <div class="text-[10px] text-slate-400 uppercase">Ortalama Kârlı İşlem</div>
+                    <div id="stat-avg-win" class="text-xl font-bold font-mono text-emerald-400 mt-1">+$0.00</div>
+                    <div class="text-[10px] text-slate-500 mt-1">Başarılı işlemlerin ortalaması</div>
+                </div>
+                <div class="card p-4 rounded-xl">
+                    <div class="text-[10px] text-slate-400 uppercase">Ortalama Zararlı İşlem</div>
+                    <div id="stat-avg-loss" class="text-xl font-bold font-mono text-red-400 mt-1">-$0.00</div>
+                    <div class="text-[10px] text-slate-500 mt-1">Stoplanan işlemlerin ortalaması</div>
+                </div>
+                <div class="card p-4 rounded-xl">
+                    <div class="text-[10px] text-slate-400 uppercase">Maksimum Çekilme (Max Drawdown)</div>
+                    <div id="stat-drawdown" class="text-xl font-bold font-mono text-amber-400 mt-1">%0.0</div>
+                    <div class="text-[10px] text-slate-500 mt-1">Tepeden dibe en büyük kayıp payı</div>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div class="card p-4 rounded-xl">
+                    <h2 class="text-xs font-semibold text-emerald-400 mb-3 uppercase">🏆 En Çok Kazandıran Lider Pariteler</h2>
+                    <div class="overflow-x-auto max-h-72 overflow-y-auto">
+                        <table class="w-full text-left text-xs">
+                            <thead class="text-slate-500 border-b border-slate-800">
+                                <tr>
+                                    <th class="pb-2">PARİTE</th>
+                                    <th class="pb-2">İŞLEM SAYISI</th>
+                                    <th class="pb-2">TOPLAM PnL ($)</th>
+                                </tr>
+                            </thead>
+                            <tbody id="top-symbols-table" class="divide-y divide-slate-800/50"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="card p-4 rounded-xl">
+                    <h2 class="text-xs font-semibold text-sky-400 mb-3 uppercase">⚖️ Yön Dağılımı (LONG vs SHORT)</h2>
+                    <div class="space-y-4 pt-2">
+                        <div>
+                            <div class="flex justify-between text-xs mb-1">
+                                <span class="text-emerald-400 font-bold">LONG Başarısı: <span id="long-winrate">%0</span></span>
+                                <span id="long-count" class="text-slate-400">0 İşlem</span>
+                            </div>
+                            <div class="w-full bg-slate-800 rounded-full h-2">
+                                <div id="long-bar" class="bg-emerald-500 h-2 rounded-full" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div>
+                            <div class="flex justify-between text-xs mb-1">
+                                <span class="text-red-400 font-bold">SHORT Başarısı: <span id="short-winrate">%0</span></span>
+                                <span id="short-count" class="text-slate-400">0 İşlem</span>
+                            </div>
+                            <div class="w-full bg-slate-800 rounded-full h-2">
+                                <div id="short-bar" class="bg-red-500 h-2 rounded-full" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ======================================================== -->
+        <!-- SAYFA 3: TARAMA RADARI & ISI HARİTASI -->
+        <!-- ======================================================== -->
+        <div id="page-radar" class="hidden space-y-4">
+            <div class="card p-4 rounded-xl">
+                <div class="flex justify-between items-center mb-3">
+                    <h2 class="text-xs font-semibold text-emerald-400 uppercase flex items-center">
+                        <span class="w-2 h-2 bg-emerald-400 rounded-full mr-2 animate-pulse"></span> 700+ Canlı Taranan Parite Radarı (Otomatik Güncellenir)
+                    </h2>
+                    <span class="text-[11px] text-slate-400">En yüksek puanlı ve trendli kurulumlar</span>
+                </div>
+                <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
+                    <table class="w-full text-left text-xs">
                         <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
                             <tr>
                                 <th class="pb-2">PARİTE</th>
-                                <th class="pb-2">GİRİŞ ZAMANI</th>
-                                <th class="pb-2">YÖN/KALDIRAÇ/MOD</th>
-                                <th class="pb-2">TEMİNAT (M.)</th>
-                                <th class="pb-2">GİRİŞ</th>
-                                <th class="pb-2">CANLI FİYAT</th>
-                                <th class="pb-2">ANLIK PnL ($)</th>
-                                <th class="pb-2">HEDEF İLERLEME</th>
+                                <th class="pb-2">SON FİYAT</th>
+                                <th class="pb-2">TREND DURUMU</th>
+                                <th class="pb-2">5M RSI</th>
+                                <th class="pb-2">HACİM PATLAMASI</th>
+                                <th class="pb-2">UYGUNLUK PUANI</th>
                             </tr>
                         </thead>
-                        <tbody id="active-pos-table" class="divide-y divide-slate-800/50"></tbody>
+                        <tbody id="radar-table" class="divide-y divide-slate-800/50"></tbody>
                     </table>
                 </div>
             </div>
+        </div>
 
-            <!-- KASA BÜYÜME GRAFİĞİ (EQUITY CURVE) -->
-            <div class="card p-4 rounded-xl flex flex-col h-80">
-                <h2 class="text-xs font-semibold text-sky-400 mb-2 flex items-center">
-                    <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> KASA BÜYÜME EĞRİSİ (EQUITY)
+        <!-- ======================================================== -->
+        <!-- SAYFA 4: İŞLEM GÜNLÜĞÜ (TRADE JOURNAL) -->
+        <!-- ======================================================== -->
+        <div id="page-journal" class="hidden space-y-4">
+            <div class="card p-4 rounded-xl">
+                <h2 class="text-xs font-semibold text-sky-400 mb-3 uppercase flex items-center">
+                    <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> Kapanan Tüm İşlemlerin Kronolojik Günlüğü
                 </h2>
-                <div id="equity-container" class="w-full flex-1 rounded overflow-hidden"></div>
+                <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
+                            <tr>
+                                <th class="pb-2">ZAMAN</th>
+                                <th class="pb-2">PARİTE</th>
+                                <th class="pb-2">YÖN</th>
+                                <th class="pb-2">GİRİŞ / ÇIKIŞ</th>
+                                <th class="pb-2">NET PnL ($)</th>
+                                <th class="pb-2">GİRİŞ GEREKÇESİ</th>
+                                <th class="pb-2">KAPANIŞ NEDENİ</th>
+                            </tr>
+                        </thead>
+                        <tbody id="journal-table" class="divide-y divide-slate-800/50"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
 
-        <!-- KAPANAN İŞLEMLER RAPORU -->
-        <div class="card p-4 rounded-xl">
-            <h2 class="text-xs font-semibold text-sky-400 mb-3 flex items-center">
-                <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> KAPANAN İŞLEMLER RAPORU
-            </h2>
-            <div class="overflow-x-auto max-h-72 overflow-y-auto">
-                <table class="w-full text-left text-[11px]">
-                    <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
-                        <tr>
-                            <th class="pb-2">PARİTE</th>
-                            <th class="pb-2">PNL ($)</th>
-                            <th class="pb-2">NEDEN AÇILDI?</th>
-                            <th class="pb-2">NEDEN KAPANDI?</th>
-                        </tr>
-                    </thead>
-                    <tbody id="history-table" class="divide-y divide-slate-800/50"></tbody>
-                </table>
+        <!-- ======================================================== -->
+        <!-- SAYFA 5: BORSA API BAĞLANTISI & CANLI MASASI -->
+        <!-- ======================================================== -->
+        <div id="page-api" class="hidden space-y-4">
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                <div class="card p-5 rounded-xl space-y-4">
+                    <h2 class="text-sm font-bold text-amber-400 uppercase flex items-center">
+                        <span class="w-2 h-2 bg-amber-400 rounded-full mr-2"></span> Borsa API Anahtarları Entegrasyonu
+                    </h2>
+                    <div class="space-y-3 text-xs">
+                        <div>
+                            <label class="text-slate-400 block mb-1">BORSA SEÇİMİ</label>
+                            <select id="api-exchange" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 outline-none">
+                                <option value="BINANCE" selected>Binance Futures (USDT-M)</option>
+                                <option value="BYBIT">Bybit Linear Perpetual</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-slate-400 block mb-1">AĞ TÜRÜ</label>
+                            <select id="api-mode" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 outline-none">
+                                <option value="TESTNET" selected>Testnet (Sanal / Güvenli Mod)</option>
+                                <option value="LIVE">Live (Gerçek Canlı Borsa)</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-slate-400 block mb-1">API KEY</label>
+                            <input id="api-key" type="password" placeholder="Borsa API Key..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 outline-none font-mono">
+                        </div>
+                        <div>
+                            <label class="text-slate-400 block mb-1">API SECRET</label>
+                            <input id="api-secret" type="password" placeholder="Borsa API Secret..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-2 outline-none font-mono">
+                        </div>
+                        <div class="flex items-center space-x-2 pt-2">
+                            <input id="api-auto-trade" type="checkbox" class="w-4 h-4 rounded text-emerald-500 focus:ring-0">
+                            <label for="api-auto-trade" class="text-white font-semibold cursor-pointer">Otomatik Gerçek Emir İletimini Başlat</label>
+                        </div>
+                        <button onclick="saveApiSettings()" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded transition">API AYARLARINI KAYDET</button>
+                    </div>
+                </div>
+
+                <div class="card p-5 rounded-xl flex flex-col justify-between">
+                    <div>
+                        <h2 class="text-sm font-bold text-slate-300 uppercase mb-2">🛡️ API Güvenlik Kuralları</h2>
+                        <ul class="text-xs text-slate-400 space-y-2 list-disc list-inside">
+                            <li>API anahtarlarınızda <b>SADECE Futures / Vadeli İşlemler</b> yetkisini aktif ediniz.</li>
+                            <li><b>Çekme (Withdrawal) yetkisini KESİNLİKLE KAPALI tutunuz.</b></li>
+                            <li>İlk aşamada her zaman <b>Testnet Modu</b> ile simülasyon yapılması önerilir.</li>
+                            <li>Kaldıraç ve marjin modları bot tarafından borsa limitlerine otomatik olarak uyarlanır.</li>
+                        </ul>
+                    </div>
+                    <div class="mt-4 p-3 bg-slate-900/80 rounded border border-slate-800 text-xs text-emerald-400 font-mono">
+                        Durum: <span id="api-status-badge" class="text-amber-400 font-bold">TESTNET (BEKLEMEDE)</span>
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -645,6 +857,23 @@ async def get_dashboard(request: Request):
             let lastPositions = [];
             let tradeHistoryCache = [];
             let lastKnownPosCount = 0;
+
+            function switchTab(tabId) {
+                const pages = ['terminal', 'stats', 'radar', 'journal', 'api'];
+                pages.forEach(p => {
+                    document.getElementById(`page-${p}`).classList.add('hidden');
+                    document.getElementById(`tab-${p}`).classList.remove('active');
+                });
+                document.getElementById(`page-${tabId}`).classList.remove('hidden');
+                document.getElementById(`tab-${tabId}`).classList.add('active');
+
+                if (tabId === 'terminal') {
+                    setTimeout(() => {
+                        if (chart) chart.timeScale().fitContent();
+                        if (equityChart) equityChart.timeScale().fitContent();
+                    }, 50);
+                }
+            }
 
             function playAlertSound() {
                 try {
@@ -809,6 +1038,61 @@ async def get_dashboard(request: Request):
 
                 document.getElementById('stat-winrate').innerText = `%${winRate}`;
                 document.getElementById('stat-trades').innerText = filtered.length;
+
+                // Derin Performans Metrikleri Hesapla
+                let totalWin = 0, totalLoss = 0, winOps = 0, lossOps = 0;
+                let longWins = 0, longTotal = 0, shortWins = 0, shortTotal = 0;
+                let symbolPnlMap = {};
+
+                tradeHistoryCache.forEach(h => {
+                    if (h.realized_pnl > 0) {
+                        totalWin += h.realized_pnl;
+                        winOps++;
+                    } else {
+                        totalLoss += Math.abs(h.realized_pnl);
+                        lossOps++;
+                    }
+
+                    if (h.direction === 'LONG') {
+                        longTotal++;
+                        if (h.realized_pnl > 0) longWins++;
+                    } else {
+                        shortTotal++;
+                        if (h.realized_pnl > 0) shortWins++;
+                    }
+
+                    symbolPnlMap[h.symbol] = (symbolPnlMap[h.symbol] || 0) + h.realized_pnl;
+                });
+
+                const pf = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : (totalWin > 0 ? "∞" : "0.00");
+                const avgWin = winOps > 0 ? (totalWin / winOps).toFixed(2) : "0.00";
+                const avgLoss = lossOps > 0 ? (totalLoss / lossOps).toFixed(2) : "0.00";
+
+                document.getElementById('stat-pf').innerText = pf;
+                document.getElementById('stat-avg-win').innerText = `+$${avgWin}`;
+                document.getElementById('stat-avg-loss').innerText = `-$${avgLoss}`;
+
+                // Long / Short Barı
+                const lWr = longTotal > 0 ? Math.round((longWins / longTotal) * 100) : 0;
+                const sWr = shortTotal > 0 ? Math.round((shortWins / shortTotal) * 100) : 0;
+                document.getElementById('long-winrate').innerText = `%${lWr}`;
+                document.getElementById('long-count').innerText = `${longTotal} İşlem (${longWins} Kâr)`;
+                document.getElementById('long-bar').style.width = `${lWr}%`;
+
+                document.getElementById('short-winrate').innerText = `%${sWr}`;
+                document.getElementById('short-count').innerText = `${shortTotal} İşlem (${shortWins} Kâr)`;
+                document.getElementById('short-bar').style.width = `${sWr}%`;
+
+                // En Çok Kazandıran Pariteler Tablosu
+                const topSymbolsTbody = document.getElementById('top-symbols-table');
+                const sortedSymbols = Object.keys(symbolPnlMap).sort((a,b) => symbolPnlMap[b] - symbolPnlMap[a]);
+                topSymbolsTbody.innerHTML = sortedSymbols.slice(0, 8).map(sym => `
+                    <tr>
+                        <td class="py-2 font-bold text-white">${sym}</td>
+                        <td class="text-slate-400">${tradeHistoryCache.filter(h => h.symbol === sym).length}</td>
+                        <td class="font-bold ${symbolPnlMap[sym] >= 0 ? 'text-emerald-400' : 'text-red-400'}">${symbolPnlMap[sym] >= 0 ? '+' : ''}$${symbolPnlMap[sym].toFixed(2)}</td>
+                    </tr>
+                `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri bulunmuyor...</td></tr>';
             }
 
             async function fetchCandlesDirect(symbol, interval = '5') {
@@ -959,6 +1243,23 @@ async def get_dashboard(request: Request):
                 });
             }
 
+            async function saveApiSettings() {
+                const exchange = document.getElementById('api-exchange').value;
+                const mode = document.getElementById('api-mode').value;
+                const api_key = document.getElementById('api-key').value;
+                const api_secret = document.getElementById('api-secret').value;
+                const auto_trade = document.getElementById('api-auto-trade').checked;
+
+                await fetch('/api/update_api', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({exchange, mode, api_key, api_secret, auto_trade})
+                });
+
+                document.getElementById('api-status-badge').innerText = auto_trade ? `${mode} (AKTİF / EMİR İLETİLİYOR)` : `${mode} (BEKLEMEDE)`;
+                alert("API Ayarları Kaydedildi!");
+            }
+
             async function updateDashboard() {
                 try {
                     const res = await fetch('/api/state');
@@ -975,11 +1276,11 @@ async def get_dashboard(request: Request):
                     const btcBadge = document.getElementById('btc-regime-badge');
                     btcBadge.innerText = data.btc_regime || "BTC: AKTİF";
                     if (data.btc_regime.includes("BOĞA")) {
-                        btcBadge.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800";
+                        btcBadge.className = "text-[9px] font-bold px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-800";
                     } else if (data.btc_regime.includes("AYI")) {
-                        btcBadge.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-800";
+                        btcBadge.className = "text-[9px] font-bold px-2 py-0.5 rounded bg-red-950 text-red-400 border border-red-800";
                     } else {
-                        btcBadge.className = "text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700";
+                        btcBadge.className = "text-[9px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700";
                     }
 
                     const totalUsedMargin = data.active_positions.reduce((acc, p) => acc + p.margin, 0);
@@ -1023,17 +1324,39 @@ async def get_dashboard(request: Request):
                         </tr>
                     `}).join('');
 
-                    const histTbody = document.getElementById('history-table');
-                    histTbody.innerHTML = data.trade_history.map(h => `
-                        <tr class="hover:bg-slate-800/30">
-                            <td class="py-2 font-bold">${h.symbol}<br><span class="text-[9px] text-slate-500">${h.close_time}</span></td>
+                    // İşlem Günlüğü (Journal) Tablosu
+                    const journalTbody = document.getElementById('journal-table');
+                    journalTbody.innerHTML = data.trade_history.map(h => `
+                        <tr class="hover:bg-slate-800/40">
+                            <td class="py-2 font-mono text-slate-400">${h.close_time}</td>
+                            <td class="font-bold text-white">${h.symbol}</td>
+                            <td class="${h.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${h.direction}</td>
+                            <td class="font-mono">${h.entry} ➔ ${h.close_price}</td>
                             <td class="font-bold ${h.realized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">
-                                ${h.realized_pnl >= 0 ? '+' : ''}$${h.realized_pnl.toFixed(2)}<br><span class="text-[9px]">%${h.pnl_pct}</span>
+                                ${h.realized_pnl >= 0 ? '+' : ''}$${h.realized_pnl.toFixed(2)} (%${h.pnl_pct})
                             </td>
-                            <td class="text-slate-300 text-[10px]">${h.open_reasons.join('<br>')}</td>
-                            <td class="text-sky-300 text-[10px] font-semibold">${h.close_reason}</td>
+                            <td class="text-[10px] text-slate-300">${h.open_reasons.join(' | ')}</td>
+                            <td class="text-[10px] text-sky-300 font-semibold">${h.close_reason}</td>
                         </tr>
-                    `).join('');
+                    `).join('') || '<tr><td colspan="7" class="py-4 text-center text-slate-500 italic">Henüz kapanan bir işlem kaydı yok...</td></tr>';
+
+                    // Tarama Radarı Tablosu
+                    const radarTbody = document.getElementById('radar-table');
+                    if (data.radar_symbols && data.radar_symbols.length > 0) {
+                        const sortedRadar = [...data.radar_symbols].sort((a,b) => b.score - a.score);
+                        radarTbody.innerHTML = sortedRadar.map(r => `
+                            <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="currentSymbol='${r.symbol}'; switchTab('terminal'); loadChartCandles('${r.symbol}', null, false);">
+                                <td class="py-2 font-bold text-white">${r.symbol}</td>
+                                <td class="font-mono">$${r.price}</td>
+                                <td class="font-bold ${r.trend === 'LONG' ? 'text-emerald-400' : (r.trend === 'SHORT' ? 'text-red-400' : 'text-slate-400')}">${r.trend}</td>
+                                <td class="font-mono">${r.rsi}</td>
+                                <td class="font-mono text-amber-400">${r.vol_ratio}x</td>
+                                <td>
+                                    <span class="px-2 py-0.5 rounded text-[10px] font-bold ${r.score >= 70 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${r.score} Puan</span>
+                                </td>
+                            </tr>
+                        `).join('');
+                    }
 
                     if (currentSymbol) {
                         loadChartCandles(currentSymbol, selectedPos, true);
