@@ -1137,37 +1137,91 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 3: HABER, CANLI AKIŞ VE ÇOKLU GERİ SAYIM SAYACI -->
+        <!-- SAYFA 3: HABER, CANLI AKIŞ VE ÇOKLU GERİ SAYIM SAYACI (ZENGİNLEŞTİRİLMİŞ) -->
         <div id="page-news" class="hidden space-y-3">
             <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <div class="card p-3 rounded-xl border-amber-500/30">
+                <div class="card p-3 rounded-xl border-amber-500/35">
                     <div class="text-[10px] text-amber-400 font-bold uppercase tracking-wider">ABD TÜFE (CPI)</div>
                     <div id="cd-cpi" class="text-base font-mono font-bold text-white mt-1">--s --d --sn</div>
                 </div>
-                <div class="card p-3 rounded-xl border-purple-500/30">
+                <div class="card p-3 rounded-xl border-purple-500/35">
                     <div class="text-[10px] text-purple-400 font-bold uppercase tracking-wider">FED FOMC Kararı</div>
                     <div id="cd-fomc" class="text-base font-mono font-bold text-white mt-1">--s --d --sn</div>
                 </div>
-                <div class="card p-3 rounded-xl border-rose-500/30">
+                <div class="card p-3 rounded-xl border-rose-500/35">
                     <div class="text-[10px] text-rose-400 font-bold uppercase tracking-wider">ABD NFP İstihdam</div>
                     <div id="cd-nfp" class="text-base font-mono font-bold text-white mt-1">--s --d --sn</div>
                 </div>
-                <div class="card p-3 rounded-xl border-sky-500/30">
+                <div class="card p-3 rounded-xl border-sky-500/35">
                     <div class="text-[10px] text-sky-400 font-bold uppercase tracking-wider">Majör Token Unlock</div>
                     <div id="cd-unlock" class="text-base font-mono font-bold text-white mt-1">--s --d --sn</div>
                 </div>
             </div>
 
+            <!-- Zenginleştirilmiş Canlı Kripto Haber Akışı -->
             <div class="card p-4 rounded-xl space-y-3">
                 <h3 class="text-xs font-semibold text-emerald-400 uppercase flex items-center justify-between">
-                    <span class="flex items-center"><span class="w-2 h-2 bg-emerald-400 rounded-full mr-2 animate-ping"></span> Canlı Kripto Son Dakika Haber Akışı</span>
+                    <span class="flex items-center"><span class="w-2 h-2 bg-emerald-400 rounded-full mr-2 animate-ping"></span> Canlı Kripto Son Dakika Haber Akışı & Kurumsal Gelişmeler</span>
                     <span class="text-[10px] text-slate-500">Kaynak: Global Kurumsal Akış</span>
                 </h3>
                 <div class="space-y-2 text-xs">
                     <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                        <span class="text-white font-medium">⚡ SEC, yeni kurumsal ETF başvuru dosyaları için inceleme sürecini başlattı.</span>
+                        <span class="text-white font-medium">⚡ SEC, yeni kurumsal ETF başvuru dosyaları için resmi inceleme takvimini güncelledi.</span>
                         <span class="text-[10px] text-slate-500 font-mono">2 dk önce</span>
                     </div>
+                    <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                        <span class="text-white font-medium">🐋 Büyük balina cüzdanlarından türev borsalara son 1 saatte yoğun USDT transferi tespit edildi.</span>
+                        <span class="text-[10px] text-slate-500 font-mono">14 dk önce</span>
+                    </div>
+                    <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                        <span class="text-white font-medium">📢 Bybit ve Binance vadeli işlemler platformlarına yeni kaldıraçlı parite marjin desteği eklendi.</span>
+                        <span class="text-[10px] text-slate-500 font-mono">35 dk önce</span>
+                    </div>
+                    <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                        <span class="text-white font-medium">🌐 Avrupa Merkez Bankası (ECB) dijital varlık düzenlemeleri için yeni kılavuz yayınladı.</span>
+                        <span class="text-[10px] text-slate-500 font-mono">1 saat önce</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Genişletilmiş Makroekonomik Beklentiler Tablosu -->
+            <div class="card p-4 rounded-xl space-y-3">
+                <h3 class="text-xs font-semibold text-sky-400 uppercase">📅 Kritik Makroekonomik Veriler ve Piyasa Beklentileri</h3>
+                <div class="overflow-x-auto">
+                    <table class="w-full text-left text-xs">
+                        <thead class="text-slate-500 border-b border-slate-800">
+                            <tr>
+                                <th class="pb-2">VERİ ADI</th>
+                                <th class="pb-2">DÖNEM</th>
+                                <th class="pb-2">ÖNCEKİ</th>
+                                <th class="pb-2">BEKLENTİ</th>
+                                <th class="pb-2">ETKİ</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-slate-800/60 text-slate-300 font-mono">
+                            <tr>
+                                <td class="py-2 text-white font-bold">ABD TÜFE (CPI Yıllık)</td>
+                                <td>Ağustos</td>
+                                <td>%2.9</td>
+                                <td class="text-amber-400">%2.8</td>
+                                <td><span class="px-2 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-400">YÜKSEK</span></td>
+                            </tr>
+                            <tr>
+                                <td class="py-2 text-white font-bold">FED Faiz Kararı</td>
+                                <td>Eylül FOMC</td>
+                                <td>%5.50</td>
+                                <td class="text-emerald-400">%5.25 (İndirim Beklentisi)</td>
+                                <td><span class="px-2 py-0.5 rounded text-[9px] font-bold bg-purple-500/20 text-purple-400">KRİTİK</span></td>
+                            </tr>
+                            <tr>
+                                <td class="py-2 text-white font-bold">ABD Tarım Dışı İstihdam (NFP)</td>
+                                <td>Ağustos</td>
+                                <td>114K</td>
+                                <td class="text-sky-400">165K</td>
+                                <td><span class="px-2 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-400">YÜKSEK</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
 
@@ -1176,7 +1230,10 @@ async def get_dashboard(request: Request):
                     <h3 class="text-xs font-semibold text-sky-400 uppercase">📢 Yeni Vadeli Listelemeler (Futures Listing)</h3>
                     <div class="space-y-1.5 text-xs">
                         <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
-                            <span class="text-white font-bold">MEW/USDT (50x)</span> <span class="text-emerald-400 font-mono">Aktif Edildi</span>
+                            <span class="text-white font-bold">MEW/USDT (50x) - Bybit/Binance</span> <span class="text-emerald-400 font-mono">Aktif Edildi</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">ZRO/USDT (50x) - OKX</span> <span class="text-emerald-400 font-mono">Aktif Edildi</span>
                         </div>
                     </div>
                 </div>
@@ -1184,7 +1241,10 @@ async def get_dashboard(request: Request):
                     <h3 class="text-xs font-semibold text-amber-400 uppercase">🛠️ Planlı Borsa Bakım Saatleri</h3>
                     <div class="space-y-1.5 text-xs">
                         <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
-                            <span class="text-white font-bold">Bybit Altyapı Güncellemesi</span> <span class="text-amber-400 font-mono">Yarın 04:00 TSİ</span>
+                            <span class="text-white font-bold">Bybit Altyapı Güncellemesi</span> <span class="text-amber-400 font-mono">Yarın 04:00 TSİ (30 dk)</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">Binance Futures API Bakımı</span> <span class="text-slate-400 font-mono">Çarşamba 03:00 TSİ</span>
                         </div>
                     </div>
                 </div>
@@ -1825,7 +1885,6 @@ async def get_dashboard(request: Request):
                         const pConf = getPrecisionConfig(lastCandle.close);
                         candleSeries.applyOptions({ priceFormat: { type: 'price', precision: pConf.precision, minMove: pConf.minMove } });
                         
-                        // TradingView Dinamiği: Gelecek saatler için boşluk (Whitespace) üretimi
                         const intervalSec = getIntervalSeconds(currentTimeframe);
                         let futureData = [];
                         let lastTime = lastCandle.time;
