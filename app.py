@@ -249,11 +249,11 @@ async def analyze_symbol(exchange, symbol):
         tasks = [
             exchange.fetch_ohlcv(symbol, timeframe='5m', limit=35),
             exchange.fetch_ohlcv(symbol, timeframe='15m', limit=35),
-            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=35),
+            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50),
             exchange.fetch_open_interest_history(symbol, timeframe='5m', limit=6)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        if any(isinstance(r, Exception) or not r or len(r) < 20 for r in results[:3]):
+        if any(isinstance(r, Exception) or not r or len(r) < 30 for r in results[:3]):
             return None
 
         df_5m = calculate_indicators(pd.DataFrame(results[0], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
@@ -283,13 +283,26 @@ async def analyze_symbol(exchange, symbol):
         if sweep_low and mss_bull:
             if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] <= -1.2):
                 direction = "LONG"
-                score += 45
+                score += 40
                 reasons.append("⚡ 15M Dip Likiditesi Alındı + 5M MSS Kırılımı")
         elif sweep_high and mss_bear:
             if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] >= 1.2):
                 direction = "SHORT"
-                score += 45
+                score += 40
                 reasons.append("⚡ 15M Tepe Likiditesi Alındı + 5M MSS Kırılımı")
+
+        if direction == "LONG":
+            if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
+                score += 25
+                reasons.append("📈 1H Güçlü Ana Trend (Boğa) Onayı")
+            else:
+                return None
+        elif direction == "SHORT":
+            if c_1h['close'] < c_1h['ema50'] and c_1h['close'] < c_1h['ema20']:
+                score += 25
+                reasons.append("📉 1H Güçlü Ana Trend (Ayı) Onayı")
+            else:
+                return None
 
         if len(oi_data) >= 3 and direction:
             oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
@@ -297,21 +310,6 @@ async def analyze_symbol(exchange, symbol):
             if oi_curr > oi_prev:
                 score += 15
                 reasons.append("📊 Açık Pozisyon (OI) Artışı (Kurumsal Giriş Onayı)")
-
-        if direction == "LONG":
-            if c_1h['close'] > c_1h['ema50'] and c_15m['close'] > c_15m['ema50']:
-                score += 25
-                reasons.append("📈 1H & 15M Güçlü Boğa Trend Uyumu")
-            elif c_1h['close'] > c_1h['ema50'] or c_15m['close'] > c_15m['ema50']:
-                score += 10
-                reasons.append("📈 Trend Desteği")
-        elif direction == "SHORT":
-            if c_1h['close'] < c_1h['ema50'] and c_15m['close'] < c_15m['ema50']:
-                score += 25
-                reasons.append("📉 1H & 15M Güçlü Ayı Trend Uyumu")
-            elif c_1h['close'] < c_1h['ema50'] or c_15m['close'] < c_15m['ema50']:
-                score += 10
-                reasons.append("📉 Trend Desteği")
 
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
         if vol_ratio >= 1.30:
@@ -414,7 +412,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: Yüksek Hacimli Likit Kripto Taraması Devrede...")
+    add_log("Quant Motoru: 1H Ana Trend Filtresi Aktif | Likit Kripto Taraması Devrede...")
 
     while True:
         exchange = None
@@ -1137,7 +1135,7 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 3: HABER, CANLI AKIŞ VE ÇOKLU GERİ SAYIM SAYACI (ZENGİNLEŞTİRİLMİŞ) -->
+        <!-- SAYFA 3: HABER, CANLI AKIŞ VE ÇOKLU GERİ SAYIM SAYACI -->
         <div id="page-news" class="hidden space-y-3">
             <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div class="card p-3 rounded-xl border-amber-500/35">
@@ -1158,7 +1156,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- Zenginleştirilmiş Canlı Kripto Haber Akışı -->
             <div class="card p-4 rounded-xl space-y-3">
                 <h3 class="text-xs font-semibold text-emerald-400 uppercase flex items-center justify-between">
                     <span class="flex items-center"><span class="w-2 h-2 bg-emerald-400 rounded-full mr-2 animate-ping"></span> Canlı Kripto Son Dakika Haber Akışı & Kurumsal Gelişmeler</span>
@@ -1184,7 +1181,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- Genişletilmiş Makroekonomik Beklentiler Tablosu -->
             <div class="card p-4 rounded-xl space-y-3">
                 <h3 class="text-xs font-semibold text-sky-400 uppercase">📅 Kritik Makroekonomik Veriler ve Piyasa Beklentileri</h3>
                 <div class="overflow-x-auto">
@@ -1264,15 +1260,19 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <!-- GÜNCELLENEN ÖZET KARTLARI (Toplam PnL ve Yüzde Oranı Eklendi) -->
+            <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div class="card p-3 rounded-xl flex justify-between items-center">
                     <span class="text-xs text-slate-400 uppercase">Toplam Açık Pozisyon:</span> <span id="man-total-pos" class="text-sm font-bold font-mono text-white">0 Adet</span>
                 </div>
                 <div class="card p-3 rounded-xl flex justify-between items-center">
-                    <span class="text-xs text-slate-400 uppercase">Toplam Kullanılan Marjin:</span> <span id="man-total-margin" class="text-sm font-bold font-mono text-amber-400">$0.00</span>
+                    <span class="text-xs text-slate-400 uppercase">Toplam Anlık PnL:</span> <span id="man-total-pnl" class="text-sm font-bold font-mono text-emerald-400">$0.00 (%0.0)</span>
                 </div>
                 <div class="card p-3 rounded-xl flex justify-between items-center">
-                    <span class="text-xs text-slate-400 uppercase">Toplam Risk Altındaki Tutar:</span> <span id="man-total-risk" class="text-sm font-bold font-mono text-rose-400">$0.00</span>
+                    <span class="text-xs text-slate-400 uppercase">Kullanılan Marjin:</span> <span id="man-total-margin" class="text-sm font-bold font-mono text-amber-400">$0.00</span>
+                </div>
+                <div class="card p-3 rounded-xl flex justify-between items-center">
+                    <span class="text-xs text-slate-400 uppercase">Toplam Risk Tutar:</span> <span id="man-total-risk" class="text-sm font-bold font-mono text-rose-400">$0.00</span>
                 </div>
             </div>
 
@@ -1488,7 +1488,7 @@ async def get_dashboard(request: Request):
 
                 if (tp2Y !== null && tp1Y !== null) {
                     const tp2Top = Math.min(tp1Y, tp2Y);
-                    const tp2Height = Math.abs(tp2Y - tp1Y);
+                    const tp2Height = Math.abs(tp1Y - tp2Y);
                     ctx.fillStyle = 'rgba(4, 120, 87, 0.40)';
                     ctx.fillRect(boxStartX, tp2Top, boxWidth, tp2Height);
                     ctx.strokeRect(boxStartX, tp2Top, boxWidth, tp2Height);
@@ -2070,12 +2070,21 @@ async def get_dashboard(request: Request):
 
                     const totalUsedMargin = data.active_positions.reduce((acc, p) => acc + p.margin, 0);
                     const totalRiskAmount = data.active_positions.reduce((acc, p) => acc + p.max_loss, 0);
+                    const totalUnrealizedPnl = data.active_positions.reduce((acc, p) => acc + p.unrealized_pnl, 0);
+                    const totalPnlPct = data.total_balance > 0 ? ((totalUnrealizedPnl / data.total_balance) * 100) : 0;
+
                     const usedPct = data.total_balance > 0 ? ((totalUsedMargin / data.total_balance) * 100).toFixed(1) : "0.0";
                     document.getElementById('stat-used-margin').innerText = `$${totalUsedMargin.toFixed(1)} (%${usedPct})`;
 
                     document.getElementById('man-total-pos').innerText = `${data.active_positions.length} Adet`;
                     document.getElementById('man-total-margin').innerText = `$${totalUsedMargin.toFixed(2)}`;
                     document.getElementById('man-total-risk').innerText = `$${totalRiskAmount.toFixed(2)}`;
+
+                    const manPnlEl = document.getElementById('man-total-pnl');
+                    if (manPnlEl) {
+                        manPnlEl.innerText = `${totalUnrealizedPnl >= 0 ? '+' : ''}$${totalUnrealizedPnl.toFixed(2)} (%${totalPnlPct >= 0 ? '+' : ''}${totalPnlPct.toFixed(2)})`;
+                        manPnlEl.className = `text-sm font-bold font-mono ${totalUnrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+                    }
 
                     tradeHistoryCache = data.trade_history;
                     recalculatePnlMetrics();
