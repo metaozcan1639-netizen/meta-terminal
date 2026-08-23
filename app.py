@@ -1516,6 +1516,11 @@ async def get_dashboard(request: Request):
                 return { precision: 2, minMove: 0.01 };
             }
 
+            function getIntervalSeconds(tf) {
+                const mapping = { '1': 60, '5': 300, '15': 900, '60': 3600, '240': 14400, 'D': 86400 };
+                return mapping[tf] || 300;
+            }
+
             function initCharts() {
                 const container = document.getElementById('tv-container');
                 container.innerHTML = '';
@@ -1527,7 +1532,7 @@ async def get_dashboard(request: Request):
                         timeVisible: true, 
                         secondsVisible: false, 
                         borderColor: '#1e293b',
-                        rightOffset: 15,
+                        rightOffset: 25,
                         fixLeftEdge: false,
                         fixRightEdge: false,
                         lockVisibleTimeRangeOnResize: false,
@@ -1819,7 +1824,16 @@ async def get_dashboard(request: Request):
                         const lastCandle = candles[candles.length - 1];
                         const pConf = getPrecisionConfig(lastCandle.close);
                         candleSeries.applyOptions({ priceFormat: { type: 'price', precision: pConf.precision, minMove: pConf.minMove } });
-                        candleSeries.setData(candles);
+                        
+                        // TradingView Dinamiği: Gelecek saatler için boşluk (Whitespace) üretimi
+                        const intervalSec = getIntervalSeconds(currentTimeframe);
+                        let futureData = [];
+                        let lastTime = lastCandle.time;
+                        for (let i = 1; i <= 150; i++) {
+                            futureData.push({ time: lastTime + (i * intervalSec) });
+                        }
+                        
+                        candleSeries.setData([...candles, ...futureData]);
 
                         if (!isLiveTick) {
                             const dec = lastCandle.close < 1 ? pConf.precision : 2;
