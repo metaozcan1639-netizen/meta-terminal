@@ -1527,12 +1527,9 @@ async def get_dashboard(request: Request):
                         timeVisible: true, 
                         secondsVisible: false, 
                         borderColor: '#1e293b',
-                        rightOffset: 25, // TradingView dinamikleri için sağ boşluk
-                        barSpacing: 10,
+                        rightOffset: 12, // Sağ tarafta boşluk bırakarak gelecekteki saatlerin görünmesini sağlar
                         fixLeftEdge: false,
                         fixRightEdge: false,
-                        lockVisibleTimeRangeOnResize: true,
-                        rightBarStaysOnScroll: true,
                         tickMarkFormatter: (time, tickMarkType, locale) => {
                             const d = new Date(time * 1000);
                             return d.toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
