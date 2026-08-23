@@ -1527,12 +1527,10 @@ async def get_dashboard(request: Request):
                         timeVisible: true, 
                         secondsVisible: false, 
                         borderColor: '#1e293b',
-                        rightOffset: 25, // TradingView dinamikleri için sağ boşluk
-                        barSpacing: 10,
+                        rightOffset: 15,
                         fixLeftEdge: false,
                         fixRightEdge: false,
-                        lockVisibleTimeRangeOnResize: true,
-                        rightBarStaysOnScroll: true,
+                        lockVisibleTimeRangeOnResize: false,
                         tickMarkFormatter: (time, tickMarkType, locale) => {
                             const d = new Date(time * 1000);
                             return d.toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
@@ -1824,8 +1822,6 @@ async def get_dashboard(request: Request):
                         candleSeries.setData(candles);
 
                         if (!isLiveTick) {
-                            chart.priceScale('right').applyOptions({ autoScale: true });
-                            chart.timeScale().fitContent();
                             const dec = lastCandle.close < 1 ? pConf.precision : 2;
                             document.getElementById('bar-open').innerText = `$${lastCandle.open.toFixed(dec)}`;
                             document.getElementById('bar-high').innerText = `$${lastCandle.high.toFixed(dec)}`;
