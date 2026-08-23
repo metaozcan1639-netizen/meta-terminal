@@ -1019,7 +1019,7 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 2: DUYARLILIK & ENDEKSLER (Likidasyon Haritası Eklendi) -->
+        <!-- SAYFA 2: DUYARLILIK & ENDEKSLER -->
         <div id="page-sentiment" class="hidden space-y-3">
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div class="card p-4 rounded-xl flex flex-col items-center justify-center text-center">
@@ -1056,24 +1056,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- Yeni: Canlı Likidasyon Isı Duvarları -->
-            <div class="card p-4 rounded-xl space-y-2 border-emerald-500/30">
-                <div class="text-xs text-emerald-400 font-bold uppercase tracking-wider flex justify-between">
-                    <span>🔥 Canlı Likidasyon Isı Duvarları (Tasfiye Yoğunluğu)</span>
-                    <span class="text-[10px] text-slate-400">Türev Borsalar Agregasyonu</span>
-                </div>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-3 pt-1 text-xs font-mono">
-                    <div class="bg-slate-900/80 p-3 rounded border border-slate-800 space-y-1.5">
-                        <div class="text-rose-400 font-bold">🔴 Yoğun Short Tasfiye Duvarı (Patlama Bölgesi):</div>
-                        <div class="text-white">$64,500 - $65,200 Seviyelerinde <b class="text-rose-400">$310 Milyon</b> Açık Short Stopu Birikti.</div>
-                    </div>
-                    <div class="bg-slate-900/80 p-3 rounded border border-slate-800 space-y-1.5">
-                        <div class="text-emerald-400 font-bold">🟢 Yoğun Long Tasfiye Duvarı (Avlanma Bölgesi):</div>
-                        <div class="text-white">$61,800 - $62,400 Seviyelerinde <b class="text-emerald-400">$450 Milyon</b> Açık Long Stopu Birikti.</div>
-                    </div>
-                </div>
-            </div>
-
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div class="card p-4 rounded-xl space-y-2">
                     <div class="text-xs text-slate-400 uppercase tracking-wider">💥 24S Toplam Likidasyonlar</div>
@@ -1102,6 +1084,55 @@ async def get_dashboard(request: Request):
                     </div>
                 </div>
             </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div class="card p-4 rounded-xl space-y-2">
+                    <div class="text-xs text-slate-400 uppercase tracking-wider">⚡ Emir Defteri (Bid/Ask)</div>
+                    <div class="flex justify-between text-xs font-bold">
+                        <span class="text-emerald-400">Alıcı: <b id="sent-bid-val">%54.2</b></span>
+                        <span class="text-rose-400">Satıcı: <b id="sent-ask-val">%45.8</b></span>
+                    </div>
+                    <div class="w-full bg-slate-800 h-3 rounded-full overflow-hidden flex">
+                        <div id="bid-bar" class="bg-emerald-500 h-3" style="width: 54.2%"></div>
+                        <div id="ask-bar" class="bg-rose-500 h-3" style="width: 45.8%"></div>
+                    </div>
+                    <div class="text-[10px] text-slate-400">(Dengeli / Alım Ağırlıklı)</div>
+                </div>
+                <div class="card p-4 rounded-xl space-y-2">
+                    <div class="text-xs text-slate-400 uppercase tracking-wider">🐋 Son 1 Saatlik Balina Akışı</div>
+                    <div class="flex justify-between text-[11px] bg-slate-900/80 p-1.5 rounded border border-slate-800">
+                        <span class="text-slate-400">Borsaya Giren:</span> <span id="sent-whale-in" class="font-mono text-rose-400">$420M USDT</span>
+                    </div>
+                    <div class="flex justify-between text-[11px] bg-slate-900/80 p-1.5 rounded border border-slate-800">
+                        <span class="text-slate-400">Borsadan Çıkan:</span> <span id="sent-whale-out" class="font-mono text-emerald-400">$180M USDT</span>
+                    </div>
+                    <div class="text-[11px] font-bold text-amber-400 pt-0.5">Net Akış: <span id="sent-net-whale">+$240M (Boğa / Giriş)</span></div>
+                </div>
+                <div class="card p-4 rounded-xl space-y-2">
+                    <div class="text-xs text-slate-400 uppercase tracking-wider">🔄 Fonlama Oranları (Funding)</div>
+                    <div class="space-y-1 text-[11px]">
+                        <div class="flex justify-between bg-slate-900/80 p-1 rounded border border-slate-800">
+                            <span class="text-white">BTCUSDT:</span> <span class="font-mono text-emerald-400">+0.0100% (Normal)</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-1 rounded border border-slate-800">
+                            <span class="text-white">ETHUSDT:</span> <span class="font-mono text-emerald-400">+0.0125% (Normal)</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-1 rounded border border-slate-800">
+                            <span class="text-white">SOLUSDT:</span> <span class="font-mono text-amber-400">+0.0250% (Yüksek Long)</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card p-4 rounded-xl space-y-2">
+                <div class="flex justify-between text-xs text-slate-400 uppercase font-bold">
+                    <span>VADELİ PİYASA LONG / SHORT ORANI</span>
+                    <span id="ls-ratio-text" class="text-white font-mono">%47.6 Long / %52.4 Short</span>
+                </div>
+                <div class="w-full bg-rose-600 h-3 rounded-full overflow-hidden flex">
+                    <div id="ls-bar" class="bg-emerald-500 h-3 transition-all duration-500" style="width: 47.6%"></div>
+                </div>
+            </div>
         </div>
 
         <!-- SAYFA 3: HABER, CANLI AKIŞ VE ÇOKLU GERİ SAYIM SAYACI -->
@@ -1125,24 +1156,27 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- Canlı Haber Akışı -->
             <div class="card p-4 rounded-xl space-y-3">
                 <h3 class="text-xs font-semibold text-emerald-400 uppercase flex items-center justify-between">
                     <span class="flex items-center"><span class="w-2 h-2 bg-emerald-400 rounded-full mr-2 animate-ping"></span> Canlı Kripto Son Dakika Haber Akışı & Kurumsal Gelişmeler</span>
-                    <span class="text-[10px] text-slate-500">Gerçek Zamanlı Akış</span>
+                    <span class="text-[10px] text-slate-500">Kaynak: Global Kurumsal Akış</span>
                 </h3>
                 <div class="space-y-2 text-xs">
                     <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                        <span class="text-white font-medium">⚡ SEC, spot ETF başvuruları için yeni regülasyon çerçevesini duyurdu.</span>
-                        <span class="text-[10px] text-slate-500 font-mono">1 dk önce</span>
+                        <span class="text-white font-medium">⚡ SEC, yeni kurumsal ETF başvuru dosyaları için resmi inceleme takvimini güncelledi.</span>
+                        <span class="text-[10px] text-slate-500 font-mono">2 dk önce</span>
                     </div>
                     <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                        <span class="text-white font-medium">🐋 Büyük balina cüzdanlarından borsalara yüklü stabil coin girişleri gözlemlendi.</span>
-                        <span class="text-[10px] text-slate-500 font-mono">12 dk önce</span>
+                        <span class="text-white font-medium">🐋 Büyük balina cüzdanlarından türev borsalara son 1 saatte yoğun USDT transferi tespit edildi.</span>
+                        <span class="text-[10px] text-slate-500 font-mono">14 dk önce</span>
                     </div>
                     <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                        <span class="text-white font-medium">📢 Vadeli işlemler havuzuna yeni marjin kaldıraç oranları dahil edildi.</span>
-                        <span class="text-[10px] text-slate-500 font-mono">28 dk önce</span>
+                        <span class="text-white font-medium">📢 Bybit ve Binance vadeli işlemler platformlarına yeni kaldıraçlı parite marjin desteği eklendi.</span>
+                        <span class="text-[10px] text-slate-500 font-mono">35 dk önce</span>
+                    </div>
+                    <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
+                        <span class="text-white font-medium">🌐 Avrupa Merkez Bankası (ECB) dijital varlık düzenlemeleri için yeni kılavuz yayınladı.</span>
+                        <span class="text-[10px] text-slate-500 font-mono">1 saat önce</span>
                     </div>
                 </div>
             </div>
@@ -1175,8 +1209,40 @@ async def get_dashboard(request: Request):
                                 <td class="text-emerald-400">%5.25 (İndirim Beklentisi)</td>
                                 <td><span class="px-2 py-0.5 rounded text-[9px] font-bold bg-purple-500/20 text-purple-400">KRİTİK</span></td>
                             </tr>
+                            <tr>
+                                <td class="py-2 text-white font-bold">ABD Tarım Dışı İstihdam (NFP)</td>
+                                <td>Ağustos</td>
+                                <td>114K</td>
+                                <td class="text-sky-400">165K</td>
+                                <td><span class="px-2 py-0.5 rounded text-[9px] font-bold bg-rose-500/20 text-rose-400">YÜKSEK</span></td>
+                            </tr>
                         </tbody>
                     </table>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="card p-4 rounded-xl space-y-2">
+                    <h3 class="text-xs font-semibold text-sky-400 uppercase">📢 Yeni Vadeli Listelemeler (Futures Listing)</h3>
+                    <div class="space-y-1.5 text-xs">
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">MEW/USDT (50x) - Bybit/Binance</span> <span class="text-emerald-400 font-mono">Aktif Edildi</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">ZRO/USDT (50x) - OKX</span> <span class="text-emerald-400 font-mono">Aktif Edildi</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="card p-4 rounded-xl space-y-2">
+                    <h3 class="text-xs font-semibold text-amber-400 uppercase">🛠️ Planlı Borsa Bakım Saatleri</h3>
+                    <div class="space-y-1.5 text-xs">
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">Bybit Altyapı Güncellemesi</span> <span class="text-amber-400 font-mono">Yarın 04:00 TSİ (30 dk)</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">Binance Futures API Bakımı</span> <span class="text-slate-400 font-mono">Çarşamba 03:00 TSİ</span>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1224,7 +1290,7 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 5: GÜNLÜK EXCEL ARŞİVİ (Analitik Özetler Eklendi) -->
+        <!-- SAYFA 5: GÜNLÜK EXCEL ARŞİVİ -->
         <div id="page-excel" class="hidden space-y-3">
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                 <div class="card p-4 rounded-xl space-y-3">
@@ -1312,14 +1378,14 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 7: RADAR (Favorilere Ekleme Özelliği Eklendi) -->
+        <!-- SAYFA 7: RADAR -->
         <div id="page-radar" class="hidden space-y-3">
             <div class="card p-4 rounded-xl">
-                <h2 class="text-xs font-semibold text-emerald-400 uppercase mb-3">🔥 700+ Canlı Taranan Parite Radarı (Favoriler için Yıldızla)</h2>
+                <h2 class="text-xs font-semibold text-emerald-400 uppercase mb-3">🔥 700+ Canlı Taranan Parite Radarı</h2>
                 <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
                     <table class="w-full text-left text-xs">
                         <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
-                            <tr><th class="pb-2">FAVORİ</th><th class="pb-2">PARİTE</th><th class="pb-2">SON FİYAT</th><th class="pb-2">TREND</th><th class="pb-2">5M RSI</th><th class="pb-2">HACİM KAT</th><th class="pb-2">PUAN</th></tr>
+                            <tr><th class="pb-2">PARİTE</th><th class="pb-2">SON FİYAT</th><th class="pb-2">TREND</th><th class="pb-2">5M RSI</th><th class="pb-2">HACİM KAT</th><th class="pb-2">PUAN</th></tr>
                         </thead>
                         <tbody id="radar-table" class="divide-y divide-slate-800/50"></tbody>
                     </table>
@@ -1327,8 +1393,9 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 8: GÜNLÜK (JOURNAL) -->
+        <!-- SAYFA 8: GÜNLÜK (JOURNAL) - GELİŞTİRİLDİ -->
         <div id="page-journal" class="hidden space-y-3">
+            <!-- Üst Mini Özet Kartları -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div class="card p-3 rounded-xl flex justify-between items-center">
                     <span class="text-xs text-slate-400 uppercase">Toplam İşlem Sayısı:</span> <span id="journal-total-trades" class="text-sm font-bold font-mono text-white">0</span>
@@ -1341,6 +1408,7 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
+            <!-- Arama ve Filtreleme Çubuğu -->
             <div class="card p-3 rounded-xl flex flex-wrap gap-3 items-center justify-between">
                 <input id="journal-search" type="text" placeholder="Parite ara (örn: BTC, ETH)..." oninput="renderJournalTable()" class="bg-slate-900 border border-slate-700 text-white rounded px-3 py-1.5 text-xs outline-none w-64 font-mono">
                 <div class="flex space-x-2 text-xs">
@@ -1351,6 +1419,7 @@ async def get_dashboard(request: Request):
             </div>
 
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                <!-- Tablo Alanı -->
                 <div class="card p-4 rounded-xl lg:col-span-2">
                     <h2 class="text-xs font-semibold text-sky-400 mb-3 uppercase">📖 Kapanan İşlem Günlüğü (Detay için satıra tıkla)</h2>
                     <div class="overflow-x-auto max-h-[420px] overflow-y-auto">
@@ -1363,6 +1432,7 @@ async def get_dashboard(request: Request):
                     </div>
                 </div>
 
+                <!-- Sağ Taraf: Seçilen İşlemin Gerekçe Detayı -->
                 <div class="card p-4 rounded-xl flex flex-col justify-between h-[480px]">
                     <div>
                         <h2 class="text-xs font-semibold text-emerald-400 mb-2 uppercase tracking-wider">🔍 İşlem Açılış Gerekçeleri</h2>
@@ -1395,7 +1465,9 @@ async def get_dashboard(request: Request):
             let equityChart = null;
             let equitySeries = null;
 
-            let currentSymbol = localStorage.getItem("selected_sym") || "BTC/USDT:USDT";
+            let currentSymbol = "BTC/USDT:USDT";
+            localStorage.setItem("selected_sym", "BTC/USDT:USDT");
+
             let currentTimeframe = "5";
             let currentPnlFilter = "today";
             let currentStatsFilter = "today";
@@ -1406,7 +1478,6 @@ async def get_dashboard(request: Request):
             let lastPositions = [];
             let tradeHistoryCache = [];
             let lastKnownPosCount = 0;
-            let favoriteSymbols = JSON.parse(localStorage.getItem("fav_symbols") || "[]");
 
             function resizeCanvas() {
                 const wrapper = document.getElementById('tv-wrapper');
@@ -1477,10 +1548,7 @@ async def get_dashboard(request: Request):
 
                 if (tabId === 'terminal') {
                     setTimeout(() => {
-                        if (chart) {
-                            chart.timeScale().fitContent();
-                            chart.priceScale('right').applyOptions({ autoScale: true });
-                        }
+                        if (chart) chart.timeScale().fitContent();
                         if (equityChart) equityChart.timeScale().fitContent();
                         resizeCanvas();
                         drawPositionBoxes();
@@ -1493,17 +1561,6 @@ async def get_dashboard(request: Request):
                 } else if (tabId === 'journal') {
                     renderJournalTable();
                 }
-            }
-
-            function toggleFavorite(symbol, event) {
-                event.stopPropagation();
-                if (favoriteSymbols.includes(symbol)) {
-                    favoriteSymbols = favoriteSymbols.filter(s => s !== symbol);
-                } else {
-                    favoriteSymbols.push(symbol);
-                }
-                localStorage.setItem("fav_symbols", JSON.stringify(favoriteSymbols));
-                updateDashboard();
             }
 
             function setJournalFilter(dir) {
@@ -1556,6 +1613,7 @@ async def get_dashboard(request: Request):
                     return matchSymbol && matchDir;
                 });
 
+                // Özet Kartları Güncelle
                 const totalCount = tradeHistoryCache.length;
                 const wins = tradeHistoryCache.filter(h => h.realized_pnl > 0).length;
                 const winRate = totalCount > 0 ? ((wins / totalCount) * 100).toFixed(1) : "0.0";
@@ -1965,11 +2023,6 @@ async def get_dashboard(request: Request):
                             document.getElementById('bar-high').innerText = `$${lastCandle.high.toFixed(dec)}`;
                             document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
                             document.getElementById('bar-close').innerText = `$${lastCandle.close.toFixed(dec)}`;
-                            
-                            // Hata Düzeltme: Parite değiştiğinde Y ekseni ölçeğini sıfırlayıp oto scale yapıyoruz
-                            if (chart) {
-                                chart.priceScale('right').applyOptions({ autoScale: true });
-                            }
                         }
                         resizeCanvas();
                         drawPositionBoxes();
@@ -2115,6 +2168,15 @@ async def get_dashboard(request: Request):
                         document.getElementById('sent-btc-dom').innerText = data.sentiment_data.btc_dominance;
                         document.getElementById('sent-avg-funding').innerText = data.sentiment_data.avg_funding_rate;
 
+                        document.getElementById('sent-bid-val').innerText = `%${data.sentiment_data.bid_pressure}`;
+                        document.getElementById('sent-ask-val').innerText = `%${data.sentiment_data.ask_pressure}`;
+                        document.getElementById('bid-bar').style.width = `${data.sentiment_data.bid_pressure}%`;
+                        document.getElementById('ask-bar').style.width = `${data.sentiment_data.ask_pressure}%`;
+
+                        document.getElementById('sent-whale-in').innerText = data.sentiment_data.whale_inflow;
+                        document.getElementById('sent-whale-out').innerText = data.sentiment_data.whale_outflow;
+                        document.getElementById('sent-net-whale').innerText = data.sentiment_data.net_whale_flow;
+
                         const lsRatio = data.sentiment_data.long_short_ratio;
                         document.getElementById('ls-ratio-text').innerText = `%${lsRatio} Long / %${(100 - lsRatio).toFixed(1)} Short`;
                         document.getElementById('ls-bar').style.width = `${lsRatio}%`;
@@ -2194,24 +2256,13 @@ async def get_dashboard(request: Request):
 
                     const radarTbody = document.getElementById('radar-table');
                     if (radarTbody && data.radar_symbols) {
-                        const sortedRadar = [...data.radar_symbols].sort((a,b) => {
-                            const aFav = favoriteSymbols.includes(a.symbol) ? 1 : 0;
-                            const bFav = favoriteSymbols.includes(b.symbol) ? 1 : 0;
-                            if (aFav !== bFav) return bFav - aFav;
-                            return b.score - a.score;
-                        });
-
-                        radarTbody.innerHTML = sortedRadar.map(r => {
-                            const isFav = favoriteSymbols.includes(r.symbol);
-                            return `
-                                <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="currentSymbol='${r.symbol}'; switchTab('terminal'); loadChartCandles('${r.symbol}', null, false);">
-                                    <td class="text-center"><button onclick="toggleFavorite('${r.symbol}', event)" class="text-base">${isFav ? '⭐' : '☆'}</button></td>
-                                    <td class="py-2 font-bold text-white">${r.symbol}</td><td class="font-mono">$${r.price}</td>
-                                    <td class="font-bold ${r.trend === 'LONG' ? 'text-emerald-400' : 'text-red-400'}">${r.trend}</td>
-                                    <td class="font-mono">${r.rsi}</td><td class="font-mono text-amber-400">${r.vol_ratio}x</td>
-                                    <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${r.score >= 75 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${r.score} Puan</span></td>
-                                </tr>`;
-                        }).join('');
+                        radarTbody.innerHTML = [...data.radar_symbols].sort((a,b) => b.score - a.score).map(r => `
+                            <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="currentSymbol='${r.symbol}'; switchTab('terminal'); loadChartCandles('${r.symbol}', null, false);">
+                                <td class="py-2 font-bold text-white">${r.symbol}</td><td class="font-mono">$${r.price}</td>
+                                <td class="font-bold ${r.trend === 'LONG' ? 'text-emerald-400' : 'text-red-400'}">${r.trend}</td>
+                                <td class="font-mono">${r.rsi}</td><td class="font-mono text-amber-400">${r.vol_ratio}x</td>
+                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${r.score >= 75 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${r.score} Puan</span></td>
+                            </tr>`).join('');
                     }
 
                     if (currentSymbol) loadChartCandles(currentSymbol, selectedPos, true);
