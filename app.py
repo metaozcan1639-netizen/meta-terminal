@@ -1021,9 +1021,8 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 2: DUYARLILIK & ENDEKSLER (Tam İstediğin 4 Satırlık Kurumsal Düzen) -->
+        <!-- SAYFA 2: DUYARLILIK & ENDEKSLER -->
         <div id="page-sentiment" class="hidden space-y-3">
-            <!-- Satır 1 -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div class="card p-4 rounded-xl flex flex-col items-center justify-center text-center">
                     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">Kripto Korku ve Açgözlülük</div>
@@ -1059,7 +1058,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- Satır 2 -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div class="card p-4 rounded-xl space-y-2">
                     <div class="text-xs text-slate-400 uppercase tracking-wider">💥 24S Toplam Likidasyonlar</div>
@@ -1089,7 +1087,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- Satır 3 -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div class="card p-4 rounded-xl space-y-2">
                     <div class="text-xs text-slate-400 uppercase tracking-wider">⚡ Emir Defteri (Bid/Ask)</div>
@@ -1129,7 +1126,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- Satır 4 -->
             <div class="card p-4 rounded-xl space-y-2">
                 <div class="flex justify-between text-xs text-slate-400 uppercase font-bold">
                     <span>VADELİ PİYASA LONG / SHORT ORANI</span>
@@ -1171,10 +1167,6 @@ async def get_dashboard(request: Request):
                     <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
                         <span class="text-white font-medium">⚡ SEC, yeni kurumsal ETF başvuru dosyaları için inceleme sürecini başlattı.</span>
                         <span class="text-[10px] text-slate-500 font-mono">2 dk önce</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                        <span class="text-white font-medium">🐋 Balina cüzdanlarından türev borsalara son 1 saatte yoğun USDT girişi gözlendi.</span>
-                        <span class="text-[10px] text-slate-500 font-mono">14 dk önce</span>
                     </div>
                 </div>
             </div>
@@ -1377,7 +1369,10 @@ async def get_dashboard(request: Request):
             let equityChart = null;
             let equitySeries = null;
 
-            let currentSymbol = localStorage.getItem("selected_sym") || "BTC/USDT:USDT";
+            // Her açılışta veya önbellek sıfırlandığında kesinlikle BTC ile başla
+            let currentSymbol = "BTC/USDT:USDT";
+            localStorage.setItem("selected_sym", "BTC/USDT:USDT");
+
             let currentTimeframe = "5";
             let currentPnlFilter = "today";
             let currentStatsFilter = "today";
@@ -1429,7 +1424,6 @@ async def get_dashboard(request: Request):
                     const tp1Height = Math.abs(tp1Y - entryY);
                     ctx.fillStyle = 'rgba(74, 222, 128, 0.25)';
                     ctx.fillRect(boxStartX, tp1Top, boxWidth, tp1Height);
-                    ctx.strokeStyle = 'rgba(74, 222, 128, 0.6)';
                     ctx.strokeRect(boxStartX, tp1Top, boxWidth, tp1Height);
                 }
 
@@ -1438,7 +1432,6 @@ async def get_dashboard(request: Request):
                     const tp2Height = Math.abs(tp2Y - tp1Y);
                     ctx.fillStyle = 'rgba(4, 120, 87, 0.40)';
                     ctx.fillRect(boxStartX, tp2Top, boxWidth, tp2Height);
-                    ctx.strokeStyle = 'rgba(4, 120, 87, 0.8)';
                     ctx.strokeRect(boxStartX, tp2Top, boxWidth, tp2Height);
                 }
             }
