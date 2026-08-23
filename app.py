@@ -1260,7 +1260,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- GÜNCELLENEN ÖZET KARTLARI (Toplam PnL ve Yüzde Oranı Eklendi) -->
             <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
                 <div class="card p-3 rounded-xl flex justify-between items-center">
                     <span class="text-xs text-slate-400 uppercase">Toplam Açık Pozisyon:</span> <span id="man-total-pos" class="text-sm font-bold font-mono text-white">0 Adet</span>
@@ -1394,17 +1393,54 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 8: GÜNLÜK (JOURNAL) -->
+        <!-- SAYFA 8: GÜNLÜK (JOURNAL) - GELİŞTİRİLDİ -->
         <div id="page-journal" class="hidden space-y-3">
-            <div class="card p-4 rounded-xl">
-                <h2 class="text-xs font-semibold text-sky-400 mb-3 uppercase">📖 Kapanan İşlem Günlüğü</h2>
-                <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
-                    <table class="w-full text-left text-xs">
-                        <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
-                            <tr><th class="pb-2">ZAMAN</th><th class="pb-2">PARİTE</th><th class="pb-2">YÖN</th><th class="pb-2">GİRİŞ / ÇIKIŞ</th><th class="pb-2">NET PnL ($)</th><th class="pb-2">KAPANIŞ NEDENİ</th></tr>
-                        </thead>
-                        <tbody id="journal-table" class="divide-y divide-slate-800/50"></tbody>
-                    </table>
+            <!-- Üst Mini Özet Kartları -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div class="card p-3 rounded-xl flex justify-between items-center">
+                    <span class="text-xs text-slate-400 uppercase">Toplam İşlem Sayısı:</span> <span id="journal-total-trades" class="text-sm font-bold font-mono text-white">0</span>
+                </div>
+                <div class="card p-3 rounded-xl flex justify-between items-center">
+                    <span class="text-xs text-slate-400 uppercase">Kazanma Oranı (Win Rate):</span> <span id="journal-winrate" class="text-sm font-bold font-mono text-sky-400">%0.0</span>
+                </div>
+                <div class="card p-3 rounded-xl flex justify-between items-center">
+                    <span class="text-xs text-slate-400 uppercase">Toplam Net PnL:</span> <span id="journal-total-pnl" class="text-sm font-bold font-mono text-emerald-400">$0.00</span>
+                </div>
+            </div>
+
+            <!-- Arama ve Filtreleme Çubuğu -->
+            <div class="card p-3 rounded-xl flex flex-wrap gap-3 items-center justify-between">
+                <input id="journal-search" type="text" placeholder="Parite ara (örn: BTC, ETH)..." oninput="renderJournalTable()" class="bg-slate-900 border border-slate-700 text-white rounded px-3 py-1.5 text-xs outline-none w-64 font-mono">
+                <div class="flex space-x-2 text-xs">
+                    <button onclick="setJournalFilter('ALL')" id="j-filter-ALL" class="px-3 py-1 rounded bg-emerald-600 text-black font-bold transition">Tümü</button>
+                    <button onclick="setJournalFilter('LONG')" id="j-filter-LONG" class="px-3 py-1 rounded bg-slate-800 text-slate-300 hover:text-white transition">Long</button>
+                    <button onclick="setJournalFilter('SHORT')" id="j-filter-SHORT" class="px-3 py-1 rounded bg-slate-800 text-slate-300 hover:text-white transition">Short</button>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                <!-- Tablo Alanı -->
+                <div class="card p-4 rounded-xl lg:col-span-2">
+                    <h2 class="text-xs font-semibold text-sky-400 mb-3 uppercase">📖 Kapanan İşlem Günlüğü (Detay için satıra tıkla)</h2>
+                    <div class="overflow-x-auto max-h-[420px] overflow-y-auto">
+                        <table class="w-full text-left text-xs">
+                            <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
+                                <tr><th class="pb-2">ZAMAN</th><th class="pb-2">PARİTE</th><th class="pb-2">YÖN</th><th class="pb-2">GİRİŞ / ÇIKIŞ</th><th class="pb-2">NET PnL ($)</th><th class="pb-2">KAPANIŞ NEDENİ</th></tr>
+                            </thead>
+                            <tbody id="journal-table" class="divide-y divide-slate-800/50"></tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Sağ Taraf: Seçilen İşlemin Gerekçe Detayı -->
+                <div class="card p-4 rounded-xl flex flex-col justify-between h-[480px]">
+                    <div>
+                        <h2 class="text-xs font-semibold text-emerald-400 mb-2 uppercase tracking-wider">🔍 İşlem Açılış Gerekçeleri</h2>
+                        <div id="journal-detail-box" class="space-y-2 text-xs">
+                            <div class="text-slate-500 italic">İncelemek için tablodan bir işleme tıklayın...</div>
+                        </div>
+                    </div>
+                    <div class="text-[10px] text-slate-500 text-center border-t border-slate-800 pt-2">Meta Quant Journal Intelligence</div>
                 </div>
             </div>
         </div>
@@ -1435,6 +1471,8 @@ async def get_dashboard(request: Request):
             let currentTimeframe = "5";
             let currentPnlFilter = "today";
             let currentStatsFilter = "today";
+            let journalDirectionFilter = "ALL";
+            let selectedJournalItem = null;
             let selectedPos = null;
             let priceLines = [];
             let lastPositions = [];
@@ -1520,6 +1558,91 @@ async def get_dashboard(request: Request):
                 } else if (tabId === 'excel') {
                     loadReportsList();
                     loadArchivePreview();
+                } else if (tabId === 'journal') {
+                    renderJournalTable();
+                }
+            }
+
+            function setJournalFilter(dir) {
+                journalDirectionFilter = dir;
+                ['ALL', 'LONG', 'SHORT'].forEach(d => {
+                    const btn = document.getElementById(`j-filter-${d}`);
+                    if (btn) {
+                        if (d === dir) {
+                            btn.className = "px-3 py-1 rounded bg-emerald-600 text-black font-bold transition";
+                        } else {
+                            btn.className = "px-3 py-1 rounded bg-slate-800 text-slate-300 hover:text-white transition";
+                        }
+                    }
+                });
+                renderJournalTable();
+            }
+
+            function selectJournalItem(index) {
+                const searchTxt = document.getElementById('journal-search').value.toLowerCase();
+                let filtered = tradeHistoryCache.filter(h => {
+                    const matchSymbol = h.symbol.toLowerCase().includes(searchTxt);
+                    const matchDir = journalDirectionFilter === 'ALL' || h.direction === journalDirectionFilter;
+                    return matchSymbol && matchDir;
+                });
+                
+                selectedJournalItem = filtered[index];
+                if (!selectedJournalItem) return;
+
+                renderJournalTable();
+                
+                const box = document.getElementById('journal-detail-box');
+                box.innerHTML = `
+                    <div class="bg-slate-900/80 p-2.5 rounded border border-slate-800 space-y-2">
+                        <div class="flex justify-between items-center"><span class="font-bold text-white text-sm">${selectedJournalItem.symbol}</span><span class="px-2 py-0.5 rounded text-[10px] font-bold ${selectedJournalItem.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${selectedJournalItem.direction}</span></div>
+                        <div class="text-[11px] text-slate-400">Kapanış Nedeni: <b class="text-sky-300">${selectedJournalItem.close_reason}</b></div>
+                        <div class="text-[11px] text-slate-400">Süre: <b class="text-white">${selectedJournalItem.duration_mins || 1} Dakika</b></div>
+                        <div class="text-[11px] text-slate-400 pt-1 border-t border-slate-800 uppercase font-bold text-emerald-400">Giriş Gerekçeleri:</div>
+                        <div class="space-y-1">
+                            ${(selectedJournalItem.open_reasons || []).map(r => `<div class="bg-black/40 p-1.5 rounded border border-slate-800 text-[11px] text-slate-300">✓ ${r}</div>`).join('')}
+                        </div>
+                    </div>
+                `;
+            }
+
+            function renderJournalTable() {
+                const searchTxt = document.getElementById('journal-search') ? document.getElementById('journal-search').value.toLowerCase() : '';
+                let filtered = tradeHistoryCache.filter(h => {
+                    const matchSymbol = h.symbol.toLowerCase().includes(searchTxt);
+                    const matchDir = journalDirectionFilter === 'ALL' || h.direction === journalDirectionFilter;
+                    return matchSymbol && matchDir;
+                });
+
+                // Özet Kartları Güncelle
+                const totalCount = tradeHistoryCache.length;
+                const wins = tradeHistoryCache.filter(h => h.realized_pnl > 0).length;
+                const winRate = totalCount > 0 ? ((wins / totalCount) * 100).toFixed(1) : "0.0";
+                const netPnl = tradeHistoryCache.reduce((acc, h) => acc + h.realized_pnl, 0);
+
+                document.getElementById('journal-total-trades').innerText = totalCount;
+                document.getElementById('journal-winrate').innerText = `%${winRate}`;
+                const jPnlEl = document.getElementById('journal-total-pnl');
+                jPnlEl.innerText = `${netPnl >= 0 ? '+' : ''}$${netPnl.toFixed(2)}`;
+                jPnlEl.className = `text-sm font-bold font-mono ${netPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+
+                const journalTbody = document.getElementById('journal-table');
+                if (journalTbody) {
+                    journalTbody.innerHTML = filtered.map((h, idx) => {
+                        const isSelected = selectedJournalItem && selectedJournalItem.symbol === h.symbol && selectedJournalItem.close_timestamp === h.close_timestamp;
+                        let badgeClass = "bg-sky-500/20 text-sky-400 border-sky-500/40";
+                        if (h.close_reason.includes("Stop-Loss")) badgeClass = "bg-rose-500/20 text-rose-400 border-rose-500/40";
+                        else if (h.close_reason.includes("TP2")) badgeClass = "bg-emerald-500/20 text-emerald-400 border-emerald-500/40";
+
+                        return `
+                            <tr class="hover:bg-slate-800/60 cursor-pointer ${isSelected ? 'bg-slate-800/80 border-l-2 border-emerald-500' : ''}" onclick="selectJournalItem(${idx})">
+                                <td class="py-2 font-mono text-slate-400">${h.close_time}</td>
+                                <td class="font-bold text-white">${h.symbol}</td>
+                                <td class="${h.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${h.direction}</td>
+                                <td class="font-mono text-slate-300">${h.entry} ➔ ${h.close_price}</td>
+                                <td class="font-bold font-mono ${h.realized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${h.realized_pnl >= 0 ? '+' : ''}$${h.realized_pnl.toFixed(2)}</td>
+                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold border ${badgeClass}">${h.close_reason}</span></td>
+                            </tr>`;
+                    }).join('') || '<tr><td colspan="6" class="py-4 text-center text-slate-500 italic">Eşleşen kayıt bulunamadı...</td></tr>';
                 }
             }
 
@@ -2090,6 +2213,7 @@ async def get_dashboard(request: Request):
                     recalculatePnlMetrics();
                     recalculateAdvancedStats();
                     loadArchivePreview();
+                    renderJournalTable();
 
                     if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) equitySeries.setData(data.equity_curve);
                     document.getElementById('log-box').innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
@@ -2128,18 +2252,6 @@ async def get_dashboard(request: Request):
                                     <button onclick="manualClosePos('${p.symbol}')" class="bg-rose-600 hover:bg-rose-500 px-2 py-1 rounded text-[10px] text-white font-bold">Kapat</button>
                                 </td>
                             </tr>`).join('') || '<tr><td colspan="8" class="py-3 text-slate-500 italic">Açık pozisyon yok...</td></tr>';
-                    }
-
-                    const journalTbody = document.getElementById('journal-table');
-                    if (journalTbody) {
-                        journalTbody.innerHTML = data.trade_history.map(h => `
-                            <tr class="hover:bg-slate-800/40">
-                                <td class="py-2 font-mono text-slate-400">${h.close_time}</td><td class="font-bold text-white">${h.symbol}</td>
-                                <td class="${h.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${h.direction}</td>
-                                <td class="font-mono">${h.entry} ➔ ${h.close_price}</td>
-                                <td class="font-bold ${h.realized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">${h.realized_pnl >= 0 ? '+' : ''}$${h.realized_pnl.toFixed(2)}</td>
-                                <td class="text-[10px] text-sky-300 font-semibold">${h.close_reason}</td>
-                            </tr>`).join('') || '<tr><td colspan="6" class="py-4 text-center text-slate-500 italic">Kayıt yok...</td></tr>';
                     }
 
                     const radarTbody = document.getElementById('radar-table');
