@@ -1369,7 +1369,7 @@ async def get_dashboard(request: Request):
             let equityChart = null;
             let equitySeries = null;
 
-            // Her açılışta veya önbellek sıfırlandığında kesinlikle BTC ile başla
+            // Her açılışta kesinlikle BTC ile başla
             let currentSymbol = "BTC/USDT:USDT";
             localStorage.setItem("selected_sym", "BTC/USDT:USDT");
 
@@ -1524,7 +1524,16 @@ async def get_dashboard(request: Request):
                     layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
                     grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
                     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-                    timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#1e293b' },
+                    timeScale: { 
+                        timeVisible: true, 
+                        secondsVisible: false, 
+                        borderColor: '#1e293b',
+                        // Türkiye Saati (+3) ofset ayarı
+                        tickMarkFormatter: (time, tickMarkType, locale) => {
+                            const d = new Date(time * 1000);
+                            return d.toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
+                        }
+                    },
                     rightPriceScale: { autoScale: true, scaleMargins: { top: 0.15, bottom: 0.15 } }
                 });
 
