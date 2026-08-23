@@ -494,10 +494,9 @@ async def market_scanner_loop():
                     pnl_raw = ((curr_price - pos['entry']) / pos['entry']) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'])
                     pos['unrealized_pnl'] = round(pos['active_size'] * pnl_raw, 2)
 
-                    # Trailing Stop Kontrolü (Eğer aktifse ve fiyat kâra gittiyse stopu arkasından sürükle)
                     if pos.get("trailing_active"):
                         if direction == "LONG" and curr_price > pos['entry']:
-                            new_sl = curr_price * 0.992 # %0.8 geriden takip et
+                            new_sl = curr_price * 0.992
                             if new_sl > pos['sl']:
                                 pos['sl'] = new_sl
                         elif direction == "SHORT" and curr_price < pos['entry']:
@@ -618,11 +617,17 @@ async def update_settings(payload: SettingsPayload):
     system_state["margin_mode"] = payload.margin_mode
     system_state["max_open_positions"] = payload.max_open_positions
     system_state["max_total_margin_pct"] = payload.max_total_margin_pct
+    
+    pos_limit_str = "Sınırsız" if payload.max_open_positions == 0 else f"{payload.max_open_positions} Adet"
+    mode_str = "İzole" if payload.margin_mode == "ISOLATED" else "Cross"
+    add_log(f"⚙️ AYARLAR GÜNCELLENDİ: Kasa: ${payload.total_balance} | Mod: {mode_str} | Risk: %{payload.risk_pct} | Kaldıraç: {payload.leverage}x | Max Poz: {pos_limit_str} | Max Marjin: %{payload.max_total_margin_pct}")
     return {"status": "success"}
 
 @app.post("/api/update_api")
 async def update_api(payload: ApiPayload):
     system_state["api_settings"] = payload.dict()
+    status_str = "AKTİF" if payload.auto_trade else "DEVRE DIŞI"
+    add_log(f"🔑 API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | Otomatik Emir: {status_str}")
     return {"status": "success"}
 
 @app.post("/api/manual/close_position")
@@ -686,7 +691,7 @@ async def manual_close_all():
     for pos in list(system_state["active_positions"]):
         curr_price = pos.get('current_price', pos['entry'])
         direction = pos['direction']
-        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
+        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
         system_state["total_balance"] += realized_pnl
 
@@ -733,7 +738,7 @@ async def manual_toggle_trailing(payload: ClosePosPayload):
     target = next((p for p in system_state["active_positions"] if p['symbol'] == payload.symbol), None)
     if target:
         target['trailing_active'] = not target.get('trailing_active', False)
-        status_str = "Aktif" "Devre Dışı" if target['trailing_active'] else "Pasif"
+        status_str = "Aktif" if target['trailing_active'] else "Pasif"
         add_log(f"🔄 TRAILING STOP: {target['symbol']} için {status_str} yapıldı.")
         return {"status": "success"}
     return {"status": "error"}
@@ -1195,7 +1200,7 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 4: MANUEL MÜDAHALE (GELİŞMİŞ KONTROL MASASI) -->
+        <!-- SAYFA 4: MANUEL MÜDAHALE -->
         <div id="page-manual" class="hidden space-y-3">
             <div class="card p-4 rounded-xl flex flex-wrap justify-between items-center gap-3 border-rose-500/30">
                 <div>
@@ -1212,7 +1217,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- Risk ve Marjin Özeti Paneli -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div class="card p-3 rounded-xl flex justify-between items-center">
                     <span class="text-xs text-slate-400 uppercase">Toplam Açık Pozisyon:</span>
@@ -1495,6 +1499,7 @@ async def get_dashboard(request: Request):
             let equityChart = null;
             let equitySeries = null;
 
+            // İlk açılışta BTC paritesi zorunlu olarak yüklenir
             let currentSymbol = localStorage.getItem("selected_sym") || "BTC/USDT:USDT";
             let currentTimeframe = "5";
             let currentPnlFilter = "today";
@@ -2129,6 +2134,7 @@ async def get_dashboard(request: Request):
                 updateDashboard();
             }
 
+            // Düzeltilmiş Kaydet Fonksiyonu: Form verilerini inputlardan tam okuyarak gönderir
             async function saveSettings() {
                 const total_balance = parseFloat(document.getElementById('input-balance').value);
                 const risk_pct = parseFloat(document.getElementById('input-risk').value);
@@ -2137,12 +2143,17 @@ async def get_dashboard(request: Request):
                 const max_open_positions = parseInt(document.getElementById('input-max-pos').value);
                 const max_total_margin_pct = parseFloat(document.getElementById('input-max-margin-pct').value);
 
-                await fetch('/api/update_settings', {
+                const res = await fetch('/api/update_settings', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({total_balance, risk_pct, leverage, margin_mode, max_open_positions, max_total_margin_pct})
                 });
-                updateDashboard();
+                if (res.ok) {
+                    alert("Ayarlar ve Çarpanlar Başarıyla Kaydedildi!");
+                    updateDashboard();
+                } else {
+                    alert("Ayarlar kaydedilirken bir hata oluştu.");
+                }
             }
 
             async function saveApiSettings() {
@@ -2249,7 +2260,6 @@ async def get_dashboard(request: Request):
                     const usedMarginElem = document.getElementById('stat-used-margin');
                     if (usedMarginElem) usedMarginElem.innerText = `$${totalUsedMargin.toFixed(1)} (%${usedPct})`;
 
-                    // Manuel Kontrol Sayfası Üst Özet Paneli Güncellemesi
                     document.getElementById('man-total-pos').innerText = `${data.active_positions.length} Adet`;
                     document.getElementById('man-total-margin').innerText = `$${totalUsedMargin.toFixed(2)}`;
                     document.getElementById('man-total-risk').innerText = `$${totalRiskAmount.toFixed(2)}`;
@@ -2363,6 +2373,7 @@ async def get_dashboard(request: Request):
             }
 
             initCharts();
+            // Sayfa açıldığında doğrudan BTC grafiği ile başla
             loadChartCandles(currentSymbol, null, false);
             setInterval(updateDashboard, 2000);
         </script>
