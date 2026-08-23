@@ -2017,7 +2017,6 @@ async def get_dashboard(request: Request):
                             document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
                             document.getElementById('bar-close').innerText = `$${lastCandle.close.toFixed(dec)}`;
                             
-                            // DÜZELTME 1: Parite değiştiğinde Y ekseni ölçeğini sıfırlayıp oto scale yapıyoruz
                             if (chart) {
                                 chart.priceScale('right').applyOptions({ autoScale: true });
                             }
@@ -2059,14 +2058,23 @@ async def get_dashboard(request: Request):
                 if (!pos) return;
                 const p = pos.entry < 1 ? 6 : 4;
                 const modeLabel = pos.margin_mode === "ISOLATED" ? "İzole" : "Cross";
+                
+                // TP1 alındı mı kontrolü
+                const tp1StatusHtml = pos.tp1_hit 
+                    ? `<div class="bg-emerald-950/60 border border-emerald-800 p-1.5 rounded text-[11px] text-emerald-400 font-bold mb-2">⚡ TP1 Alındı (%50 Kâr Realize Edildi - Stop Giriş Boyuna Çekildi)</div>` 
+                    : ``;
+
                 document.getElementById('active-rationale').innerHTML = `
                     <div class="flex justify-between items-center mb-2"><span class="font-bold text-base text-white">${pos.symbol}</span><span class="px-2 py-0.5 rounded text-xs font-bold ${pos.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${pos.direction}</span></div>
+                    ${tp1StatusHtml}
                     <div class="space-y-1 text-slate-300">${pos.reasons.map(r => `<div class="bg-slate-900/60 p-1.5 rounded border border-slate-800">✓ ${r}</div>`).join('')}</div>
-                    <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1">
-                        <div class="text-slate-400">Giriş Saati: <span class="text-white font-bold">${pos.open_time}</span></div>
-                        <div class="text-slate-400">Mod: <span class="text-white font-bold">${pos.leverage}x ${modeLabel} ($${pos.margin})</span></div>
-                        <div class="text-red-400">SL: <span class="font-mono">${pos.sl.toFixed(p)}</span></div>
-                        <div class="text-emerald-400">TP2: <span class="font-mono">${pos.tp2.toFixed(p)}</span></div>
+                    <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1 font-mono">
+                        <div class="text-slate-400">Giriş Saati: <span class="text-white font-bold font-sans">${pos.open_time}</span></div>
+                        <div class="text-slate-400">Mod: <span class="text-white font-bold font-sans">${pos.leverage}x ${modeLabel} ($${pos.margin})</span></div>
+                        <div class="text-emerald-800 font-bold">TP2: <span class="text-emerald-400">${pos.tp2.toFixed(p)}</span></div>
+                        <div class="text-emerald-600 font-bold">TP1: <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>
+                        <div class="text-sky-400 font-bold">Giriş: <span>${pos.entry}</span></div>
+                        <div class="text-red-400 font-bold">SL: <span>${pos.sl.toFixed(p)}</span></div>
                     </div>`;
             }
 
@@ -2212,6 +2220,14 @@ async def get_dashboard(request: Request):
                     recalculateAdvancedStats();
                     loadArchivePreview();
                     renderJournalTable();
+
+                    if (selectedPos) {
+                        const updatedSelected = data.active_positions.find(p => p.symbol === selectedPos.symbol);
+                        if (updatedSelected) {
+                            selectedPos = updatedSelected;
+                            renderRationale(selectedPos);
+                        }
+                    }
 
                     if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) equitySeries.setData(data.equity_curve);
                     document.getElementById('log-box').innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
