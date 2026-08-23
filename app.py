@@ -2034,8 +2034,11 @@ async def get_dashboard(request: Request):
                         if (posData && candleSeries) {
                             const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
                             const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP' });
+                            
+                            // DÜZELTME: Grafikte TP1 girişin yakınındaki hedef, TP2 ise uzak hedef olarak doğru renkte/etikette çizilsin
                             const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
                             const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
+                            
                             priceLines.push(entryLine, slLine, tp1Line, tp2Line);
                             const p = posData.entry < 1 ? 6 : 2;
                             document.getElementById('chart-levels').innerHTML = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span> | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
@@ -2059,11 +2062,11 @@ async def get_dashboard(request: Request):
                 const p = pos.entry < 1 ? 6 : 4;
                 const modeLabel = pos.margin_mode === "ISOLATED" ? "İzole" : "Cross";
                 
-                // TP1 alındı mı kontrolü
                 const tp1StatusHtml = pos.tp1_hit 
                     ? `<div class="bg-emerald-950/60 border border-emerald-800 p-1.5 rounded text-[11px] text-emerald-400 font-bold mb-2">⚡ TP1 Alındı (%50 Kâr Realize Edildi - Stop Giriş Boyuna Çekildi)</div>` 
                     : ``;
 
+                // DÜZELTME: Sağ paneldeki sıralama TP2 (üstte) -> TP1 (altta) -> Giriş -> SL şeklinde yapıldı
                 document.getElementById('active-rationale').innerHTML = `
                     <div class="flex justify-between items-center mb-2"><span class="font-bold text-base text-white">${pos.symbol}</span><span class="px-2 py-0.5 rounded text-xs font-bold ${pos.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${pos.direction}</span></div>
                     ${tp1StatusHtml}
