@@ -1393,9 +1393,8 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 8: GÜNLÜK (JOURNAL) - GELİŞTİRİLDİ -->
+        <!-- SAYFA 8: GÜNLÜK (JOURNAL) -->
         <div id="page-journal" class="hidden space-y-3">
-            <!-- Üst Mini Özet Kartları -->
             <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                 <div class="card p-3 rounded-xl flex justify-between items-center">
                     <span class="text-xs text-slate-400 uppercase">Toplam İşlem Sayısı:</span> <span id="journal-total-trades" class="text-sm font-bold font-mono text-white">0</span>
@@ -1408,7 +1407,6 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- Arama ve Filtreleme Çubuğu -->
             <div class="card p-3 rounded-xl flex flex-wrap gap-3 items-center justify-between">
                 <input id="journal-search" type="text" placeholder="Parite ara (örn: BTC, ETH)..." oninput="renderJournalTable()" class="bg-slate-900 border border-slate-700 text-white rounded px-3 py-1.5 text-xs outline-none w-64 font-mono">
                 <div class="flex space-x-2 text-xs">
@@ -1419,7 +1417,6 @@ async def get_dashboard(request: Request):
             </div>
 
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
-                <!-- Tablo Alanı -->
                 <div class="card p-4 rounded-xl lg:col-span-2">
                     <h2 class="text-xs font-semibold text-sky-400 mb-3 uppercase">📖 Kapanan İşlem Günlüğü (Detay için satıra tıkla)</h2>
                     <div class="overflow-x-auto max-h-[420px] overflow-y-auto">
@@ -1432,7 +1429,6 @@ async def get_dashboard(request: Request):
                     </div>
                 </div>
 
-                <!-- Sağ Taraf: Seçilen İşlemin Gerekçe Detayı -->
                 <div class="card p-4 rounded-xl flex flex-col justify-between h-[480px]">
                     <div>
                         <h2 class="text-xs font-semibold text-emerald-400 mb-2 uppercase tracking-wider">🔍 İşlem Açılış Gerekçeleri</h2>
@@ -1548,8 +1544,6 @@ async def get_dashboard(request: Request):
 
                 if (tabId === 'terminal') {
                     setTimeout(() => {
-                        if (chart) chart.timeScale().fitContent();
-                        if (equityChart) equityChart.timeScale().fitContent();
                         resizeCanvas();
                         drawPositionBoxes();
                     }, 50);
@@ -1613,7 +1607,6 @@ async def get_dashboard(request: Request):
                     return matchSymbol && matchDir;
                 });
 
-                // Özet Kartları Güncelle
                 const totalCount = tradeHistoryCache.length;
                 const wins = tradeHistoryCache.filter(h => h.realized_pnl > 0).length;
                 const winRate = totalCount > 0 ? ((wins / totalCount) * 100).toFixed(1) : "0.0";
@@ -2023,6 +2016,11 @@ async def get_dashboard(request: Request):
                             document.getElementById('bar-high').innerText = `$${lastCandle.high.toFixed(dec)}`;
                             document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
                             document.getElementById('bar-close').innerText = `$${lastCandle.close.toFixed(dec)}`;
+                            
+                            // DÜZELTME 1: Parite değiştiğinde Y ekseni ölçeğini sıfırlayıp oto scale yapıyoruz
+                            if (chart) {
+                                chart.priceScale('right').applyOptions({ autoScale: true });
+                            }
                         }
                         resizeCanvas();
                         drawPositionBoxes();
