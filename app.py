@@ -29,8 +29,6 @@ os.makedirs(CSV_DIR, exist_ok=True)
 system_state = {
     "initial_balance": 1000.0,
     "total_balance": 1000.0,
-    "locked_margin": 0.0,
-    "free_balance": 1000.0,
     "peak_balance": 1000.0,
     "max_drawdown_pct": 0.0,
     "risk_pct": 5.0,
@@ -42,7 +40,6 @@ system_state = {
     "daily_loss_locked": False,
     "daily_start_balance": 1000.0,
     "last_day_reset": get_now_datetime().strftime("%Y-%m-%d"),
-    "bot_trading_active": True,
     "btc_regime": "YÜKLENİYOR...",
     "btc_15m_change": 0.0,
     "btc_shock_lock": False,
@@ -88,10 +85,6 @@ EXCLUDED_KEYWORDS = [
     'TBT', 'TLT', 'PDD', 'NIO', 'BILI', 'LI', 'XPEV', 'MSTR', 'MARA', 'RIOT', 'CLSK',
     'CASHCAT', 'WLFI', 'TRUMP', 'MELANIA', 'PEPE2', 'SHIB2'
 ]
-
-def update_wallet_pools():
-    system_state["locked_margin"] = round(sum(p['margin'] for p in system_state["active_positions"]), 2)
-    system_state["free_balance"] = round(max(0.0, system_state["total_balance"] - system_state["locked_margin"]), 2)
 
 def translate_fng(classification_en):
     mapping = {
@@ -246,7 +239,7 @@ async def update_btc_metrics(exchange):
 
 async def analyze_symbol(exchange, symbol):
     try:
-        if system_state["daily_loss_locked"] or not system_state["bot_trading_active"]:
+        if system_state["daily_loss_locked"]:
             return None
 
         base = symbol.split('/')[0].upper()
@@ -276,6 +269,7 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
+        # 1. KATMAN: Büyük Resim / Yön Filtresi (1H & 4H Trend Uyumu)
         trend_bull = (c_1h['close'] > c_1h['ema20'] and c_1h['ema20'] > c_1h['ema50']) and (c_4h['close'] > c_4h['ema50'])
         trend_bear = (c_1h['close'] < c_1h['ema20'] and c_1h['ema20'] < c_1h['ema50']) and (c_4h['close'] < c_4h['ema50'])
 
@@ -290,6 +284,7 @@ async def analyze_symbol(exchange, symbol):
         else:
             return None
 
+        # 2. KATMAN: Akıllı Geri Çekilme (Pullback / Discount Alanı)
         dist_to_ema20 = abs(c_5m['close'] - c_5m['ema20']) / c_5m['close']
         is_pullback = dist_to_ema20 <= 0.012
 
@@ -299,6 +294,7 @@ async def analyze_symbol(exchange, symbol):
         else:
             return None
 
+        # 3. KATMAN: Hacim ve Momentum Patlaması (Tetikleyici)
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
         strong_momentum = False
 
@@ -342,16 +338,6 @@ async def analyze_symbol(exchange, symbol):
 
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
-
-        # Binance Kaldıraç Koruma Kalkanı (exchangeInfo)
-        effective_leverage = system_state["leverage"]
-        try:
-            market_info = exchange.markets.get(symbol, {})
-            max_lev_allowed = market_info.get('limits', {}).get('leverage', {}).get('max', 50)
-            if effective_leverage > max_lev_allowed:
-                effective_leverage = int(max_lev_allowed)
-        except Exception:
-            pass
 
         if direction == "LONG":
             sl = float(df_5m['low'].iloc[-12:].min() - (2.2 * atr))
@@ -397,7 +383,7 @@ async def analyze_symbol(exchange, symbol):
             "pos_size": pos_size,
             "margin": margin,
             "max_loss": max_loss,
-            "leverage": effective_leverage,
+            "leverage": system_state["leverage"],
             "margin_mode": system_state["margin_mode"],
             "tp1_hit": False,
             "trailing_active": False,
@@ -437,7 +423,6 @@ async def market_scanner_loop():
             })
 
             check_daily_drawdown()
-            update_wallet_pools()
             await update_btc_metrics(exchange)
             await fetch_fear_greed()
 
@@ -470,14 +455,12 @@ async def market_scanner_loop():
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
 
-                            # Sıkı Marjin Tavanı Kilidi Kontrolü
                             current_total_margin = sum(p['margin'] for p in system_state["active_positions"])
                             allowed_margin = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
-                            if (current_total_margin + sig['margin']) > allowed_margin or sig['margin'] > system_state["free_balance"]:
+                            if (current_total_margin + sig['margin']) > allowed_margin:
                                 continue
 
                             system_state["active_positions"].append(sig)
-                            update_wallet_pools()
                             mode_label = "İzole" if sig['margin_mode'] == "ISOLATED" else "Cross"
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['score']} Puan | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}")
 
@@ -520,7 +503,6 @@ async def market_scanner_loop():
                             partial_pnl = round((pos['pos_size'] * 0.5) * pnl_raw, 2)
                             pos['active_size'] = pos['pos_size'] * 0.5
                             system_state["total_balance"] += partial_pnl
-                            update_wallet_pools()
                             now_ts = int(get_now_datetime().timestamp())
                             system_state["equity_curve"].append({"time": now_ts, "value": round(system_state["total_balance"], 2)})
                             add_log(f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi.")
@@ -529,7 +511,6 @@ async def market_scanner_loop():
                         pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
                         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
                         system_state["total_balance"] += realized_pnl
-                        update_wallet_pools()
 
                         now_dt = get_now_datetime()
                         duration_mins = max(1, int((now_dt.timestamp() - pos.get('open_timestamp', now_dt.timestamp())) / 60))
@@ -551,7 +532,6 @@ async def market_scanner_loop():
                         }
                         system_state["trade_history"].insert(0, history_item)
                         system_state["active_positions"].remove(pos)
-                        update_wallet_pools()
                         add_log(f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}")
                         check_daily_drawdown()
                 except Exception:
@@ -621,7 +601,6 @@ async def update_settings(payload: SettingsPayload):
     system_state["margin_mode"] = payload.margin_mode
     system_state["max_open_positions"] = payload.max_open_positions
     system_state["max_total_margin_pct"] = payload.max_total_margin_pct
-    update_wallet_pools()
     
     pos_limit_str = "Sınırsız" if payload.max_open_positions == 0 else f"{payload.max_open_positions} Adet"
     mode_str = "İzole" if payload.margin_mode == "ISOLATED" else "Cross"
@@ -635,13 +614,6 @@ async def update_api(payload: ApiPayload):
     add_log(f"🔑 API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | Otomatik Emir: {status_str}")
     return {"status": "success"}
 
-@app.post("/api/toggle_bot_trading")
-async def toggle_bot_trading():
-    system_state["bot_trading_active"] = not system_state["bot_trading_active"]
-    status_str = "AÇIK (Yeni Sinyal Alınıyor)" if system_state["bot_trading_active"] else "KAPALI (Yeni Sinyal Durduruldu)"
-    add_log(f"🤖 BOT İŞLEM ALIMI: {status_str}")
-    return {"status": "success", "active": system_state["bot_trading_active"]}
-
 @app.post("/api/manual/close_position")
 async def manual_close_position(payload: ClosePosPayload):
     target = next((p for p in system_state["active_positions"] if p['symbol'] == payload.symbol), None)
@@ -651,7 +623,6 @@ async def manual_close_position(payload: ClosePosPayload):
         pnl_pct = ((curr_price - target['entry']) / target['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
         realized_pnl = round(target['active_size'] * (pnl_pct / 100.0), 2)
         system_state["total_balance"] += realized_pnl
-        update_wallet_pools()
 
         now_dt = get_now_datetime()
         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
@@ -672,7 +643,6 @@ async def manual_close_position(payload: ClosePosPayload):
         }
         system_state["trade_history"].insert(0, history_item)
         system_state["active_positions"].remove(target)
-        update_wallet_pools()
         add_log(f"✋ MANUEL KAPATMA: {target['symbol']} | PnL: ${realized_pnl}")
         return {"status": "success"}
     return {"status": "error"}
@@ -694,7 +664,6 @@ async def manual_partial_close(payload: PartialClosePayload):
         if target['active_size'] <= 0:
             system_state["active_positions"].remove(target)
 
-        update_wallet_pools()
         now_dt = get_now_datetime()
         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
         add_log(f"✂️ KADEMELİ KAPATMA (%{int(payload.ratio*100)}): {target['symbol']} | Realize PnL: +${realized_pnl}")
@@ -727,7 +696,6 @@ async def manual_close_all():
         }
         system_state["trade_history"].insert(0, history_item)
         system_state["active_positions"].remove(pos)
-    update_wallet_pools()
     add_log("🚨 TÜM POZİSYONLAR KAPATILDI!")
     return {"status": "success"}
 
@@ -873,10 +841,9 @@ async def get_dashboard(request: Request):
                 <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ API</button>
             </div>
 
-            <div class="flex items-center space-x-3 text-xs">
-                <button onclick="toggleBotTrading()" id="bot-toggle-btn" class="px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition">🤖 Bot: AÇIK</button>
-                <div class="text-slate-400">Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
-                <div class="text-slate-400">Son: <span id="last-scan" class="text-white font-bold">-</span></div>
+            <div class="flex space-x-3 text-xs text-slate-400">
+                <div>Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
+                <div>Son: <span id="last-scan" class="text-white font-bold">-</span></div>
             </div>
         </div>
 
@@ -1252,6 +1219,31 @@ async def get_dashboard(request: Request):
                     </table>
                 </div>
             </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="card p-4 rounded-xl space-y-2">
+                    <h3 class="text-xs font-semibold text-sky-400 uppercase">📢 Yeni Vadeli Listelemeler (Futures Listing)</h3>
+                    <div class="space-y-1.5 text-xs">
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">MEW/USDT (50x) - Bybit/Binance</span> <span class="text-emerald-400 font-mono">Aktif Edildi</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">ZRO/USDT (50x) - OKX</span> <span class="text-emerald-400 font-mono">Aktif Edildi</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="card p-4 rounded-xl space-y-2">
+                    <h3 class="text-xs font-semibold text-amber-400 uppercase">🛠️ Planlı Borsa Bakım Saatleri</h3>
+                    <div class="space-y-1.5 text-xs">
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">Bybit Altyapı Güncellemesi</span> <span class="text-amber-400 font-mono">Yarın 04:00 TSİ (30 dk)</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">Binance Futures API Bakımı</span> <span class="text-slate-400 font-mono">Çarşamba 03:00 TSİ</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- SAYFA 4: MANUEL MÜDAHALE -->
@@ -1365,19 +1357,19 @@ async def get_dashboard(request: Request):
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div class="card p-4 rounded-xl">
-                    <h2 class="text-xs font-semibold text-emerald-400 mb-3 uppercase">🏆 En Çok Kazandıran Lider Pariteler (Brüt)</h2>
+                    <h2 class="text-xs font-semibold text-emerald-400 mb-3 uppercase">🏆 En Çok Kazandıran Lider Pariteler</h2>
                     <div class="overflow-x-auto max-h-52 overflow-y-auto">
                         <table class="w-full text-left text-xs">
-                            <thead class="text-slate-500 border-b border-slate-800"><tr><th class="pb-2">PARİTE</th><th class="pb-2">İŞLEM</th><th class="pb-2 text-right">BRÜT KÂR ($)</th></tr></thead>
+                            <thead class="text-slate-500 border-b border-slate-800"><tr><th class="pb-2">PARİTE</th><th class="pb-2">İŞLEM</th><th class="pb-2 text-right">TOPLAM PnL ($)</th></tr></thead>
                             <tbody id="top-symbols-table" class="divide-y divide-slate-800/50"></tbody>
                         </table>
                     </div>
                 </div>
                 <div class="card p-4 rounded-xl">
-                    <h2 class="text-xs font-semibold text-rose-400 mb-3 uppercase">⚠️ En Çok Zarar Ettiren Pariteler (Brüt)</h2>
+                    <h2 class="text-xs font-semibold text-rose-400 mb-3 uppercase">⚠️ En Çok Zarar Ettiren Pariteler (Blacklist Adayı)</h2>
                     <div class="overflow-x-auto max-h-52 overflow-y-auto">
                         <table class="w-full text-left text-xs">
-                            <thead class="text-slate-500 border-b border-slate-800"><tr><th class="pb-2">PARİTE</th><th class="pb-2">İŞLEM</th><th class="pb-2 text-right">BRÜT ZARAR ($)</th></tr></thead>
+                            <thead class="text-slate-500 border-b border-slate-800"><tr><th class="pb-2">PARİTE</th><th class="pb-2">İŞLEM</th><th class="pb-2 text-right">TOPLAM PnL ($)</th></tr></thead>
                             <tbody id="worst-symbols-table" class="divide-y divide-slate-800/50"></tbody>
                         </table>
                     </div>
@@ -1564,21 +1556,6 @@ async def get_dashboard(request: Request):
                 }
             }
 
-            async function toggleBotTrading() {
-                try {
-                    const res = await fetch('/api/toggle_bot_trading', { method: 'POST' });
-                    const data = await res.json();
-                    const btn = document.getElementById('bot-toggle-btn');
-                    if (data.active) {
-                        btn.className = "px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition";
-                        btn.innerText = "🤖 Bot: AÇIK";
-                    } else {
-                        btn.className = "px-2.5 py-1 rounded-lg font-bold bg-rose-600 text-white hover:bg-rose-500 transition";
-                        btn.innerText = "🤖 Bot: KAPALI";
-                    }
-                } catch(e) {}
-            }
-
             function setJournalFilter(dir) {
                 journalDirectionFilter = dir;
                 ['ALL', 'LONG', 'SHORT'].forEach(d => {
@@ -1615,7 +1592,7 @@ async def get_dashboard(request: Request):
                         <div class="text-[11px] text-slate-400">Süre: <b class="text-white">${selectedJournalItem.duration_mins || 1} Dakika</b></div>
                         <div class="text-[11px] text-slate-400 pt-1 border-t border-slate-800 uppercase font-bold text-emerald-400">Giriş Gerekçeleri:</div>
                         <div class="space-y-1">
-                            {(selectedJournalItem.open_reasons || []).map(r => `<div class="bg-black/40 p-1.5 rounded border border-slate-800 text-[11px] text-slate-300">✓ ${r}</div>`).join('')}
+                            ${(selectedJournalItem.open_reasons || []).map(r => `<div class="bg-black/40 p-1.5 rounded border border-slate-800 text-[11px] text-slate-300">✓ ${r}</div>`).join('')}
                         </div>
                     </div>
                 `;
@@ -1721,7 +1698,6 @@ async def get_dashboard(request: Request):
 
             function initCharts() {
                 const container = document.getElementById('tv-container');
-                if(!container) return;
                 container.innerHTML = '';
                 chart = LightweightCharts.createChart(container, {
                     layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
@@ -1763,21 +1739,19 @@ async def get_dashboard(request: Request):
                 });
 
                 const eqContainer = document.getElementById('equity-container');
-                if(eqContainer) {
-                    eqContainer.innerHTML = '';
-                    equityChart = LightweightCharts.createChart(eqContainer, {
-                        layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
-                        grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
-                        timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#1e293b' },
-                        rightPriceScale: { autoScale: true }
-                    });
-                    equitySeries = equityChart.addAreaSeries({
-                        topColor: 'rgba(56, 189, 248, 0.4)',
-                        bottomColor: 'rgba(56, 189, 248, 0.0)',
-                        lineColor: '#38bdf8',
-                        lineWidth: 2
-                    });
-                }
+                eqContainer.innerHTML = '';
+                equityChart = LightweightCharts.createChart(eqContainer, {
+                    layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
+                    grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
+                    timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#1e293b' },
+                    rightPriceScale: { autoScale: true }
+                });
+                equitySeries = equityChart.addAreaSeries({
+                    topColor: 'rgba(56, 189, 248, 0.4)',
+                    bottomColor: 'rgba(56, 189, 248, 0.0)',
+                    lineColor: '#38bdf8',
+                    lineWidth: 2
+                });
 
                 resizeCanvas();
             }
@@ -1919,27 +1893,24 @@ async def get_dashboard(request: Request):
                     });
 
                     let totalWin = 0, totalLoss = 0, winOps = 0, lossOps = 0, longTotal = 0, shortTotal = 0, totalDuration = 0;
-                    let symbolGrossProfit = {}, symbolGrossLoss = {}, symbolTradeCount = {};
-                    let pnlSeries = [], currentWinStreak = 0, maxWinStreak = 0, currentLossStreak = 0, maxLossStreak = 0;
+                    let symbolPnlMap = {}, pnlSeries = [], currentWinStreak = 0, maxWinStreak = 0, currentLossStreak = 0, maxLossStreak = 0;
 
                     const sortedFiltered = [...filtered].sort((a,b) => (a.close_timestamp || 0) - (b.close_timestamp || 0));
 
                     sortedFiltered.forEach(h => {
                         totalDuration += (h.duration_mins || 1);
                         pnlSeries.push(h.realized_pnl);
-                        symbolTradeCount[h.symbol] = (symbolTradeCount[h.symbol] || 0) + 1;
 
                         if (h.realized_pnl > 0) {
                             totalWin += h.realized_pnl; winOps++; currentWinStreak++; currentLossStreak = 0;
                             if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak;
-                            symbolGrossProfit[h.symbol] = (symbolGrossProfit[h.symbol] || 0) + h.realized_pnl;
                         } else {
                             totalLoss += Math.abs(h.realized_pnl); lossOps++; currentLossStreak++; currentWinStreak = 0;
                             if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak;
-                            symbolGrossLoss[h.symbol] = (symbolGrossLoss[h.symbol] || 0) + Math.abs(h.realized_pnl);
                         }
 
                         if (h.direction === 'LONG') longTotal++; else shortTotal++;
+                        symbolPnlMap[h.symbol] = (symbolPnlMap[h.symbol] || 0) + h.realized_pnl;
                     });
 
                     const totalOps = filtered.length;
@@ -1978,19 +1949,18 @@ async def get_dashboard(request: Request):
                     document.getElementById('stat-ls-ratio').innerText = `L: %${lPct} | S: %${100 - lPct}`;
                     document.getElementById('stat-ls-bar').style.width = `${lPct}%`;
 
-                    const sortedTopSymbols = Object.keys(symbolGrossProfit).sort((a,b) => symbolGrossProfit[b] - symbolGrossProfit[a]);
+                    const sortedSymbols = Object.keys(symbolPnlMap).sort((a,b) => symbolPnlMap[b] - symbolPnlMap[a]);
                     const topTbody = document.getElementById('top-symbols-table');
                     if (topTbody) {
-                        topTbody.innerHTML = sortedTopSymbols.slice(0, 5).map(sym => `
-                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${symbolTradeCount[sym]}</td><td class="font-bold text-right text-emerald-400">+${symbolGrossProfit[sym].toFixed(2)} $</td></tr>
+                        topTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] > 0).slice(0, 5).map(sym => `
+                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-emerald-400">+$${symbolPnlMap[sym].toFixed(2)}</td></tr>
                         `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
                     }
 
-                    const sortedWorstSymbols = Object.keys(symbolGrossLoss).sort((a,b) => symbolGrossLoss[b] - symbolGrossLoss[a]);
                     const worstTbody = document.getElementById('worst-symbols-table');
                     if (worstTbody) {
-                        worstTbody.innerHTML = sortedWorstSymbols.slice(0, 5).map(sym => `
-                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${symbolTradeCount[sym]}</td><td class="font-bold text-right text-rose-400">-${symbolGrossLoss[sym].toFixed(2)} $</td></tr>
+                        worstTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] < 0).reverse().slice(0, 5).map(sym => `
+                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-rose-400">-$${Math.abs(symbolPnlMap[sym]).toFixed(2)}</td></tr>
                         `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
                     }
                 } catch(e) {}
@@ -2226,7 +2196,7 @@ async def get_dashboard(request: Request):
 
                     document.getElementById('btc-regime-badge').innerText = data.btc_regime || "BTC: AKTİF";
 
-                    const totalUsedMargin = data.locked_margin || 0;
+                    const totalUsedMargin = data.active_positions.reduce((acc, p) => acc + p.margin, 0);
                     const totalRiskAmount = data.active_positions.reduce((acc, p) => acc + p.max_loss, 0);
                     const totalUnrealizedPnl = data.active_positions.reduce((acc, p) => acc + p.unrealized_pnl, 0);
                     const totalPnlPct = data.total_balance > 0 ? ((totalUnrealizedPnl / data.total_balance) * 100) : 0;
