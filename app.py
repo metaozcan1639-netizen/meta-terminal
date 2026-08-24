@@ -40,7 +40,6 @@ system_state = {
     "daily_loss_locked": False,
     "daily_start_balance": 1000.0,
     "last_day_reset": get_now_datetime().strftime("%Y-%m-%d"),
-    "bot_trading_active": True,
     "btc_regime": "YÜKLENİYOR...",
     "btc_15m_change": 0.0,
     "btc_shock_lock": False,
@@ -77,7 +76,8 @@ system_state = {
         "auto_trade": False
     },
     "equity_curve": [{"time": int(get_now_datetime().timestamp()), "value": 1000.0}],
-    "logs": []
+    "logs": [],
+    "bot_running": True
 }
 
 EXCLUDED_KEYWORDS = [
@@ -240,7 +240,7 @@ async def update_btc_metrics(exchange):
 
 async def analyze_symbol(exchange, symbol):
     try:
-        if system_state["daily_loss_locked"] or not system_state["bot_trading_active"]:
+        if system_state["daily_loss_locked"]:
             return None
 
         base = symbol.split('/')[0].upper()
@@ -414,7 +414,7 @@ async def market_scanner_loop():
     await asyncio.sleep(2)
     add_log("Quant Motoru: 1H & 4H Multi-Trend Filtresi ve Pullback Çekilme Modülü Devrede...")
 
-    while True:
+    while system_state["bot_running"]:
         exchange = None
         try:
             exchange = ccxt.bybit({
@@ -539,6 +539,9 @@ async def market_scanner_loop():
                     pass
 
             await exchange.close()
+            if not system_state["bot_running"]:
+                add_log("🛑 BOT DURDURULDU: Market tarama motoru kapatıldı.")
+                break
             await asyncio.sleep(1)
         except Exception as e:
             add_log(f"Döngü Uyarısı: {str(e)[:45]}")
@@ -614,13 +617,6 @@ async def update_api(payload: ApiPayload):
     status_str = "AKTİF" if payload.auto_trade else "DEVRE DIŞI"
     add_log(f"🔑 API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | Otomatik Emir: {status_str}")
     return {"status": "success"}
-
-@app.post("/api/toggle_bot_trading")
-async def toggle_bot_trading():
-    system_state["bot_trading_active"] = not system_state["bot_trading_active"]
-    status_str = "AÇIK (Yeni Sinyal Alınıyor)" if system_state["bot_trading_active"] else "KAPALI (Yeni Sinyal Durduruldu)"
-    add_log(f"🤖 BOT İŞLEM ALIMI: {status_str}")
-    return {"status": "success", "active": system_state["bot_trading_active"]}
 
 @app.post("/api/manual/close_position")
 async def manual_close_position(payload: ClosePosPayload):
@@ -794,6 +790,12 @@ async def download_report(filename: str):
 async def get_state():
     return system_state
 
+@app.post("/api/bot/stop")
+async def stop_bot():
+    system_state["bot_running"] = False
+    add_log("🛑 BOT DURDURMA KOMUTU ALINDI: Yeni tarama ve otomatik pozisyon açma durduruldu.")
+    return {"status": "success", "bot_running": False}
+
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard(request: Request):
     html_content = """
@@ -849,10 +851,12 @@ async def get_dashboard(request: Request):
                 <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ API</button>
             </div>
 
-            <div class="flex items-center space-x-3 text-xs">
-                <button onclick="toggleBotTrading()" id="bot-toggle-btn" class="px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition">🤖 Bot: AÇIK</button>
+            <div class="flex items-center space-x-2 text-xs">
                 <div class="text-slate-400">Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
                 <div class="text-slate-400">Son: <span id="last-scan" class="text-white font-bold">-</span></div>
+                <button id="bot-stop-btn" onclick="stopBot()" class="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-1.5 rounded-lg transition shadow-lg">
+                    🛑 BOTU DURDUR
+                </button>
             </div>
         </div>
 
@@ -1228,6 +1232,31 @@ async def get_dashboard(request: Request):
                     </table>
                 </div>
             </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div class="card p-4 rounded-xl space-y-2">
+                    <h3 class="text-xs font-semibold text-sky-400 uppercase">📢 Yeni Vadeli Listelemeler (Futures Listing)</h3>
+                    <div class="space-y-1.5 text-xs">
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">MEW/USDT (50x) - Bybit/Binance</span> <span class="text-emerald-400 font-mono">Aktif Edildi</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">ZRO/USDT (50x) - OKX</span> <span class="text-emerald-400 font-mono">Aktif Edildi</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="card p-4 rounded-xl space-y-2">
+                    <h3 class="text-xs font-semibold text-amber-400 uppercase">🛠️ Planlı Borsa Bakım Saatleri</h3>
+                    <div class="space-y-1.5 text-xs">
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">Bybit Altyapı Güncellemesi</span> <span class="text-amber-400 font-mono">Yarın 04:00 TSİ (30 dk)</span>
+                        </div>
+                        <div class="flex justify-between bg-slate-900/80 p-2 rounded border border-slate-800">
+                            <span class="text-white font-bold">Binance Futures API Bakımı</span> <span class="text-slate-400 font-mono">Çarşamba 03:00 TSİ</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <!-- SAYFA 4: MANUEL MÜDAHALE -->
@@ -1540,23 +1569,6 @@ async def get_dashboard(request: Request):
                 }
             }
 
-            async function toggleBotTrading() {
-                try {
-                    const res = await fetch('/api/toggle_bot_trading', { method: 'POST' });
-                    const data = await res.json();
-                    const btn = document.getElementById('bot-toggle-btn');
-                    if (btn) {
-                        if (data.active) {
-                            btn.className = "px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition";
-                            btn.innerText = "🤖 Bot: AÇIK";
-                        } else {
-                            btn.className = "px-2.5 py-1 rounded-lg font-bold bg-rose-600 text-white hover:bg-rose-500 transition";
-                            btn.innerText = "🤖 Bot: KAPALI";
-                        }
-                    }
-                } catch(e) {}
-            }
-
             function setJournalFilter(dir) {
                 journalDirectionFilter = dir;
                 ['ALL', 'LONG', 'SHORT'].forEach(d => {
@@ -1593,7 +1605,7 @@ async def get_dashboard(request: Request):
                         <div class="text-[11px] text-slate-400">Süre: <b class="text-white">${selectedJournalItem.duration_mins || 1} Dakika</b></div>
                         <div class="text-[11px] text-slate-400 pt-1 border-t border-slate-800 uppercase font-bold text-emerald-400">Giriş Gerekçeleri:</div>
                         <div class="space-y-1">
-                            {(selectedJournalItem.open_reasons || []).map(r => `<div class="bg-black/40 p-1.5 rounded border border-slate-800 text-[11px] text-slate-300">✓ ${r}</div>`).join('')}
+                            ${(selectedJournalItem.open_reasons || []).map(r => `<div class="bg-black/40 p-1.5 rounded border border-slate-800 text-[11px] text-slate-300">✓ ${r}</div>`).join('')}
                         </div>
                     </div>
                 `;
@@ -2078,6 +2090,30 @@ async def get_dashboard(request: Request):
                     </div>`;
             }
 
+            async function stopBot() {
+                if (!confirm("Botu durdurmak istediğinize emin misiniz? Açık pozisyonlar kapatılmaz.")) return;
+                const btn = document.getElementById('bot-stop-btn');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerText = "🛑 DURDURULUYOR...";
+                }
+                try {
+                    const res = await fetch('/api/bot/stop', { method: 'POST' });
+                    if (!res.ok) throw new Error("Stop isteği başarısız");
+                    if (btn) {
+                        btn.innerText = "⏹ BOT DURDU";
+                        btn.className = "bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded-lg cursor-not-allowed";
+                    }
+                    updateDashboard();
+                } catch (e) {
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.innerText = "🛑 BOTU DURDUR";
+                    }
+                    alert("Bot durdurulamadı.");
+                }
+            }
+
             async function manualClosePos(symbol) {
                 await fetch('/api/manual/close_position', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol}) });
                 updateDashboard();
@@ -2197,7 +2233,7 @@ async def get_dashboard(request: Request):
 
                     document.getElementById('btc-regime-badge').innerText = data.btc_regime || "BTC: AKTİF";
 
-                    const totalUsedMargin = data.locked_margin || 0;
+                    const totalUsedMargin = data.active_positions.reduce((acc, p) => acc + p.margin, 0);
                     const totalRiskAmount = data.active_positions.reduce((acc, p) => acc + p.max_loss, 0);
                     const totalUnrealizedPnl = data.active_positions.reduce((acc, p) => acc + p.unrealized_pnl, 0);
                     const totalPnlPct = data.total_balance > 0 ? ((totalUnrealizedPnl / data.total_balance) * 100) : 0;
