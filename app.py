@@ -343,7 +343,6 @@ async def analyze_symbol(exchange, symbol):
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
-        # Binance Kaldıraç Sınırı Koruması (exchangeInfo simülasyon uyumu)
         effective_leverage = system_state["leverage"]
         try:
             market_info = exchange.markets.get(symbol, {})
@@ -470,7 +469,6 @@ async def market_scanner_loop():
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
 
-                            # Sıkı Marjin Tavanı Kilidi Kontrolü
                             current_total_margin = sum(p['margin'] for p in system_state["active_positions"])
                             allowed_margin = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
                             if (current_total_margin + sig['margin']) > allowed_margin or sig['margin'] > system_state["free_balance"]:
@@ -1833,7 +1831,6 @@ async def get_dashboard(request: Request):
                     expEl.innerText = `${expectancy >= 0 ? '+' : ''}$${expectancy.toFixed(2)}`;
                     expEl.className = `text-xl font-bold font-mono ${expectancy >= 0 ? 'text-sky-400' : 'text-red-400'}`;
 
-                    // Brüt Kazandıranlar Tablosu
                     const sortedTopSymbols = Object.keys(symbolGrossProfit).sort((a,b) => symbolGrossProfit[b] - symbolGrossProfit[a]);
                     const topTbody = document.getElementById('top-symbols-table');
                     if (topTbody) {
@@ -1842,7 +1839,6 @@ async def get_dashboard(request: Request):
                         `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
                     }
 
-                    // Brüt Zarar Ettirenler Tablosu
                     const sortedWorstSymbols = Object.keys(symbolGrossLoss).sort((a,b) => symbolGrossLoss[b] - symbolGrossLoss[a]);
                     const worstTbody = document.getElementById('worst-symbols-table');
                     if (worstTbody) {
@@ -2159,7 +2155,9 @@ async def get_dashboard(request: Request):
                     }
 
                     if (currentSymbol) loadChartCandles(currentSymbol, selectedPos, true);
-                    if (!selectedPos && data.active_positions.length > 0) selectPosition(data.active_positions[0]);
+                    if (!selectedPos && data.active_positions.length > 0 && currentSymbol === "BTC/USDT:USDT") {
+                        // Eğer seçili pozisyon yoksa ve ilk açılışsa grafikte BTC gösterilmeye devam eder
+                    }
                 } catch (e) {}
             }
 
