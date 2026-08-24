@@ -76,8 +76,7 @@ system_state = {
         "auto_trade": False
     },
     "equity_curve": [{"time": int(get_now_datetime().timestamp()), "value": 1000.0}],
-    "logs": [],
-    "bot_running": True
+    "logs": []
 }
 
 EXCLUDED_KEYWORDS = [
@@ -414,7 +413,7 @@ async def market_scanner_loop():
     await asyncio.sleep(2)
     add_log("Quant Motoru: 1H & 4H Multi-Trend Filtresi ve Pullback Çekilme Modülü Devrede...")
 
-    while system_state["bot_running"]:
+    while True:
         exchange = None
         try:
             exchange = ccxt.bybit({
@@ -539,9 +538,6 @@ async def market_scanner_loop():
                     pass
 
             await exchange.close()
-            if not system_state["bot_running"]:
-                add_log("🛑 BOT DURDURULDU: Market tarama motoru kapatıldı.")
-                break
             await asyncio.sleep(1)
         except Exception as e:
             add_log(f"Döngü Uyarısı: {str(e)[:45]}")
@@ -790,12 +786,6 @@ async def download_report(filename: str):
 async def get_state():
     return system_state
 
-@app.post("/api/bot/stop")
-async def stop_bot():
-    system_state["bot_running"] = False
-    add_log("🛑 BOT DURDURMA KOMUTU ALINDI: Yeni tarama ve otomatik pozisyon açma durduruldu.")
-    return {"status": "success", "bot_running": False}
-
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard(request: Request):
     html_content = """
@@ -851,12 +841,9 @@ async def get_dashboard(request: Request):
                 <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ API</button>
             </div>
 
-            <div class="flex items-center space-x-2 text-xs">
-                <div class="text-slate-400">Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
-                <div class="text-slate-400">Son: <span id="last-scan" class="text-white font-bold">-</span></div>
-                <button id="bot-stop-btn" onclick="stopBot()" class="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-1.5 rounded-lg transition shadow-lg">
-                    🛑 BOTU DURDUR
-                </button>
+            <div class="flex space-x-3 text-xs text-slate-400">
+                <div>Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
+                <div>Son: <span id="last-scan" class="text-white font-bold">-</span></div>
             </div>
         </div>
 
@@ -2088,30 +2075,6 @@ async def get_dashboard(request: Request):
                         <div class="text-sky-400 font-bold">Giriş: <span>${pos.entry}</span></div>
                         <div class="text-red-400 font-bold">SL: <span>${pos.sl.toFixed(p)}</span></div>
                     </div>`;
-            }
-
-            async function stopBot() {
-                if (!confirm("Botu durdurmak istediğinize emin misiniz? Açık pozisyonlar kapatılmaz.")) return;
-                const btn = document.getElementById('bot-stop-btn');
-                if (btn) {
-                    btn.disabled = true;
-                    btn.innerText = "🛑 DURDURULUYOR...";
-                }
-                try {
-                    const res = await fetch('/api/bot/stop', { method: 'POST' });
-                    if (!res.ok) throw new Error("Stop isteği başarısız");
-                    if (btn) {
-                        btn.innerText = "⏹ BOT DURDU";
-                        btn.className = "bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded-lg cursor-not-allowed";
-                    }
-                    updateDashboard();
-                } catch (e) {
-                    if (btn) {
-                        btn.disabled = false;
-                        btn.innerText = "🛑 BOTU DURDUR";
-                    }
-                    alert("Bot durdurulamadı.");
-                }
             }
 
             async function manualClosePos(symbol) {
