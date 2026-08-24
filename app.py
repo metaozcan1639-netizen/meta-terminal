@@ -91,6 +91,43 @@ EXCLUDED_KEYWORDS = [
     'CASHCAT', 'WLFI', 'TRUMP', 'MELANIA', 'PEPE2', 'SHIB2'
 ]
 
+async def create_exchange_instance():
+    """Arayüzdeki ayarlara göre Dinamik Borsa Bağlantısı Kurar."""
+    api_conf = system_state["api_settings"]
+    exch_id = api_conf["exchange"].lower()
+    
+    args = {
+        'enableRateLimit': True,
+        'options': {'defaultType': 'future' if exch_id == 'binance' else 'linear'},
+        'timeout': 10000
+    }
+    
+    if api_conf.get("api_key") and api_conf.get("api_secret"):
+        args['apiKey'] = api_conf["api_key"]
+        args['secret'] = api_conf["api_secret"]
+        
+    exchange_class = getattr(ccxt, exch_id)
+    exchange = exchange_class(args)
+    
+    if api_conf.get("mode") == "TESTNET":
+        exchange.set_sandbox_mode(True)
+        
+    return exchange
+
+async def execute_manual_real_order(symbol, direction, amount_raw):
+    """Manuel müdahalelerde gerçek borsaya çıkış emri gönderir."""
+    if not system_state["api_settings"]["auto_trade"] or not system_state["api_settings"]["api_key"]:
+        return
+    try:
+        exchange = await create_exchange_instance()
+        close_side = 'sell' if direction == 'LONG' else 'buy'
+        safe_amount = float(exchange.amount_to_precision(symbol, amount_raw))
+        await exchange.create_order(symbol, 'market', close_side, safe_amount)
+        add_log(f"🕹️ MANUEL GERÇEK EMİR İLETİLDİ: {symbol} {close_side.upper()} {safe_amount}")
+        await exchange.close()
+    except Exception as e:
+        add_log(f"❌ MANUEL EMİR HATASI ({symbol}): {str(e)[:60]}")
+
 def translate_fng(classification_en):
     mapping = {
         "Extreme Fear": "Aşırı Korku",
@@ -445,11 +482,8 @@ async def market_scanner_loop():
     while True:
         exchange = None
         try:
-            exchange = ccxt.bybit({
-                'options': {'defaultType': 'linear'},
-                'enableRateLimit': True,
-                'timeout': 10000
-            })
+            # Sınırsız gerçek / testnet API geçişi (Dinamik Bağlantı)
+            exchange = await create_exchange_instance()
 
             check_daily_drawdown()
             sync_wallet_accounting()
@@ -488,6 +522,7 @@ async def market_scanner_loop():
                             current_total_margin = system_state["locked_margin"]
                             allowed_margin = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
                             
+                            # Kasa ve Serbest Bakiye Kilidi
                             if (current_total_margin + sig['margin']) > allowed_margin or sig['margin'] > system_state["free_balance"]:
                                 continue
 
@@ -495,6 +530,23 @@ async def market_scanner_loop():
                             sync_wallet_accounting()
                             mode_label = "İzole" if sig['margin_mode'] == "ISOLATED" else "Cross"
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['score']} Puan | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}")
+
+                            # --- GERÇEK BORSA EMİR İLETİMİ (GİRİŞ) ---
+                            if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
+                                try:
+                                    try:
+                                        await exchange.set_leverage(sig['leverage'], sig['symbol'])
+                                    except Exception as e:
+                                        add_log(f"⚠️ Kaldıraç uyarısı: {str(e)[:40]}")
+                                    
+                                    # Miktar Precision Yuvarlama (Borsa limitleri için kritik)
+                                    safe_amount = float(exchange.amount_to_precision(sig['symbol'], sig['pos_size']))
+                                    side = 'buy' if sig['direction'] == 'LONG' else 'sell'
+                                    
+                                    await exchange.create_order(sig['symbol'], 'market', side, safe_amount)
+                                    add_log(f"🚀 GERÇEK EMİR İLETİLDİ: {sig['symbol']} {side.upper()} {safe_amount} Adet")
+                                except Exception as e:
+                                    add_log(f"❌ GERÇEK EMİR HATASI ({sig['symbol']}): {str(e)[:60]}")
 
                 system_state["last_scan_time"] = get_now_str()
                 await asyncio.sleep(0.1)
@@ -540,6 +592,16 @@ async def market_scanner_loop():
                             system_state["equity_curve"].append({"time": now_ts, "value": round(system_state["total_balance"], 2)})
                             add_log(f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi.")
 
+                            # --- GERÇEK BORSA TP1 İLETİMİ ---
+                            if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
+                                try:
+                                    close_side = 'sell' if pos['direction'] == 'LONG' else 'buy'
+                                    safe_amount = float(exchange.amount_to_precision(pos['symbol'], pos['active_size']))
+                                    await exchange.create_order(pos['symbol'], 'market', close_side, safe_amount)
+                                    add_log(f"⚡ GERÇEK TP1 İLETİLDİ: {pos['symbol']} %50 Kapatıldı")
+                                except Exception as e:
+                                    add_log(f"❌ GERÇEK TP1 HATASI: {str(e)[:60]}")
+
                     if close_reason:
                         pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
                         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
@@ -568,6 +630,17 @@ async def market_scanner_loop():
                         sync_wallet_accounting()
                         add_log(f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}")
                         check_daily_drawdown()
+
+                        # --- GERÇEK BORSA TAM ÇIKIŞ İLETİMİ ---
+                        if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
+                            try:
+                                close_side = 'sell' if pos['direction'] == 'LONG' else 'buy'
+                                safe_amount = float(exchange.amount_to_precision(pos['symbol'], pos['active_size']))
+                                await exchange.create_order(pos['symbol'], 'market', close_side, safe_amount)
+                                add_log(f"✅ GERÇEK ÇIKIŞ İLETİLDİ: {pos['symbol']} Tamamen Kapatıldı")
+                            except Exception as e:
+                                add_log(f"❌ GERÇEK ÇIKIŞ HATASI ({pos['symbol']}): {str(e)[:60]}")
+
                 except Exception:
                     pass
 
@@ -687,6 +760,8 @@ async def manual_close_position(payload: ClosePosPayload):
         system_state["active_positions"].remove(target)
         sync_wallet_accounting()
         add_log(f"✋ MANUEL KAPATMA: {target['symbol']} | PnL: ${realized_pnl}")
+        
+        asyncio.create_task(execute_manual_real_order(target['symbol'], target['direction'], target['active_size']))
         return {"status": "success"}
     return {"status": "error"}
 
@@ -713,6 +788,8 @@ async def manual_partial_close(payload: PartialClosePayload):
         now_dt = get_now_datetime()
         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
         add_log(f"✂️ KADEMELİ KAPATMA (%{int(payload.ratio*100)}): {target['symbol']} | Realize PnL: +${realized_pnl}")
+        
+        asyncio.create_task(execute_manual_real_order(target['symbol'], target['direction'], part_size))
         return {"status": "success"}
     return {"status": "error"}
 
@@ -742,6 +819,8 @@ async def manual_close_all():
         }
         system_state["trade_history"].insert(0, history_item)
         system_state["active_positions"].remove(pos)
+        asyncio.create_task(execute_manual_real_order(pos['symbol'], pos['direction'], pos['active_size']))
+        
     sync_wallet_accounting()
     add_log("🚨 TÜM POZİSYONLAR KAPATILDI!")
     return {"status": "success"}
@@ -1603,6 +1682,23 @@ async def get_dashboard(request: Request):
                 } else if (tabId === 'journal') {
                     renderJournalTable();
                 }
+            }
+
+            async function toggleBotTrading() {
+                try {
+                    const res = await fetch('/api/toggle_bot_trading', { method: 'POST' });
+                    const data = await res.json();
+                    const btn = document.getElementById('bot-toggle-btn');
+                    if (btn) {
+                        if (data.active) {
+                            btn.className = "px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition";
+                            btn.innerText = "🤖 Bot: AÇIK";
+                        } else {
+                            btn.className = "px-2.5 py-1 rounded-lg font-bold bg-rose-600 text-white hover:bg-rose-500 transition";
+                            btn.innerText = "🤖 Bot: KAPALI";
+                        }
+                    }
+                } catch(e) {}
             }
 
             function setJournalFilter(dir) {
