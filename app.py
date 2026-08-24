@@ -29,10 +29,6 @@ os.makedirs(CSV_DIR, exist_ok=True)
 system_state = {
     "initial_balance": 1000.0,
     "total_balance": 1000.0,
-    "locked_margin": 0.0,
-    "free_balance": 1000.0,
-    "realized_pnl": 0.0,
-    "unrealized_pnl": 0.0,
     "peak_balance": 1000.0,
     "max_drawdown_pct": 0.0,
     "risk_pct": 5.0,
@@ -106,22 +102,6 @@ def add_log(msg: str):
     system_state["logs"].insert(0, f"[{ts}] {msg}")
     if len(system_state["logs"]) > 60:
         system_state["logs"].pop()
-
-def sync_wallet_accounting():
-    """3 havuzlu cüzdan muhasebesini tek kaynaktan günceller."""
-    locked = round(sum(float(p.get("margin", 0.0)) for p in system_state["active_positions"]), 2)
-    unrealized = round(sum(float(p.get("unrealized_pnl", 0.0)) for p in system_state["active_positions"]), 2)
-    system_state["locked_margin"] = locked
-    system_state["unrealized_pnl"] = unrealized
-    system_state["free_balance"] = round(max(0.0, system_state["total_balance"] - locked), 2)
-
-def apply_realized_pnl(amount: float):
-    """Sadece gerçekleşmiş PnL'i ana kasaya işler."""
-    amount = round(float(amount), 2)
-    system_state["realized_pnl"] = round(system_state.get("realized_pnl", 0.0) + amount, 2)
-    system_state["total_balance"] = round(system_state["total_balance"] + amount, 2)
-    sync_wallet_accounting()
-
 
 def check_daily_drawdown():
     now_str = get_now_datetime().strftime("%Y-%m-%d")
@@ -434,7 +414,7 @@ async def market_scanner_loop():
     await asyncio.sleep(2)
     add_log("Quant Motoru: 1H & 4H Multi-Trend Filtresi ve Pullback Çekilme Modülü Devrede...")
 
-    while True:
+    while system_state["bot_running"]:
         exchange = None
         try:
             exchange = ccxt.bybit({
@@ -470,34 +450,18 @@ async def market_scanner_loop():
 
                 for sig in signals:
                     if sig and isinstance(sig, dict):
-                        market = exchange.markets.get(sig.get("symbol"), {})
-                        limits = market.get("limits", {}) if isinstance(market, dict) else {}
-                        lev_limits = limits.get("leverage", {}) if isinstance(limits, dict) else {}
-                        max_lev = lev_limits.get("max") if isinstance(lev_limits, dict) else None
-                        if max_lev:
-                            requested_lev = int(sig.get("leverage", system_state["leverage"]))
-                            effective_lev = min(requested_lev, int(max_lev))
-                            if effective_lev != requested_lev:
-                                add_log(f"🛡️ KALDIRAÇ SINIRI: {sig['symbol']} {requested_lev}x → {effective_lev}x")
-                                sig["leverage"] = effective_lev
                         exists = any(p['symbol'] == sig['symbol'] for p in system_state["active_positions"])
                         if not exists:
                             max_pos = system_state["max_open_positions"]
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
 
-                            sync_wallet_accounting()
-                            current_total_margin = system_state["locked_margin"]
+                            current_total_margin = sum(p['margin'] for p in system_state["active_positions"])
                             allowed_margin = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
                             if (current_total_margin + sig['margin']) > allowed_margin:
-                                add_log(f"⛔ MARJİN LİMİTİ: {sig['symbol']} reddedildi | Kilitli: ${current_total_margin:.2f} / Limit: ${allowed_margin:.2f}")
-                                continue
-                            if sig['margin'] > system_state["free_balance"]:
-                                add_log(f"⛔ SERBEST BAKİYE YETERSİZ: {sig['symbol']} reddedildi | Gerekli: ${sig['margin']:.2f} / Serbest: ${system_state['free_balance']:.2f}")
                                 continue
 
                             system_state["active_positions"].append(sig)
-                            sync_wallet_accounting()
                             mode_label = "İzole" if sig['margin_mode'] == "ISOLATED" else "Cross"
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['score']} Puan | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}")
 
@@ -539,8 +503,7 @@ async def market_scanner_loop():
                             pos["sl"] = pos["entry"]
                             partial_pnl = round((pos['pos_size'] * 0.5) * pnl_raw, 2)
                             pos['active_size'] = pos['pos_size'] * 0.5
-                            apply_realized_pnl(partial_pnl)
-                            pos["margin"] = round(pos.get("margin", 0.0) * 0.5, 2)
+                            system_state["total_balance"] += partial_pnl
                             now_ts = int(get_now_datetime().timestamp())
                             system_state["equity_curve"].append({"time": now_ts, "value": round(system_state["total_balance"], 2)})
                             add_log(f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi.")
@@ -548,7 +511,7 @@ async def market_scanner_loop():
                     if close_reason:
                         pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
                         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
-                        apply_realized_pnl(realized_pnl)
+                        system_state["total_balance"] += realized_pnl
 
                         now_dt = get_now_datetime()
                         duration_mins = max(1, int((now_dt.timestamp() - pos.get('open_timestamp', now_dt.timestamp())) / 60))
@@ -576,6 +539,9 @@ async def market_scanner_loop():
                     pass
 
             await exchange.close()
+            if not system_state["bot_running"]:
+                add_log("🛑 BOT DURDURULDU: Market tarama motoru kapatıldı.")
+                break
             await asyncio.sleep(1)
         except Exception as e:
             add_log(f"Döngü Uyarısı: {str(e)[:45]}")
@@ -633,14 +599,7 @@ class DateRangePayload(BaseModel):
 
 @app.post("/api/update_settings")
 async def update_settings(payload: SettingsPayload):
-    sync_wallet_accounting()
-    if system_state["active_positions"] and abs(payload.total_balance - system_state["total_balance"]) > 1e-9:
-        return {"status": "error", "message": "Açık pozisyonlar varken kasa değiştirilemez."}
-    if payload.total_balance <= 0:
-        return {"status": "error", "message": "Kasa sıfırdan büyük olmalıdır."}
-
     system_state["total_balance"] = payload.total_balance
-    sync_wallet_accounting()
     system_state["risk_pct"] = payload.risk_pct
     system_state["leverage"] = payload.leverage
     system_state["margin_mode"] = payload.margin_mode
@@ -667,7 +626,7 @@ async def manual_close_position(payload: ClosePosPayload):
         direction = target['direction']
         pnl_pct = ((curr_price - target['entry']) / target['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
         realized_pnl = round(target['active_size'] * (pnl_pct / 100.0), 2)
-        apply_realized_pnl(realized_pnl)
+        system_state["total_balance"] += realized_pnl
 
         now_dt = get_now_datetime()
         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
@@ -702,16 +661,12 @@ async def manual_partial_close(payload: PartialClosePayload):
         
         part_size = target['active_size'] * payload.ratio
         realized_pnl = round(part_size * (pnl_pct / 100.0), 2)
-        apply_realized_pnl(realized_pnl)
-        old_active_size = target['active_size']
-        margin_release = round(target.get("margin", 0.0) * payload.ratio, 2)
+        system_state["total_balance"] += realized_pnl
         target['active_size'] -= part_size
         target['pos_size'] -= part_size
-        target['margin'] = round(max(0.0, target.get("margin", 0.0) - margin_release), 2)
 
         if target['active_size'] <= 0:
             system_state["active_positions"].remove(target)
-        sync_wallet_accounting()
 
         now_dt = get_now_datetime()
         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
@@ -724,9 +679,9 @@ async def manual_close_all():
     for pos in list(system_state["active_positions"]):
         curr_price = pos.get('current_price', pos['entry'])
         direction = pos['direction']
-        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
+        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
-        apply_realized_pnl(realized_pnl)
+        system_state["total_balance"] += realized_pnl
 
         now_dt = get_now_datetime()
         history_item = {
@@ -833,8 +788,13 @@ async def download_report(filename: str):
 
 @app.get("/api/state")
 async def get_state():
-    sync_wallet_accounting()
     return system_state
+
+@app.post("/api/bot/stop")
+async def stop_bot():
+    system_state["bot_running"] = False
+    add_log("🛑 BOT DURDURMA KOMUTU ALINDI: Yeni tarama ve otomatik pozisyon açma durduruldu.")
+    return {"status": "success", "bot_running": False}
 
 @app.get("/", response_class=HTMLResponse)
 async def get_dashboard(request: Request):
@@ -891,9 +851,12 @@ async def get_dashboard(request: Request):
                 <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ API</button>
             </div>
 
-            <div class="flex space-x-3 text-xs text-slate-400">
-                <div>Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
-                <div>Son: <span id="last-scan" class="text-white font-bold">-</span></div>
+            <div class="flex items-center space-x-2 text-xs">
+                <div class="text-slate-400">Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
+                <div class="text-slate-400">Son: <span id="last-scan" class="text-white font-bold">-</span></div>
+                <button id="bot-stop-btn" onclick="stopBot()" class="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-1.5 rounded-lg transition shadow-lg">
+                    🛑 BOTU DURDUR
+                </button>
             </div>
         </div>
 
@@ -2127,6 +2090,30 @@ async def get_dashboard(request: Request):
                     </div>`;
             }
 
+            async function stopBot() {
+                if (!confirm("Botu durdurmak istediğinize emin misiniz? Açık pozisyonlar kapatılmaz.")) return;
+                const btn = document.getElementById('bot-stop-btn');
+                if (btn) {
+                    btn.disabled = true;
+                    btn.innerText = "🛑 DURDURULUYOR...";
+                }
+                try {
+                    const res = await fetch('/api/bot/stop', { method: 'POST' });
+                    if (!res.ok) throw new Error("Stop isteği başarısız");
+                    if (btn) {
+                        btn.innerText = "⏹ BOT DURDU";
+                        btn.className = "bg-slate-700 text-slate-300 font-bold px-3 py-1.5 rounded-lg cursor-not-allowed";
+                    }
+                    updateDashboard();
+                } catch (e) {
+                    if (btn) {
+                        btn.disabled = false;
+                        btn.innerText = "🛑 BOTU DURDUR";
+                    }
+                    alert("Bot durdurulamadı.");
+                }
+            }
+
             async function manualClosePos(symbol) {
                 await fetch('/api/manual/close_position', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol}) });
                 updateDashboard();
@@ -2246,19 +2233,13 @@ async def get_dashboard(request: Request):
 
                     document.getElementById('btc-regime-badge').innerText = data.btc_regime || "BTC: AKTİF";
 
-                    const totalUsedMargin = Number(data.locked_margin ?? data.active_positions.reduce((acc, p) => acc + p.margin, 0));
+                    const totalUsedMargin = data.active_positions.reduce((acc, p) => acc + p.margin, 0);
                     const totalRiskAmount = data.active_positions.reduce((acc, p) => acc + p.max_loss, 0);
-                    const totalUnrealizedPnl = Number(data.unrealized_pnl ?? data.active_positions.reduce((acc, p) => acc + p.unrealized_pnl, 0));
+                    const totalUnrealizedPnl = data.active_positions.reduce((acc, p) => acc + p.unrealized_pnl, 0);
                     const totalPnlPct = data.total_balance > 0 ? ((totalUnrealizedPnl / data.total_balance) * 100) : 0;
 
                     const usedPct = data.total_balance > 0 ? ((totalUsedMargin / data.total_balance) * 100).toFixed(1) : "0.0";
                     document.getElementById('stat-used-margin').innerText = `$${totalUsedMargin.toFixed(1)} (%${usedPct})`;
-                    const freeBalanceEl = document.getElementById('stat-free-balance');
-                    if (freeBalanceEl) freeBalanceEl.innerText = `$${Number(data.free_balance ?? (data.total_balance - totalUsedMargin)).toFixed(2)}`;
-                    const lockedBalanceEl = document.getElementById('stat-locked-margin');
-                    if (lockedBalanceEl) lockedBalanceEl.innerText = `$${totalUsedMargin.toFixed(2)}`;
-                    const realizedPnlEl = document.getElementById('stat-realized-pnl');
-                    if (realizedPnlEl) realizedPnlEl.innerText = `$${Number(data.realized_pnl ?? 0).toFixed(2)}`;
 
                     document.getElementById('man-total-pos').innerText = `${data.active_positions.length} Adet`;
                     document.getElementById('man-total-margin').innerText = `$${totalUsedMargin.toFixed(2)}`;
