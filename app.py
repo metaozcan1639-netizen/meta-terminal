@@ -247,85 +247,85 @@ async def analyze_symbol(exchange, symbol):
             return None
 
         tasks = [
-            exchange.fetch_ohlcv(symbol, timeframe='5m', limit=50),
+            exchange.fetch_ohlcv(symbol, timeframe='5m', limit=35),
+            exchange.fetch_ohlcv(symbol, timeframe='15m', limit=35),
             exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50),
-            exchange.fetch_ohlcv(symbol, timeframe='4h', limit=30),
             exchange.fetch_open_interest_history(symbol, timeframe='5m', limit=6)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        if any(isinstance(r, Exception) or not r or len(r) < 25 for r in results[:3]):
+        if any(isinstance(r, Exception) or not r or len(r) < 30 for r in results[:3]):
             return None
 
         df_5m = calculate_indicators(pd.DataFrame(results[0], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
-        df_1h = calculate_indicators(pd.DataFrame(results[1], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
-        df_4h = calculate_indicators(pd.DataFrame(results[2], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        df_15m = calculate_indicators(pd.DataFrame(results[1], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        df_1h = calculate_indicators(pd.DataFrame(results[2], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         oi_data = results[3] if not isinstance(results[3], Exception) and results[3] else []
 
         c_5m = df_5m.iloc[-1]
+        c_15m = df_15m.iloc[-1]
         c_1h = df_1h.iloc[-1]
-        c_4h = df_4h.iloc[-1]
+
+        swing_low_15m = df_15m['low'].iloc[-20:-3].min()
+        swing_high_15m = df_15m['high'].iloc[-20:-3].max()
+        recent_breakout_high = df_5m['high'].iloc[-8:-1].max()
+        recent_breakout_low = df_5m['low'].iloc[-8:-1].min()
 
         score = 0
         direction = None
         reasons = []
 
-        # 1. KATMAN: Büyük Resim / Yön Filtresi (1H & 4H Trend Uyumu)
-        trend_bull = (c_1h['close'] > c_1h['ema20'] and c_1h['ema20'] > c_1h['ema50']) and (c_4h['close'] > c_4h['ema50'])
-        trend_bear = (c_1h['close'] < c_1h['ema20'] and c_1h['ema20'] < c_1h['ema50']) and (c_4h['close'] < c_4h['ema50'])
+        sweep_low = df_15m['low'].iloc[-4:].min() < swing_low_15m
+        mss_bull = c_5m['close'] > recent_breakout_high and c_5m['close'] > df_5m['ema20'].iloc[-1] and c_5m['close'] > c_5m['open']
 
-        if trend_bull:
-            direction = "LONG"
-            score += 35
-            reasons.append("📈 1H & 4H Güçlü Boğa Trend Dizilimi (EMA 20/50)")
-        elif trend_bear:
-            direction = "SHORT"
-            score += 35
-            reasons.append("📉 1H & 4H Güçlü Ayı Trend Dizilimi (EMA 20/50)")
-        else:
-            return None
+        sweep_high = df_15m['high'].iloc[-4:].max() > swing_high_15m
+        mss_bear = c_5m['close'] < recent_breakout_low and c_5m['close'] < df_5m['ema20'].iloc[-1] and c_5m['close'] < c_5m['open']
 
-        # 2. KATMAN: Akıllı Geri Çekilme (Pullback / Discount Alanı)
-        dist_to_ema20 = abs(c_5m['close'] - c_5m['ema20']) / c_5m['close']
-        is_pullback = dist_to_ema20 <= 0.012
+        if sweep_low and mss_bull:
+            if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] <= -1.2):
+                direction = "LONG"
+                score += 40
+                reasons.append("⚡ 15M Dip Likiditesi Alındı + 5M MSS Kırılımı")
+        elif sweep_high and mss_bear:
+            if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] >= 1.2):
+                direction = "SHORT"
+                score += 40
+                reasons.append("⚡ 15M Tepe Likiditesi Alındı + 5M MSS Kırılımı")
 
-        if is_pullback:
-            score += 25
-            reasons.append("🎯 Akıllı Geri Çekilme (EMA 20 Pullback Bölgesi)")
-        else:
-            return None
+        if direction == "LONG":
+            if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
+                score += 25
+                reasons.append("📈 1H Güçlü Ana Trend (Boğa) Onayı")
+            else:
+                return None
+        elif direction == "SHORT":
+            if c_1h['close'] < c_1h['ema50'] and c_1h['close'] < c_1h['ema20']:
+                score += 25
+                reasons.append("📉 1H Güçlü Ana Trend (Ayı) Onayı")
+            else:
+                return None
 
-        # 3. KATMAN: Hacim ve Momentum Patlaması (Tetikleyici)
-        vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
-        strong_momentum = False
-
-        if direction == "LONG" and c_5m['close'] > c_5m['open'] and vol_ratio >= 1.5:
-            strong_momentum = True
-        elif direction == "SHORT" and c_5m['close'] < c_5m['open'] and vol_ratio >= 1.5:
-            strong_momentum = True
-
-        if strong_momentum:
-            score += 20
-            reasons.append(f"🔥 Güçlü Momentum & Hacim Patlaması ({vol_ratio:.1f}x)")
-        else:
-            return None
-
-        if len(oi_data) >= 3:
+        if len(oi_data) >= 3 and direction:
             oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
             oi_curr = oi_data[-1].get('openInterestValue') or oi_data[-1].get('openInterest', 0)
             if oi_curr > oi_prev:
-                score += 10
-                reasons.append("📊 Açık Pozisyon (OI) Artışı Onayı")
+                score += 15
+                reasons.append("📊 Açık Pozisyon (OI) Artışı (Kurumsal Giriş Onayı)")
 
-        if 40 <= c_5m['rsi'] <= 65:
+        vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
+        if vol_ratio >= 1.30:
             score += 10
-            reasons.append(f"🎯 Sağlıklı Momentum RSI ({c_5m['rsi']:.1f})")
+            reasons.append(f"🔥 Yüksek Hacim Onayı ({vol_ratio:.1f}x)")
+
+        if 42 <= c_5m['rsi'] <= 62:
+            score += 10
+            reasons.append(f"🎯 Dengeli Momentum RSI ({c_5m['rsi']:.1f})")
 
         radar_item = {
             "symbol": symbol,
             "price": float(c_5m['close']),
             "rsi": round(float(c_5m['rsi']), 1) if pd.notnull(c_5m['rsi']) else 50.0,
             "vol_ratio": round(vol_ratio, 2),
-            "trend": direction,
+            "trend": direction if direction else ("LONG" if c_5m['close'] > c_5m['ema50'] else "SHORT"),
             "score": score
         }
         system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
@@ -333,38 +333,39 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
-        if score < 75:
+        if not direction or score < 75:
             return None
 
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
         if direction == "LONG":
-            sl = float(df_5m['low'].iloc[-12:].min() - (2.2 * atr))
-            if (entry - sl) / entry < 0.015:
-                sl = entry * 0.985
+            sl = float(df_5m['low'].iloc[-8:].min() - (1.8 * atr))
+            if (entry - sl) / entry < 0.012:
+                sl = entry * 0.988
             risk_dist = entry - sl
 
-            dyn_tp1 = float(df_1h['high'].iloc[-30:-1].max())
+            dyn_tp1 = float(df_15m['high'].iloc[-25:-1].max())
             if (dyn_tp1 - entry) < (1.5 * risk_dist):
                 dyn_tp1 = entry + (1.5 * risk_dist)
 
-            dyn_tp2 = float(df_4h['high'].iloc[-15:-1].max()) if len(df_4h) >= 15 else dyn_tp1 * 1.02
+            dyn_tp2 = float(df_1h['high'].iloc[-25:-1].max())
             if dyn_tp2 <= dyn_tp1 or (dyn_tp2 - entry) < (2.5 * risk_dist):
                 dyn_tp2 = entry + (3.0 * risk_dist)
 
             tp1, tp2 = dyn_tp1, dyn_tp2
+
         else:
-            sl = float(df_5m['high'].iloc[-12:].max() + (2.2 * atr))
-            if (sl - entry) / entry < 0.015:
-                sl = entry * 1.015
+            sl = float(df_5m['high'].iloc[-8:].max() + (1.8 * atr))
+            if (sl - entry) / entry < 0.012:
+                sl = entry * 1.012
             risk_dist = sl - entry
 
-            dyn_tp1 = float(df_1h['low'].iloc[-30:-1].min())
+            dyn_tp1 = float(df_15m['low'].iloc[-25:-1].min())
             if (entry - dyn_tp1) < (1.5 * risk_dist):
                 dyn_tp1 = entry - (1.5 * risk_dist)
 
-            dyn_tp2 = float(df_4h['low'].iloc[-15:-1].min()) if len(df_4h) >= 15 else dyn_tp1 * 0.98
+            dyn_tp2 = float(df_1h['low'].iloc[-25:-1].min())
             if dyn_tp2 >= dyn_tp1 or (entry - dyn_tp2) < (2.5 * risk_dist):
                 dyn_tp2 = entry - (3.0 * risk_dist)
 
@@ -411,7 +412,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: 1H & 4H Multi-Trend Filtresi ve Pullback Çekilme Modülü Devrede...")
+    add_log("Quant Motoru: 1H Ana Trend Filtresi Aktif | Likit Kripto Taraması Devrede...")
 
     while True:
         exchange = None
@@ -2033,6 +2034,8 @@ async def get_dashboard(request: Request):
                         if (posData && candleSeries) {
                             const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
                             const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP' });
+                            
+                            // DÜZELTME: Grafikte TP1 girişin yakınındaki hedef, TP2 ise uzak hedef olarak doğru renkte/etikette çizilsin
                             const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
                             const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
                             
@@ -2063,6 +2066,7 @@ async def get_dashboard(request: Request):
                     ? `<div class="bg-emerald-950/60 border border-emerald-800 p-1.5 rounded text-[11px] text-emerald-400 font-bold mb-2">⚡ TP1 Alındı (%50 Kâr Realize Edildi - Stop Giriş Boyuna Çekildi)</div>` 
                     : ``;
 
+                // DÜZELTME: Sağ paneldeki sıralama TP2 (üstte) -> TP1 (altta) -> Giriş -> SL şeklinde yapıldı
                 document.getElementById('active-rationale').innerHTML = `
                     <div class="flex justify-between items-center mb-2"><span class="font-bold text-base text-white">${pos.symbol}</span><span class="px-2 py-0.5 rounded text-xs font-bold ${pos.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${pos.direction}</span></div>
                     ${tp1StatusHtml}
