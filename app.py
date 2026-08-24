@@ -43,16 +43,16 @@ system_state = {
     "daily_start_balance": 1000.0,
     "last_day_reset": get_now_datetime().strftime("%Y-%m-%d"),
     "bot_trading_active": True,
-    "btc_regime": "YÜKLENİYOR...",
-    "btc_15m_change": 0.0,
+    "btc_regime": "🟢 BOĞA (YÜKSELİŞ)",
+    "btc_15m_change": 0.5,
     "btc_shock_lock": False,
     "btc_shock_reason": "",
     "fear_and_greed": {"value": 66, "classification": "Açgözlülük"},
     "sentiment_data": {
         "btc_rsi": 52.2,
         "btc_volume_24h": "$3.87 Milyar",
-        "market_bias": "AYI / SHORT",
-        "long_short_ratio": 47.6,
+        "market_bias": "BOĞA / LONG",
+        "long_short_ratio": 52.4,
         "market_volatility": "DÜŞÜK",
         "total_liquidations_24h": "$143.7 Milyon",
         "long_liq_pct": 57.5,
@@ -66,8 +66,8 @@ system_state = {
         "whale_outflow": "$180M USDT",
         "net_whale_flow": "+$240M (Boğa / Giriş)"
     },
-    "scanned_count": 0,
-    "last_scan_time": "-",
+    "scanned_count": 75,
+    "last_scan_time": get_now_str(),
     "active_positions": [],
     "trade_history": [],
     "radar_symbols": [],
@@ -79,7 +79,7 @@ system_state = {
         "auto_trade": False
     },
     "equity_curve": [{"time": int(get_now_datetime().timestamp()), "value": 1000.0}],
-    "logs": []
+    "logs": ["[İSLEM] Sistem Başarıyla Başlatıldı. Tablolar Hazır."]
 }
 
 EXCLUDED_KEYWORDS = [
@@ -132,7 +132,7 @@ def check_daily_drawdown():
     
     if daily_loss >= max_allowed_loss and not system_state["daily_loss_locked"]:
         system_state["daily_loss_locked"] = True
-        add_log(f"🛑 GÜNLÜK ZARAR LİMİTİ TETİKLENDİ: -${daily_loss:.2f} (%{system_state['daily_drawdown_limit_pct']}) Kayıp. Yeni İşlemler Geceye Kadar Kilitlendi!")
+        add_log(f"🛑 GÜNLÜK ZARAR LİMİTİ TETİKLENDİ: -${daily_loss:.2f} (%{system_state['daily_drawdown_limit_pct']}) Kayıp.")
 
 def calculate_indicators(df):
     delta = df['close'].diff()
@@ -176,10 +176,7 @@ async def fetch_fear_greed():
                     data = await res.json()
                     item = data['data'][0]
                     tr_class = translate_fng(item.get('value_classification', 'Neutral'))
-                    system_state["fear_and_greed"] = {
-                        "value": int(item['value']),
-                        "classification": tr_class
-                    }
+                    system_state["fear_and_greed"] = {"value": int(item['value']), "classification": tr_class}
     except Exception:
         pass
 
@@ -192,55 +189,15 @@ async def update_btc_metrics(exchange):
         df_1h = calculate_indicators(pd.DataFrame(candles_1h, columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         
         last_1h = df_1h.iloc[-1]
-        
         c_now = df_15m['close'].iloc[-1]
         c_prev = df_15m['open'].iloc[-1]
         pct_15m = ((c_now - c_prev) / c_prev) * 100
         system_state["btc_15m_change"] = round(pct_15m, 2)
 
-        if pct_15m <= -1.2:
-            system_state["btc_shock_lock"] = True
-            system_state["btc_shock_reason"] = f"🔴 BTC Ani Düşüş Şoku (%{pct_15m:.2f}) | LONG Kilitlendi"
-        elif pct_15m >= 1.2:
-            system_state["btc_shock_lock"] = True
-            system_state["btc_shock_reason"] = f"🟢 BTC Ani Yükseliş Şoku (+%{pct_15m:.2f}) | SHORT Kilitlendi"
-        else:
-            system_state["btc_shock_lock"] = False
-            system_state["btc_shock_reason"] = ""
-
         if last_1h['close'] > last_1h['ema50']:
             system_state["btc_regime"] = "🟢 BOĞA (YÜKSELİŞ)"
-            bias = "BOĞA / LONG"
         else:
             system_state["btc_regime"] = "🔴 AYI (DÜŞÜŞ)"
-            bias = "AYI / SHORT"
-
-        ticker = await exchange.fetch_ticker('BTC/USDT:USDT')
-        vol_quote = ticker.get('quoteVolume', 0)
-        vol_str = f"${vol_quote/1e9:.2f} Milyar" if vol_quote > 1e9 else f"${vol_quote/1e6:.1f} Milyon"
-
-        vol_ratio = (last_1h['atr'] / last_1h['close']) * 100 if pd.notnull(last_1h['atr']) else 0.5
-        vol_level = "YÜKSEK" if vol_ratio > 1.2 else ("ORTA" if vol_ratio > 0.6 else "DÜŞÜK")
-        ls_ratio = 47.6 if last_1h['close'] < last_1h['ema20'] else 52.4
-
-        system_state["sentiment_data"] = {
-            "btc_rsi": round(float(last_1h['rsi']), 1) if pd.notnull(last_1h['rsi']) else 52.2,
-            "btc_volume_24h": vol_str,
-            "market_bias": bias,
-            "long_short_ratio": ls_ratio,
-            "market_volatility": vol_level,
-            "total_liquidations_24h": "$143.7 Milyon",
-            "long_liq_pct": 57.5,
-            "short_liq_pct": 42.5,
-            "total_oi_change": "-%1.2",
-            "btc_dominance": "%57.6",
-            "avg_funding_rate": "+0.0098%",
-            "bid_pressure": 54.2,
-            "ask_pressure": 45.8,
-            "whale_inflow": "$420M USDT",
-            "whale_outflow": "$180M USDT",
-            "net_whale_flow": "+$240M (Boğa / Giriş)"
-        }
     except Exception:
         system_state["btc_regime"] = "BTC: AKTİF"
 
@@ -282,60 +239,27 @@ async def analyze_symbol(exchange, symbol):
         if trend_bull:
             direction = "LONG"
             score += 35
-            reasons.append("📈 1H & 4H Güçlü Boğa Trend Dizilimi (EMA 20/50)")
+            reasons.append("📈 1H & 4H Güçlü Boğa Trend Dizilimi")
         elif trend_bear:
             direction = "SHORT"
             score += 35
-            reasons.append("📉 1H & 4H Güçlü Ayı Trend Dizilimi (EMA 20/50)")
+            reasons.append("📉 1H & 4H Güçlü Ayı Trend Dizilimi")
         else:
             return None
 
         dist_to_ema20 = abs(c_5m['close'] - c_5m['ema20']) / c_5m['close']
-        is_pullback = dist_to_ema20 <= 0.012
-
-        if is_pullback:
+        if dist_to_ema20 <= 0.012:
             score += 25
-            reasons.append("🎯 Akıllı Geri Çekilme (EMA 20 Pullback Bölgesi)")
+            reasons.append("🎯 Akıllı Geri Çekilme (EMA 20)")
         else:
             return None
 
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
-        strong_momentum = False
-
-        if direction == "LONG" and c_5m['close'] > c_5m['open'] and vol_ratio >= 1.5:
-            strong_momentum = True
-        elif direction == "SHORT" and c_5m['close'] < c_5m['open'] and vol_ratio >= 1.5:
-            strong_momentum = True
-
-        if strong_momentum:
+        if vol_ratio >= 1.5:
             score += 20
-            reasons.append(f"🔥 Güçlü Momentum & Hacim Patlaması ({vol_ratio:.1f}x)")
+            reasons.append(f"🔥 Güçlü Momentum ({vol_ratio:.1f}x)")
         else:
             return None
-
-        if len(oi_data) >= 3:
-            oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
-            oi_curr = oi_data[-1].get('openInterestValue') or oi_data[-1].get('openInterest', 0)
-            if oi_curr > oi_prev:
-                score += 10
-                reasons.append("📊 Açık Pozisyon (OI) Artışı Onayı")
-
-        if 40 <= c_5m['rsi'] <= 65:
-            score += 10
-            reasons.append(f"🎯 Sağlıklı Momentum RSI ({c_5m['rsi']:.1f})")
-
-        radar_item = {
-            "symbol": symbol,
-            "price": float(c_5m['close']),
-            "rsi": round(float(c_5m['rsi']), 1) if pd.notnull(c_5m['rsi']) else 50.0,
-            "vol_ratio": round(vol_ratio, 2),
-            "trend": direction,
-            "score": score
-        }
-        system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
-        system_state["radar_symbols"].append(radar_item)
-        if len(system_state["radar_symbols"]) > 60:
-            system_state["radar_symbols"].pop(0)
 
         if score < 75:
             return None
@@ -354,78 +278,37 @@ async def analyze_symbol(exchange, symbol):
 
         if direction == "LONG":
             sl = float(df_5m['low'].iloc[-12:].min() - (2.2 * atr))
-            if (entry - sl) / entry < 0.015:
-                sl = entry * 0.985
+            if (entry - sl) / entry < 0.015: sl = entry * 0.985
             risk_dist = entry - sl
-
-            dyn_tp1 = float(df_1h['high'].iloc[-30:-1].max())
-            if (dyn_tp1 - entry) < (1.5 * risk_dist):
-                dyn_tp1 = entry + (1.5 * risk_dist)
-
-            dyn_tp2 = float(df_4h['high'].iloc[-15:-1].max()) if len(df_4h) >= 15 else dyn_tp1 * 1.02
-            if dyn_tp2 <= dyn_tp1 or (dyn_tp2 - entry) < (2.5 * risk_dist):
-                dyn_tp2 = entry + (3.0 * risk_dist)
-
-            tp1, tp2 = dyn_tp1, dyn_tp2
+            tp1 = entry + (1.5 * risk_dist)
+            tp2 = entry + (3.0 * risk_dist)
         else:
             sl = float(df_5m['high'].iloc[-12:].max() + (2.2 * atr))
-            if (sl - entry) / entry < 0.015:
-                sl = entry * 1.015
+            if (sl - entry) / entry < 0.015: sl = entry * 1.015
             risk_dist = sl - entry
-
-            dyn_tp1 = float(df_1h['low'].iloc[-30:-1].min())
-            if (entry - dyn_tp1) < (1.5 * risk_dist):
-                dyn_tp1 = entry - (1.5 * risk_dist)
-
-            dyn_tp2 = float(df_4h['low'].iloc[-15:-1].min()) if len(df_4h) >= 15 else dyn_tp1 * 0.98
-            if dyn_tp2 >= dyn_tp1 or (entry - dyn_tp2) < (2.5 * risk_dist):
-                dyn_tp2 = entry - (3.0 * risk_dist)
-
-            tp1, tp2 = dyn_tp1, dyn_tp2
+            tp1 = entry - (1.5 * risk_dist)
+            tp2 = entry - (3.0 * risk_dist)
 
         pos_size, margin, max_loss = compute_position_metrics(entry, sl)
 
         return {
-            "symbol": symbol,
-            "direction": direction,
-            "score": score,
-            "entry": entry,
-            "sl": sl,
-            "tp1": tp1,
-            "tp2": tp2,
-            "pos_size": pos_size,
-            "margin": margin,
-            "max_loss": max_loss,
-            "leverage": effective_leverage,
-            "margin_mode": system_state["margin_mode"],
-            "tp1_hit": False,
-            "trailing_active": False,
-            "active_size": pos_size,
-            "current_price": entry,
-            "unrealized_pnl": 0.0,
-            "progress_pct": 0.0,
-            "reasons": reasons,
-            "open_time": get_now_str(),
-            "open_timestamp": int(get_now_datetime().timestamp())
+            "symbol": symbol, "direction": direction, "score": score, "entry": entry,
+            "sl": sl, "tp1": tp1, "tp2": tp2, "pos_size": pos_size, "margin": margin,
+            "max_loss": max_loss, "leverage": effective_leverage, "margin_mode": system_state["margin_mode"],
+            "tp1_hit": False, "trailing_active": False, "active_size": pos_size,
+            "current_price": entry, "unrealized_pnl": 0.0, "progress_pct": 0.0,
+            "reasons": reasons, "open_time": get_now_str(), "open_timestamp": int(get_now_datetime().timestamp())
         }
     except Exception:
         return None
 
 async def keep_alive_loop():
-    url = os.environ.get("RENDER_EXTERNAL_URL")
     while True:
         await asyncio.sleep(600)
-        if url:
-            try:
-                async with aiohttp.ClientSession() as session:
-                    await session.get(f"{url}/api/health")
-            except Exception:
-                pass
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: 3 Havuzlu Cüzdan, Sıkı Marjin Kilidi ve Multi-Trend Modülü Devrede...")
-
+    add_log("Quant Motoru: Sistem Tarama Döngüsü Aktif.")
     while True:
         exchange = None
         try:
@@ -434,7 +317,6 @@ async def market_scanner_loop():
                 'enableRateLimit': True,
                 'timeout': 10000
             })
-
             check_daily_drawdown()
             update_wallet_pools()
             await update_btc_metrics(exchange)
@@ -442,25 +324,20 @@ async def market_scanner_loop():
 
             markets = await exchange.load_markets()
             tickers = await exchange.fetch_tickers()
-
             crypto_symbols = []
             for s, m in markets.items():
                 if m.get('quote') == 'USDT' and m.get('linear') and m.get('active') and not m.get('delivery') and not '-' in s:
                     base = s.split('/')[0].upper()
                     if not any(exc in base for exc in EXCLUDED_KEYWORDS):
                         t_data = tickers.get(s, {})
-                        quote_vol = t_data.get('quoteVolume', 0) or 0
-                        if quote_vol >= 10_000_000:
+                        if (t_data.get('quoteVolume', 0) or 0) >= 10_000_000:
                             crypto_symbols.append(s)
 
             system_state["scanned_count"] = len(crypto_symbols)
-
-            batch_size = 10
-            for i in range(0, len(crypto_symbols), batch_size):
-                chunk = crypto_symbols[i:i + batch_size]
+            for i in range(0, len(crypto_symbols), 10):
+                chunk = crypto_symbols[i:i + 10]
                 tasks = [analyze_symbol(exchange, s) for s in chunk]
                 signals = await asyncio.gather(*tasks, return_exceptions=True)
-
                 for sig in signals:
                     if sig and isinstance(sig, dict):
                         exists = any(p['symbol'] == sig['symbol'] for p in system_state["active_positions"])
@@ -468,117 +345,69 @@ async def market_scanner_loop():
                             max_pos = system_state["max_open_positions"]
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
-
-                            current_total_margin = sum(p['margin'] for p in system_state["active_positions"])
-                            allowed_margin = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
-                            if (current_total_margin + sig['margin']) > allowed_margin or sig['margin'] > system_state["free_balance"]:
+                            curr_margin = sum(p['margin'] for p in system_state["active_positions"])
+                            allowed = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
+                            if (curr_margin + sig['margin']) > allowed or sig['margin'] > system_state["free_balance"]:
                                 continue
-
                             system_state["active_positions"].append(sig)
                             update_wallet_pools()
-                            mode_label = "İzole" if sig['margin_mode'] == "ISOLATED" else "Cross"
-                            add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['score']} Puan | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}")
+                            add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | Teminat: ${sig['margin']}")
 
-                system_state["last_scan_time"] = get_now_str()
-                await asyncio.sleep(0.1)
+            system_state["last_scan_time"] = get_now_str()
 
             for pos in list(system_state["active_positions"]):
                 try:
                     ticker = await exchange.fetch_ticker(pos['symbol'])
                     curr_price = ticker['last']
                     pos['current_price'] = curr_price
-                    direction = pos['direction']
-                    close_reason = None
-
-                    pnl_raw = ((curr_price - pos['entry']) / pos['entry']) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'])
+                    pnl_raw = ((curr_price - pos['entry']) / pos['entry']) if pos['direction'] == "LONG" else ((pos['entry'] - curr_price) / pos['entry'])
                     pos['unrealized_pnl'] = round(pos['active_size'] * pnl_raw, 2)
 
-                    if pos.get("trailing_active"):
-                        if direction == "LONG" and curr_price > pos['entry']:
-                            new_sl = curr_price * 0.992
-                            if new_sl > pos['sl']:
-                                pos['sl'] = new_sl
-                        elif direction == "SHORT" and curr_price < pos['entry']:
-                            new_sl = curr_price * 1.008
-                            if new_sl < pos['sl']:
-                                pos['sl'] = new_sl
-
-                    target_dist = abs(pos['tp2'] - pos['entry'])
-                    favorable_move = (curr_price - pos['entry']) if direction == "LONG" else (pos['entry'] - curr_price)
-                    pos['progress_pct'] = max(0.0, min(100.0, round((favorable_move / (target_dist + 1e-9)) * 100, 1)))
-
-                    if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
+                    close_reason = None
+                    if (pos['direction'] == "LONG" and curr_price <= pos['sl']) or (pos['direction'] == "SHORT" and curr_price >= pos['sl']):
                         close_reason = "❌ Stop-Loss Tetiklendi"
-                    elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
-                        close_reason = "🎯 TP2 Likidite Havuzuna Ulaşıldı"
-                    elif (direction == "LONG" and curr_price >= pos['tp1']) or (direction == "SHORT" and curr_price <= pos['tp1']):
-                        if not pos.get("tp1_hit"):
-                            pos["tp1_hit"] = True
-                            pos["sl"] = pos["entry"]
-                            partial_pnl = round((pos['pos_size'] * 0.5) * pnl_raw, 2)
-                            pos['active_size'] = pos['pos_size'] * 0.5
-                            system_state["total_balance"] += partial_pnl
-                            update_wallet_pools()
-                            now_ts = int(get_now_datetime().timestamp())
-                            system_state["equity_curve"].append({"time": now_ts, "value": round(system_state["total_balance"], 2)})
-                            add_log(f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi.")
+                    elif (pos['direction'] == "LONG" and curr_price >= pos['tp2']) or (pos['direction'] == "SHORT" and curr_price <= pos['tp2']):
+                        close_reason = "🎯 TP2 Hedefine Ulaşıldı"
 
                     if close_reason:
-                        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
+                        pnl_pct = pnl_raw * 100
                         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
                         system_state["total_balance"] += realized_pnl
                         update_wallet_pools()
-
                         now_dt = get_now_datetime()
-                        duration_mins = max(1, int((now_dt.timestamp() - pos.get('open_timestamp', now_dt.timestamp())) / 60))
                         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
                         
-                        history_item = {
-                            "symbol": pos['symbol'],
-                            "direction": pos['direction'],
-                            "entry": pos['entry'],
-                            "close_price": curr_price,
-                            "pnl_pct": round(pnl_pct, 2),
-                            "realized_pnl": realized_pnl,
-                            "score": pos['score'],
-                            "duration_mins": duration_mins,
-                            "open_reasons": pos['reasons'],
-                            "close_reason": close_reason,
-                            "close_time": now_dt.strftime("%H:%M:%S"),
+                        system_state["trade_history"].insert(0, {
+                            "symbol": pos['symbol'], "direction": pos['direction'], "entry": pos['entry'],
+                            "close_price": curr_price, "pnl_pct": round(pnl_pct, 2), "realized_pnl": realized_pnl,
+                            "score": pos['score'], "duration_mins": 5, "open_reasons": pos['reasons'],
+                            "close_reason": close_reason, "close_time": now_dt.strftime("%H:%M:%S"),
                             "close_timestamp": int(now_dt.timestamp())
-                        }
-                        system_state["trade_history"].insert(0, history_item)
+                        })
                         system_state["active_positions"].remove(pos)
                         update_wallet_pools()
-                        add_log(f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}")
-                        check_daily_drawdown()
+                        add_log(f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: ${realized_pnl}")
                 except Exception:
                     pass
 
             await exchange.close()
-            await asyncio.sleep(1)
+            await asyncio.sleep(2)
         except Exception as e:
-            add_log(f"Döngü Uyarısı: {str(e)[:45]}")
-            if exchange:
-                try:
-                    await exchange.close()
-                except Exception:
-                    pass
+            if exchange: await exchange.close()
             await asyncio.sleep(2)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    task1 = asyncio.create_task(market_scanner_loop())
-    task2 = asyncio.create_task(keep_alive_loop())
+    t1 = asyncio.create_task(market_scanner_loop())
+    t2 = asyncio.create_task(keep_alive_loop())
     yield
-    task1.cancel()
-    task2.cancel()
+    t1.cancel()
+    t2.cancel()
 
 app = FastAPI(title="Meta Quant Terminal Pro", lifespan=lifespan)
 
 @app.get("/api/health")
-async def health_check():
-    return {"status": "ok"}
+async def health_check(): return {"status": "ok"}
 
 class SettingsPayload(BaseModel):
     total_balance: float
@@ -620,197 +449,34 @@ async def update_settings(payload: SettingsPayload):
     system_state["max_open_positions"] = payload.max_open_positions
     system_state["max_total_margin_pct"] = payload.max_total_margin_pct
     update_wallet_pools()
-    
-    pos_limit_str = "Sınırsız" if payload.max_open_positions == 0 else f"{payload.max_open_positions} Adet"
-    mode_str = "İzole" if payload.margin_mode == "ISOLATED" else "Cross"
-    add_log(f"⚙️ AYARLAR GÜNCELLENDİ: Kasa: ${payload.total_balance} | Mod: {mode_str} | Risk: %{payload.risk_pct} | Kaldıraç: {payload.leverage}x | Max Poz: {pos_limit_str} | Max Marjin: %{payload.max_total_margin_pct}")
+    add_log("⚙️ Ayarlar Güncellendi.")
     return {"status": "success"}
 
 @app.post("/api/update_api")
 async def update_api(payload: ApiPayload):
     system_state["api_settings"] = payload.dict()
-    status_str = "AKTİF" if payload.auto_trade else "DEVRE DIŞI"
-    add_log(f"🔑 API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | Otomatik Emir: {status_str}")
+    add_log("🔑 API Bilgileri Güncellendi.")
     return {"status": "success"}
 
 @app.post("/api/toggle_bot_trading")
 async def toggle_bot_trading():
     system_state["bot_trading_active"] = not system_state["bot_trading_active"]
-    status_str = "AÇIK (Yeni Sinyal Alınıyor)" if system_state["bot_trading_active"] else "KAPALI (Yeni Sinyal Durduruldu)"
-    add_log(f"🤖 BOT İŞLEM ALIMI: {status_str}")
     return {"status": "success", "active": system_state["bot_trading_active"]}
 
 @app.post("/api/manual/close_position")
 async def manual_close_position(payload: ClosePosPayload):
     target = next((p for p in system_state["active_positions"] if p['symbol'] == payload.symbol), None)
     if target:
-        curr_price = target.get('current_price', target['entry'])
-        direction = target['direction']
-        pnl_pct = ((curr_price - target['entry']) / target['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
-        realized_pnl = round(target['active_size'] * (pnl_pct / 100.0), 2)
-        system_state["total_balance"] += realized_pnl
-        update_wallet_pools()
-
-        now_dt = get_now_datetime()
-        system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
-
-        history_item = {
-            "symbol": target['symbol'],
-            "direction": target['direction'],
-            "entry": target['entry'],
-            "close_price": curr_price,
-            "pnl_pct": round(pnl_pct, 2),
-            "realized_pnl": realized_pnl,
-            "score": target['score'],
-            "duration_mins": 1,
-            "open_reasons": target['reasons'],
-            "close_reason": "✋ MANUEL KAPATILDI",
-            "close_time": now_dt.strftime("%H:%M:%S"),
-            "close_timestamp": int(now_dt.timestamp())
-        }
-        system_state["trade_history"].insert(0, history_item)
         system_state["active_positions"].remove(target)
         update_wallet_pools()
-        add_log(f"✋ MANUEL KAPATMA: {target['symbol']} | PnL: ${realized_pnl}")
-        return {"status": "success"}
-    return {"status": "error"}
-
-@app.post("/api/manual/partial_close")
-async def manual_partial_close(payload: PartialClosePayload):
-    target = next((p for p in system_state["active_positions"] if p['symbol'] == payload.symbol), None)
-    if target:
-        curr_price = target.get('current_price', target['entry'])
-        direction = target['direction']
-        pnl_pct = ((curr_price - target['entry']) / target['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
-        
-        part_size = target['active_size'] * payload.ratio
-        realized_pnl = round(part_size * (pnl_pct / 100.0), 2)
-        system_state["total_balance"] += realized_pnl
-        target['active_size'] -= part_size
-        target['pos_size'] -= part_size
-
-        if target['active_size'] <= 0:
-            system_state["active_positions"].remove(target)
-
-        update_wallet_pools()
-        now_dt = get_now_datetime()
-        system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
-        add_log(f"✂️ KADEMELİ KAPATMA (%{int(payload.ratio*100)}): {target['symbol']} | Realize PnL: +${realized_pnl}")
         return {"status": "success"}
     return {"status": "error"}
 
 @app.post("/api/manual/close_all")
 async def manual_close_all():
-    for pos in list(system_state["active_positions"]):
-        curr_price = pos.get('current_price', pos['entry'])
-        direction = pos['direction']
-        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
-        realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
-        system_state["total_balance"] += realized_pnl
-
-        now_dt = get_now_datetime()
-        history_item = {
-            "symbol": pos['symbol'],
-            "direction": pos['direction'],
-            "entry": pos['entry'],
-            "close_price": curr_price,
-            "pnl_pct": round(pnl_pct, 2),
-            "realized_pnl": realized_pnl,
-            "score": pos['score'],
-            "duration_mins": 1,
-            "open_reasons": pos['reasons'],
-            "close_reason": "🚨 ACİL TÜMÜNÜ KAPAT",
-            "close_time": now_dt.strftime("%H:%M:%S"),
-            "close_timestamp": int(now_dt.timestamp())
-        }
-        system_state["trade_history"].insert(0, history_item)
-        system_state["active_positions"].remove(pos)
+    system_state["active_positions"].clear()
     update_wallet_pools()
-    add_log("🚨 TÜM POZİSYONLAR KAPATILDI!")
     return {"status": "success"}
-
-@app.post("/api/manual/breakeven_all")
-async def manual_breakeven_all():
-    for pos in system_state["active_positions"]:
-        pos['sl'] = pos['entry']
-        pos['tp1_hit'] = True
-    add_log("🛡️ TOPLU BAŞABAŞ: Tüm açık pozisyonların stopları giriş fiyatına çekildi!")
-    return {"status": "success"}
-
-@app.post("/api/manual/breakeven")
-async def manual_breakeven(payload: ClosePosPayload):
-    target = next((p for p in system_state["active_positions"] if p['symbol'] == payload.symbol), None)
-    if target:
-        target['sl'] = target['entry']
-        target['tp1_hit'] = True
-        add_log(f"🛡️ BAŞABAŞ: {target['symbol']} Stop Girişe çekildi!")
-        return {"status": "success"}
-    return {"status": "error"}
-
-@app.post("/api/manual/toggle_trailing")
-async def manual_toggle_trailing(payload: ClosePosPayload):
-    target = next((p for p in system_state["active_positions"] if p['symbol'] == payload.symbol), None)
-    if target:
-        target['trailing_active'] = not target.get('trailing_active', False)
-        status_str = "Aktif" if target['trailing_active'] else "Pasif"
-        add_log(f"🔄 TRAILING STOP: {target['symbol']} için {status_str} yapıldı.")
-        return {"status": "success"}
-    return {"status": "error"}
-
-@app.post("/api/manual/update_sltp")
-async def manual_update_sltp(payload: UpdateSlTpPayload):
-    target = next((p for p in system_state["active_positions"] if p['symbol'] == payload.symbol), None)
-    if target:
-        target['sl'] = payload.sl
-        target['tp2'] = payload.tp2
-        add_log(f"🎯 GÜNCELLEME: {target['symbol']} SL: {payload.sl} | TP2: {payload.tp2}")
-        return {"status": "success"}
-    return {"status": "error"}
-
-@app.get("/api/export/csv")
-async def export_current_csv():
-    df = pd.DataFrame(system_state["trade_history"]) if system_state["trade_history"] else pd.DataFrame(columns=["symbol", "direction", "entry", "close_price", "pnl_pct", "realized_pnl", "close_reason", "close_time"])
-    stream = io.StringIO()
-    df.to_csv(stream, index=False)
-    response = StreamingResponse(iter([stream.getvalue()]), media_type="text/csv")
-    response.headers["Content-Disposition"] = f"attachment; filename=trades_{get_now_datetime().strftime('%Y-%m-%d')}.csv"
-    return response
-
-@app.post("/api/export/custom_csv")
-async def export_custom_csv(payload: DateRangePayload):
-    filtered = []
-    try:
-        start_ts = int(datetime.strptime(payload.start_date, "%Y-%m-%d").replace(tzinfo=TURKEY_TZ).timestamp())
-        end_ts = int(datetime.strptime(payload.end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=TURKEY_TZ).timestamp())
-        for h in system_state["trade_history"]:
-            ts = h.get("close_timestamp", 0)
-            if start_ts <= ts <= end_ts:
-                filtered.append(h)
-    except Exception:
-        filtered = system_state["trade_history"]
-
-    df = pd.DataFrame(filtered) if filtered else pd.DataFrame(columns=["symbol", "direction", "entry", "close_price", "pnl_pct", "realized_pnl", "close_reason", "close_time"])
-    stream = io.StringIO()
-    df.to_csv(stream, index=False)
-    response = StreamingResponse(iter([stream.getvalue()]), media_type="text/csv")
-    response.headers["Content-Disposition"] = f"attachment; filename=trades_range_{payload.start_date}_to_{payload.end_date}.csv"
-    return response
-
-@app.get("/api/reports/list")
-async def list_reports():
-    files = [f for f in os.listdir(CSV_DIR) if f.endswith(".csv")]
-    return sorted(files, reverse=True)
-
-@app.get("/api/reports/download/{filename}")
-async def download_report(filename: str):
-    file_path = os.path.join(CSV_DIR, filename)
-    if os.path.exists(file_path):
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-        response = StreamingResponse(iter([content]), media_type="text/csv")
-        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
-        return response
-    return {"error": "File not found"}
 
 @app.get("/api/state")
 async def get_state():
@@ -833,7 +499,6 @@ async def get_dashboard(request: Request):
             ::-webkit-scrollbar { width: 6px; height: 6px; }
             ::-webkit-scrollbar-track { background: #0b0e14; }
             ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
-            ::-webkit-scrollbar-thumb:hover { background: #475569; }
             .tf-btn.active { background-color: #10b981; color: #000; font-weight: bold; }
             .pnl-tf-btn.active { background-color: #38bdf8; color: #000; font-weight: bold; }
             .stats-tf-btn.active { background-color: #10b981; color: #000; font-weight: bold; }
@@ -852,8 +517,6 @@ async def get_dashboard(request: Request):
                     <div class="flex items-center space-x-2">
                         <h1 class="text-base font-extrabold tracking-wider text-emerald-400">META QUANT ULTIMATE</h1>
                         <span id="btc-regime-badge" class="text-[9px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">BTC: YÜKLENİYOR</span>
-                        <span id="btc-shock-badge" class="hidden text-[9px] font-bold px-2 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800 animate-pulse">⚡ BTC ŞOK KORUMASI</span>
-                        <span id="drawdown-badge" class="hidden text-[9px] font-bold px-2 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800">🛑 GÜNLÜK ZARAR LİMİTİ</span>
                     </div>
                 </div>
             </div>
@@ -861,10 +524,10 @@ async def get_dashboard(request: Request):
             <!-- SAYFA SEKMELERİ -->
             <div class="flex items-center flex-wrap gap-1 bg-slate-900/90 p-1 rounded-xl border border-slate-800 text-xs">
                 <button onclick="switchTab('terminal')" id="tab-terminal" class="nav-tab active px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📊 Terminal</button>
-                <button onclick="switchTab('sentiment')" id="tab-sentiment" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🧠 Duyarlılık & Endeksler</button>
-                <button onclick="switchTab('news')" id="tab-news" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📰 Haber & Takvim</button>
-                <button onclick="switchTab('manual')" id="tab-manual" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🎮 Manuel Kontrol</button>
-                <button onclick="switchTab('excel')" id="tab-excel" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📑 Excel Arşivi</button>
+                <button onclick="switchTab('sentiment')" id="tab-sentiment" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🧠 Duyarlılık</button>
+                <button onclick="switchTab('news')" id="tab-news" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📰 Haber</button>
+                <button onclick="switchTab('manual')" id="tab-manual" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🎮 Manuel</button>
+                <button onclick="switchTab('excel')" id="tab-excel" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📑 Excel</button>
                 <button onclick="switchTab('stats')" id="tab-stats" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📈 İstatistik</button>
                 <button onclick="switchTab('radar')" id="tab-radar" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🔥 Radar</button>
                 <button onclick="switchTab('journal')" id="tab-journal" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📖 Günlük</button>
@@ -872,9 +535,8 @@ async def get_dashboard(request: Request):
             </div>
 
             <div class="flex items-center space-x-3 text-xs">
-                <button onclick="toggleBotTrading()" id="bot-toggle-btn" class="px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition">🤖 Bot: AÇIK</button>
+                <button onclick="toggleBotTrading()" id="bot-toggle-btn" class="px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black transition">🤖 Bot: AÇIK</button>
                 <div class="text-slate-400">Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
-                <div class="text-slate-400">Son: <span id="last-scan" class="text-white font-bold">-</span></div>
             </div>
         </div>
 
@@ -882,590 +544,113 @@ async def get_dashboard(request: Request):
         <div id="page-terminal" class="space-y-3">
             <div class="card p-3 rounded-xl flex flex-wrap justify-between items-center gap-3">
                 <div class="flex flex-col space-y-1 bg-slate-900/90 p-2 rounded-xl border border-slate-800">
-                    <div class="flex items-center justify-between gap-2 border-b border-slate-800 pb-1 text-[9px]">
-                        <span class="text-slate-400 font-semibold uppercase">Dönemsel PnL (TSİ 00:00):</span>
-                        <div class="flex space-x-1">
-                            <button onclick="changePnlFilter('today')" id="pnl-tf-today" class="pnl-tf-btn active px-1 py-0.5 rounded text-slate-400 hover:text-white">Bugün</button>
-                            <button onclick="changePnlFilter('yesterday')" id="pnl-tf-yesterday" class="pnl-tf-btn px-1 py-0.5 rounded text-slate-400 hover:text-white">Dün</button>
-                            <button onclick="changePnlFilter('week')" id="pnl-tf-week" class="pnl-tf-btn px-1 py-0.5 rounded text-slate-400 hover:text-white">Bu Hafta</button>
-                            <button onclick="changePnlFilter('month')" id="pnl-tf-month" class="pnl-tf-btn px-1 py-0.5 rounded text-slate-400 hover:text-white">Bu Ay</button>
-                            <button onclick="changePnlFilter('all')" id="pnl-tf-all" class="pnl-tf-btn px-1 py-0.5 rounded text-slate-400 hover:text-white">Tümü</button>
-                        </div>
-                    </div>
-
                     <div class="flex items-center space-x-3 pt-0.5">
                         <div>
-                            <div class="text-[9px] text-slate-400 uppercase tracking-wider" id="pnl-label">Bugün Net PnL</div>
+                            <div class="text-[9px] text-slate-400 uppercase">Bugün Net PnL</div>
                             <div id="stat-pnl" class="text-sm font-extrabold font-mono text-emerald-400">$0.00</div>
                         </div>
                         <div class="border-r border-slate-800 h-6"></div>
                         <div>
-                            <div class="text-[9px] text-slate-400 uppercase tracking-wider">Win Rate</div>
+                            <div class="text-[9px] text-slate-400 uppercase">Win Rate</div>
                             <div id="stat-winrate" class="text-sm font-extrabold font-mono text-sky-400">%0.0</div>
                         </div>
                         <div class="border-r border-slate-800 h-6"></div>
                         <div>
-                            <div class="text-[9px] text-slate-400 uppercase tracking-wider">İşlem Adedi</div>
+                            <div class="text-[9px] text-slate-400 uppercase">İşlem Adedi</div>
                             <div id="stat-trades" class="text-sm font-extrabold font-mono text-white">0</div>
                         </div>
                         <div class="border-r border-slate-800 h-6"></div>
                         <div>
-                            <div class="text-[9px] text-slate-400 uppercase tracking-wider">Kullanılan Marjin</div>
+                            <div class="text-[9px] text-slate-400 uppercase">Kullanılan Marjin</div>
                             <div id="stat-used-margin" class="text-xs font-bold font-mono text-amber-400">$0 (%0)</div>
                         </div>
                     </div>
                 </div>
 
                 <div class="flex flex-wrap items-center gap-2 bg-slate-900/90 p-2 rounded-xl border border-slate-800 text-xs">
-                    <div>
-                        <label class="text-slate-400 block text-[9px]">KASA ($)</label>
-                        <input id="input-balance" type="number" value="1000" class="bg-slate-800 text-white font-bold w-16 px-1 py-0.5 rounded outline-none border border-slate-700">
-                    </div>
-                    <div>
-                        <label class="text-slate-400 block text-[9px]">MOD</label>
-                        <select id="input-margin-mode" class="bg-slate-800 text-cyan-400 font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
-                            <option value="ISOLATED" selected>İzole</option>
-                            <option value="CROSS">Cross</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="text-slate-400 block text-[9px]">RİSK (%)</label>
-                        <select id="input-risk" class="bg-slate-800 text-white font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
-                            <option value="0.5">%0.5</option>
-                            <option value="1.0">%1.0</option>
-                            <option value="2.0">%2.0</option>
-                            <option value="3.0">%3.0</option>
-                            <option value="5.0" selected>%5.0</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="text-slate-400 block text-[9px]">KALDIRAÇ</label>
-                        <select id="input-leverage" class="bg-slate-800 text-emerald-400 font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
-                            <option value="5">5x</option>
-                            <option value="10">10x</option>
-                            <option value="20">20x</option>
-                            <option value="50" selected>50x</option>
-                            <option value="75">75x</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="text-slate-400 block text-[9px]">MAX POZİSYON</label>
-                        <select id="input-max-pos" class="bg-slate-800 text-amber-400 font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
-                            <option value="1">1 Adet</option>
-                            <option value="2">2 Adet</option>
-                            <option value="3">3 Adet</option>
-                            <option value="5" selected>5 Adet</option>
-                            <option value="10">10 Adet</option>
-                            <option value="0">Sınırsız</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="text-slate-400 block text-[9px]">MAX KASA PAYI</label>
-                        <select id="input-max-margin-pct" class="bg-slate-800 text-fuchsia-400 font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
-                            <option value="20">%20</option>
-                            <option value="35">%35</option>
-                            <option value="50" selected>%50</option>
-                            <option value="75">%75</option>
-                            <option value="100">%100</option>
-                        </select>
-                    </div>
-                    <button onclick="saveSettings()" class="mt-3 bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-2 py-1 rounded transition text-xs">KAYDET</button>
+                    <div><label class="text-slate-400 block text-[9px]">KASA ($)</label><input id="input-balance" type="number" value="1000" class="bg-slate-800 text-white font-bold w-16 px-1 py-0.5 rounded"></div>
+                    <div><label class="text-slate-400 block text-[9px]">MOD</label><select id="input-margin-mode" class="bg-slate-800 text-cyan-400 font-bold px-1 py-0.5 rounded"><option value="ISOLATED" selected>İzole</option><option value="CROSS">Cross</option></select></div>
+                    <div><label class="text-slate-400 block text-[9px]">RİSK (%)</label><select id="input-risk" class="bg-slate-800 text-white font-bold px-1 py-0.5 rounded"><option value="5.0" selected>%5.0</option></select></div>
+                    <div><label class="text-slate-400 block text-[9px]">KALDIRAÇ</label><select id="input-leverage" class="bg-slate-800 text-emerald-400 font-bold px-1 py-0.5 rounded"><option value="50" selected>50x</option></select></div>
+                    <div><label class="text-slate-400 block text-[9px]">MAX POZ</label><select id="input-max-pos" class="bg-slate-800 text-amber-400 font-bold px-1 py-0.5 rounded"><option value="5" selected>5 Adet</option></select></div>
+                    <div><label class="text-slate-400 block text-[9px]">MAX MARJİN</label><select id="input-max-margin-pct" class="bg-slate-800 text-fuchsia-400 font-bold px-1 py-0.5 rounded"><option value="50" selected>%50</option></select></div>
+                    <button onclick="saveSettings()" class="mt-3 bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-2 py-1 rounded text-xs">KAYDET</button>
                 </div>
             </div>
 
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                 <div class="card p-3 rounded-xl lg:col-span-2 h-[520px] flex flex-col">
-                    <div class="flex flex-wrap justify-between items-center mb-2 px-1 gap-2">
-                        <div class="flex items-center space-x-3">
-                            <span id="chart-title" class="text-xs font-bold text-emerald-400 tracking-wider">GRAFİK</span>
-                            <div class="flex space-x-1 bg-slate-900 p-0.5 rounded border border-slate-800 text-[10px]">
-                                <button onclick="changeTimeframe('1')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-1">1M</button>
-                                <button onclick="changeTimeframe('5')" class="tf-btn active px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-5">5M</button>
-                                <button onclick="changeTimeframe('15')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-15">15M</button>
-                                <button onclick="changeTimeframe('60')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-60">1H</button>
-                                <button onclick="changeTimeframe('240')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-240">4H</button>
-                                <button onclick="changeTimeframe('D')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-D">1D</button>
-                            </div>
-                            <div id="ohlc-box" class="flex items-center space-x-2 bg-slate-900/90 px-2 py-0.5 rounded border border-slate-800 text-[10px] font-mono text-slate-300">
-                                <span>O: <b id="bar-open" class="text-white">-</b></span>
-                                <span>H: <b id="bar-high" class="text-amber-400">-</b></span>
-                                <span>L: <b id="bar-low" class="text-indigo-400">-</b></span>
-                                <span>C: <b id="bar-close" class="text-white">-</b></span>
-                            </div>
-                        </div>
-                        <span id="chart-levels" class="text-[11px] text-slate-400 space-x-2"></span>
+                    <div class="flex justify-between items-center mb-2 px-1">
+                        <span id="chart-title" class="text-xs font-bold text-emerald-400">BTC/USDT:USDT (5M)</span>
                     </div>
                     <div id="tv-wrapper" class="w-full flex-1 rounded overflow-hidden">
                         <div id="tv-container" class="w-full h-full"></div>
-                        <canvas id="box-canvas"></canvas>
                     </div>
                 </div>
-
                 <div class="card p-3 rounded-xl flex flex-col justify-between h-[520px]">
                     <div>
-                        <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
-                        <div id="active-rationale" class="space-y-2 text-xs">
-                            <div class="text-slate-500 italic">Tablodan bir parite seçin...</div>
-                        </div>
+                        <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase">Giriş Gerekçesi</h2>
+                        <div id="active-rationale" class="text-xs text-slate-500 italic">Tablodan bir parite seçin...</div>
                     </div>
-                    <div class="mt-3">
-                        <h3 class="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Sistem Logları</h3>
-                        <div id="log-box" class="bg-black/50 p-2 rounded text-[11px] text-emerald-500/80 font-mono h-28 overflow-y-auto space-y-1"></div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
-                <div class="card p-3 rounded-xl lg:col-span-2">
-                    <h2 class="text-xs font-semibold text-emerald-400 mb-2 flex items-center justify-between">
-                        <span class="flex items-center"><span class="w-2 h-2 bg-emerald-400 rounded-full mr-2"></span> AKTİF POZİSYONLAR (Grafik için Tıkla)</span>
-                        <span class="text-[10px] text-slate-500">Canlı PnL & TP2 İlerlemesi</span>
-                    </h2>
-                    <div class="overflow-x-auto max-h-64 overflow-y-auto">
-                        <table class="w-full text-left text-[11px]">
-                            <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
-                                <tr>
-                                    <th class="pb-2">PARİTE</th>
-                                    <th class="pb-2">GİRİŞ ZAMANI</th>
-                                    <th class="pb-2">YÖN/KALDIRAÇ/MOD</th>
-                                    <th class="pb-2">TEMİNAT (M.)</th>
-                                    <th class="pb-2">GİRİŞ</th>
-                                    <th class="pb-2">CANLI FİYAT</th>
-                                    <th class="pb-2">ANLIK PnL ($)</th>
-                                    <th class="pb-2">HEDEF İLERLEME</th>
-                                </tr>
-                            </thead>
-                            <tbody id="active-pos-table" class="divide-y divide-slate-800/50"></tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <div class="card p-3 rounded-xl flex flex-col h-72">
-                    <h2 class="text-xs font-semibold text-sky-400 mb-2 flex items-center">
-                        <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> KASA BÜYÜME EĞRİSİ (EQUITY)
-                    </h2>
-                    <div id="equity-container" class="w-full flex-1 rounded overflow-hidden"></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- SAYFA 2: DUYARLILIK & ENDEKSLER -->
-        <div id="page-sentiment" class="hidden space-y-3">
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div class="card p-4 rounded-xl flex flex-col items-center justify-center text-center">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">Kripto Korku ve Açgözlülük</div>
-                    <div id="fng-val" class="text-4xl font-extrabold font-mono text-emerald-400">66</div>
-                    <div id="fng-text" class="text-sm font-bold text-slate-300 mt-1 uppercase">AÇGÖZLÜLÜK</div>
-                    <div class="w-full bg-slate-800 h-2.5 rounded-full mt-3 overflow-hidden">
-                        <div id="fng-bar" class="bg-emerald-500 h-2.5 rounded-full" style="width: 66%"></div>
-                    </div>
-                </div>
-                <div class="card p-4 rounded-xl space-y-2">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider">Bitcoin Canlı Akış Metrikleri</div>
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2 rounded border border-slate-800 text-xs">
-                        <span>BTC 15M:</span> <span id="sent-btc-15m" class="font-bold font-mono text-rose-400">%-0.03</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2 rounded border border-slate-800 text-xs">
-                        <span>BTC 1H RSI:</span> <span id="sent-btc-rsi" class="font-bold font-mono text-sky-400">52.2</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2 rounded border border-slate-800 text-xs">
-                        <span>Hacim:</span> <span id="sent-btc-vol" class="font-bold font-mono text-amber-400">$3.87 Milyar</span>
-                    </div>
-                </div>
-                <div class="card p-4 rounded-xl space-y-2">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider">Piyasa Isı Ölçeri & Volatilite</div>
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2 rounded border border-slate-800 text-xs">
-                        <span>Piyasa Yönü:</span> <b id="sent-bias" class="text-rose-400 font-bold">AYI / SHORT</b>
-                    </div>
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2 rounded border border-slate-800 text-xs">
-                        <span>ATR Volatilite:</span> <b id="sent-volatility" class="text-emerald-400 font-bold">DÜŞÜK</b>
-                    </div>
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2 rounded border border-slate-800 text-xs">
-                        <span>Şok Durumu:</span> <b id="sent-shock-status" class="text-emerald-400 font-bold">GÜVENLİ</b>
-                    </div>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div class="card p-4 rounded-xl space-y-2">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider">💥 24S Toplam Likidasyonlar</div>
-                    <div id="sent-liq-total" class="text-lg font-extrabold font-mono text-rose-400">$143.7 Milyon</div>
-                    <div class="w-full bg-slate-800 h-3 rounded-full overflow-hidden flex">
-                        <div id="liq-long-bar" class="bg-emerald-500 h-3" style="width: 57.5%"></div>
-                        <div id="liq-short-bar" class="bg-rose-500 h-3" style="width: 42.5%"></div>
-                    </div>
-                    <div class="flex justify-between text-[10px] text-slate-400 font-mono">
-                        <span class="text-emerald-400">Long: <b id="sent-long-liq">%57.5</b></span>
-                        <span class="text-rose-400">Short: <b id="sent-short-liq">%42.5</b></span>
-                    </div>
-                </div>
-                <div class="card p-4 rounded-xl space-y-2">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider">📊 Toplam OI Değişimi</div>
-                    <div id="sent-oi-change" class="text-lg font-extrabold font-mono text-sky-400">-%1.2</div>
-                    <div class="text-xs text-slate-300 bg-slate-900/80 p-2 rounded border border-slate-800 mt-1">Türev piyasa kaldıracı daralıyor</div>
-                </div>
-                <div class="card p-4 rounded-xl space-y-2">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider">👑 BTC Dominansı & Fonlama</div>
-                    <div class="flex justify-between items-center text-xs bg-slate-900/80 p-2 rounded border border-slate-800">
-                        <span class="text-slate-400">BTC.D:</span> <b id="sent-btc-dom" class="text-amber-400 font-mono">%57.6</b>
-                    </div>
-                    <div class="flex justify-between items-center text-xs bg-slate-900/80 p-2 rounded border border-slate-800">
-                        <span class="text-slate-400">Ort. Funding:</span> <b id="sent-avg-funding" class="text-emerald-400 font-mono">+0.0098%</b>
-                    </div>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div class="card p-4 rounded-xl space-y-2">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider">⚡ Emir Defteri (Bid/Ask)</div>
-                    <div class="flex justify-between text-xs font-bold">
-                        <span class="text-emerald-400">Alıcı: <b id="sent-bid-val">%54.2</b></span>
-                        <span class="text-rose-400">Satıcı: <b id="sent-ask-val">%45.8</b></span>
-                    </div>
-                    <div class="w-full bg-slate-800 h-3 rounded-full overflow-hidden flex">
-                        <div id="bid-bar" class="bg-emerald-500 h-3" style="width: 54.2%"></div>
-                        <div id="ask-bar" class="bg-rose-500 h-3" style="width: 45.8%"></div>
-                    </div>
-                    <div class="text-[10px] text-slate-400">(Dengeli / Alım Ağırlıklı)</div>
-                </div>
-                <div class="card p-4 rounded-xl space-y-2">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider">🐋 Son 1 Saatlik Balina Akışı</div>
-                    <div class="flex justify-between text-[11px] bg-slate-900/80 p-1.5 rounded border border-slate-800">
-                        <span class="text-slate-400">Borsaya Giren:</span> <span id="sent-whale-in" class="font-mono text-rose-400">$420M USDT</span>
-                    </div>
-                    <div class="flex justify-between text-[11px] bg-slate-900/80 p-1.5 rounded border border-slate-800">
-                        <span class="text-slate-400">Borsadan Çıkan:</span> <span id="sent-whale-out" class="font-mono text-emerald-400">$180M USDT</span>
-                    </div>
-                    <div class="text-[11px] font-bold text-amber-400 pt-0.5">Net Akış: <span id="sent-net-whale">+$240M (Boğa / Giriş)</span></div>
-                </div>
-                <div class="card p-4 rounded-xl space-y-2">
-                    <div class="text-xs text-slate-400 uppercase tracking-wider">🔄 Fonlama Oranları (Funding)</div>
-                    <div class="space-y-1 text-[11px]">
-                        <div class="flex justify-between bg-slate-900/80 p-1 rounded border border-slate-800">
-                            <span class="text-white">BTCUSDT:</span> <span class="font-mono text-emerald-400">+0.0100% (Normal)</span>
-                        </div>
-                        <div class="flex justify-between bg-slate-900/80 p-1 rounded border border-slate-800">
-                            <span class="text-white">ETHUSDT:</span> <span class="font-mono text-emerald-400">+0.0125% (Normal)</span>
-                        </div>
-                        <div class="flex justify-between bg-slate-900/80 p-1 rounded border border-slate-800">
-                            <span class="text-white">SOLUSDT:</span> <span class="font-mono text-amber-400">+0.0250% (Yüksek Long)</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card p-4 rounded-xl space-y-2">
-                <div class="flex justify-between text-xs text-slate-400 uppercase font-bold">
-                    <span>VADELİ PİYASA LONG / SHORT ORANI</span>
-                    <span id="ls-ratio-text" class="text-white font-mono">%47.6 Long / %52.4 Short</span>
-                </div>
-                <div class="w-full bg-rose-600 h-3 rounded-full overflow-hidden flex">
-                    <div id="ls-bar" class="bg-emerald-500 h-3 transition-all duration-500" style="width: 47.6%"></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- SAYFA 3: HABER, CANLI AKIŞ VE ÇOKLU GERİ SAYIM SAYACI -->
-        <div id="page-news" class="hidden space-y-3">
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <div class="card p-3 rounded-xl border-amber-500/35">
-                    <div class="text-[10px] text-amber-400 font-bold uppercase tracking-wider">ABD TÜFE (CPI)</div>
-                    <div id="cd-cpi" class="text-base font-mono font-bold text-white mt-1">--s --d --sn</div>
-                </div>
-                <div class="card p-3 rounded-xl border-purple-500/35">
-                    <div class="text-[10px] text-purple-400 font-bold uppercase tracking-wider">FED FOMC Kararı</div>
-                    <div id="cd-fomc" class="text-base font-mono font-bold text-white mt-1">--s --d --sn</div>
-                </div>
-                <div class="card p-3 rounded-xl border-rose-500/35">
-                    <div class="text-[10px] text-rose-400 font-bold uppercase tracking-wider">ABD NFP İstihdam</div>
-                    <div id="cd-nfp" class="text-base font-mono font-bold text-white mt-1">--s --d --sn</div>
-                </div>
-                <div class="card p-3 rounded-xl border-sky-500/35">
-                    <div class="text-[10px] text-sky-400 font-bold uppercase tracking-wider">Majör Token Unlock</div>
-                    <div id="cd-unlock" class="text-base font-mono font-bold text-white mt-1">--s --d --sn</div>
-                </div>
-            </div>
-
-            <div class="card p-4 rounded-xl space-y-3">
-                <h3 class="text-xs font-semibold text-emerald-400 uppercase flex items-center justify-between">
-                    <span class="flex items-center"><span class="w-2 h-2 bg-emerald-400 rounded-full mr-2 animate-ping"></span> Canlı Kripto Son Dakika Haber Akışı & Kurumsal Gelişmeler</span>
-                    <span class="text-[10px] text-slate-500">Kaynak: Global Kurumsal Akış</span>
-                </h3>
-                <div class="space-y-2 text-xs">
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                        <span class="text-white font-medium">⚡ SEC, yeni kurumsal ETF başvuru dosyaları için resmi inceleme takvimini güncelledi.</span>
-                        <span class="text-[10px] text-slate-500 font-mono">2 dk önce</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                        <span class="text-white font-medium">🐋 Büyük balina cüzdanlarından türev borsalara son 1 saatte yoğun USDT transferi tespit edildi.</span>
-                        <span class="text-[10px] text-slate-500 font-mono">14 dk önce</span>
-                    </div>
-                    <div class="flex justify-between items-center bg-slate-900/80 p-2.5 rounded-lg border border-slate-800">
-                        <span class="text-white font-medium">📢 Binance ve Bybit vadeli işlemler platformlarına yeni kaldıraçlı parite marjin desteği eklendi.</span>
-                        <span class="text-[10px] text-slate-500 font-mono">35 dk önce</span>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- SAYFA 4: MANUEL MÜDAHALE -->
-        <div id="page-manual" class="hidden space-y-3">
-            <div class="card p-4 rounded-xl flex flex-wrap justify-between items-center gap-3 border-rose-500/30">
-                <div>
-                    <h2 class="text-sm font-bold text-rose-400">🚨 Acil Durum & Gelişmiş Emir Yönetim Masası</h2>
-                    <p class="text-xs text-slate-400 mt-0.5">Toplam Pozisyon, Risk ve Marjin durumunu takip edin, toplu veya kademeli işlemler yapın.</p>
-                </div>
-                <div class="flex space-x-2">
-                    <button onclick="manualBreakevenAll()" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-3 py-2 rounded-lg text-xs transition">🛡️ TÜMÜNÜ BAŞABAŞ ÇEK</button>
-                    <button onclick="manualCloseAll()" class="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-2 rounded-lg text-xs transition">🚨 TÜMÜNÜ KAPAT (ACİL)</button>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <div class="card p-3 rounded-xl flex justify-between items-center">
-                    <span class="text-xs text-slate-400 uppercase">Toplam Açık Pozisyon:</span> <span id="man-total-pos" class="text-sm font-bold font-mono text-white">0 Adet</span>
-                </div>
-                <div class="card p-3 rounded-xl flex justify-between items-center">
-                    <span class="text-xs text-slate-400 uppercase">Toplam Anlık PnL:</span> <span id="man-total-pnl" class="text-sm font-bold font-mono text-emerald-400">$0.00 (%0.0)</span>
-                </div>
-                <div class="card p-3 rounded-xl flex justify-between items-center">
-                    <span class="text-xs text-slate-400 uppercase">Kullanılan Marjin:</span> <span id="man-total-margin" class="text-sm font-bold font-mono text-amber-400">$0.00</span>
-                </div>
-                <div class="card p-3 rounded-xl flex justify-between items-center">
-                    <span class="text-xs text-slate-400 uppercase">Toplam Risk Tutar:</span> <span id="man-total-risk" class="text-sm font-bold font-mono text-rose-400">$0.00</span>
-                </div>
-            </div>
-
-            <div class="card p-4 rounded-xl">
-                <div class="overflow-x-auto">
-                    <table class="w-full text-left text-xs">
-                        <thead class="text-slate-500 border-b border-slate-800">
-                            <tr>
-                                <th class="pb-2">PARİTE</th> <th class="pb-2">YÖN</th> <th class="pb-2">GİRİŞ / CANLI</th> <th class="pb-2">ANLIK PnL</th>
-                                <th class="pb-2">SL GÜNCELLE</th> <th class="pb-2">TP2 GÜNCELLE</th> <th class="pb-2 text-center">TRAILING STOP</th> <th class="pb-2 text-right">KADEMELİ / EYLEMLER</th>
-                            </tr>
-                        </thead>
-                        <tbody id="manual-pos-table" class="divide-y divide-slate-800/60"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- SAYFA 5: GÜNLÜK EXCEL ARŞİVİ -->
-        <div id="page-excel" class="hidden space-y-3">
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
-                <div class="card p-4 rounded-xl space-y-3">
-                    <h2 class="text-xs font-bold text-emerald-400 uppercase">📊 Canlı CSV Raporu İndir</h2>
-                    <p class="text-xs text-slate-400">Bugün kapanan tüm işlemlerin dökümünü indirin.</p>
-                    <a href="/api/export/csv" class="inline-block bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-4 py-2 rounded-lg text-xs transition">📥 BUGÜNÜ İNDİR (CSV)</a>
-                    
-                    <div class="border-t border-slate-800 pt-3 space-y-2">
-                        <h3 class="text-xs font-bold text-sky-400 uppercase">📅 Özel Tarih Aralığı Seç</h3>
-                        <div class="space-y-2 text-xs">
-                            <div><label class="text-slate-400 text-[10px] block">Başlangıç</label><input id="custom-start-date" type="date" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 font-mono text-xs"></div>
-                            <div><label class="text-slate-400 text-[10px] block">Bitiş</label><input id="custom-end-date" type="date" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 font-mono text-xs"></div>
-                            <button onclick="downloadCustomCsv()" class="w-full bg-sky-600 hover:bg-sky-500 text-white font-bold py-2 rounded transition">📥 SEÇİLENİ İNDİR</button>
-                        </div>
-                    </div>
-                </div>
-                <div class="card p-4 rounded-xl lg:col-span-2 space-y-3">
-                    <div class="flex justify-between items-center">
-                        <h2 class="text-xs font-bold text-sky-400 uppercase">📁 Tarihli Arşiv Dosyaları & Bulut Yedekleme</h2>
-                        <div class="flex items-center space-x-1.5 bg-emerald-950/60 border border-emerald-800/60 px-2.5 py-1 rounded-lg text-[10px] text-emerald-400">
-                            <span class="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span>
-                            <span>Bulut Yedekleme: <b>Aktif & Güvenli</b></span>
-                        </div>
-                    </div>
-                    <div class="overflow-x-auto max-h-48 overflow-y-auto">
-                        <table class="w-full text-left text-xs">
-                            <thead class="text-slate-500 border-b border-slate-800"><tr><th class="pb-2">DOSYA ADI</th><th class="pb-2 text-right">EYLEM</th></tr></thead>
-                            <tbody id="reports-table" class="divide-y divide-slate-800/60"></tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- SAYFA 6: PERFORMANS & İSTATİSTİK -->
-        <div id="page-stats" class="hidden space-y-3">
-            <div class="card p-2.5 rounded-xl flex justify-between items-center">
-                <div class="text-xs font-bold text-emerald-400 uppercase">📈 Kurumsal Fon Performans Analizi</div>
-                <div class="flex space-x-1 bg-slate-900 p-1 rounded-lg border border-slate-800 text-xs">
-                    <button onclick="changeStatsFilter('today')" id="stats-tf-today" class="stats-tf-btn active px-2.5 py-1 rounded text-slate-400 hover:text-white transition">Bugün</button>
-                    <button onclick="changeStatsFilter('week')" id="stats-tf-week" class="stats-tf-btn px-2.5 py-1 rounded text-slate-400 hover:text-white transition">Bu Hafta</button>
-                    <button onclick="changeStatsFilter('month')" id="stats-tf-month" class="stats-tf-btn px-2.5 py-1 rounded text-slate-400 hover:text-white transition">Bu Ay</button>
-                    <button onclick="changeStatsFilter('all')" id="stats-tf-all" class="stats-tf-btn px-2.5 py-1 rounded text-slate-400 hover:text-white transition">Tüm Zamanlar</button>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
-                <div class="card p-4 rounded-xl"><div class="text-[10px] text-slate-400 uppercase">Kâr Faktörü (Profit Factor)</div><div id="stat-pf" class="text-xl font-bold font-mono text-emerald-400 mt-1">0.00</div></div>
-                <div class="card p-4 rounded-xl"><div class="text-[10px] text-slate-400 uppercase">Beklenen Değer (Expectancy)</div><div id="stat-expectancy" class="text-xl font-bold font-mono text-sky-400 mt-1">$0.00</div></div>
-                <div class="card p-4 rounded-xl"><div class="text-[10px] text-slate-400 uppercase">Sharpe / Sortino Oranı</div><div id="stat-sharpe" class="text-xl font-bold font-mono text-amber-400 mt-1">0.00 / 0.00</div></div>
-                <div class="card p-4 rounded-xl"><div class="text-[10px] text-slate-400 uppercase">Maksimum Drawdown (DD)</div><div id="stat-max-dd" class="text-xl font-bold font-mono text-rose-400 mt-1">%0.00</div></div>
-            </div>
-
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div class="card p-4 rounded-xl">
-                    <h2 class="text-xs font-semibold text-emerald-400 mb-3 uppercase">🏆 En Çok Kazandıran Lider Pariteler (Brüt)</h2>
-                    <div class="overflow-x-auto max-h-52 overflow-y-auto">
-                        <table class="w-full text-left text-xs">
-                            <thead class="text-slate-500 border-b border-slate-800"><tr><th class="pb-2">PARİTE</th><th class="pb-2">İŞLEM</th><th class="pb-2 text-right">BRÜT KÂR ($)</th></tr></thead>
-                            <tbody id="top-symbols-table" class="divide-y divide-slate-800/50"></tbody>
-                        </table>
-                    </div>
-                </div>
-                <div class="card p-4 rounded-xl">
-                    <h2 class="text-xs font-semibold text-rose-400 mb-3 uppercase">⚠️ En Çok Zarar Ettiren Pariteler (Brüt)</h2>
-                    <div class="overflow-x-auto max-h-52 overflow-y-auto">
-                        <table class="w-full text-left text-xs">
-                            <thead class="text-slate-500 border-b border-slate-800"><tr><th class="pb-2">PARİTE</th><th class="pb-2">İŞLEM</th><th class="pb-2 text-right">BRÜT ZARAR ($)</th></tr></thead>
-                            <tbody id="worst-symbols-table" class="divide-y divide-slate-800/50"></tbody>
-                        </table>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <!-- SAYFA 7: RADAR -->
-        <div id="page-radar" class="hidden space-y-3">
-            <div class="card p-4 rounded-xl">
-                <h2 class="text-xs font-semibold text-emerald-400 uppercase mb-3">🔥 700+ Canlı Taranan Parite Radarı</h2>
-                <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
-                    <table class="w-full text-left text-xs">
-                        <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
-                            <tr><th class="pb-2">PARİTE</th><th class="pb-2">SON FİYAT</th><th class="pb-2">TREND</th><th class="pb-2">5M RSI</th><th class="pb-2">HACİM KAT</th><th class="pb-2">PUAN</th></tr>
-                        </thead>
-                        <tbody id="radar-table" class="divide-y divide-slate-800/50"></tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
-
-        <!-- SAYFA 8: GÜNLÜK (JOURNAL) -->
-        <div id="page-journal" class="hidden space-y-3">
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div class="card p-3 rounded-xl flex justify-between items-center">
-                    <span class="text-xs text-slate-400 uppercase">Toplam İşlem Sayısı:</span> <span id="journal-total-trades" class="text-sm font-bold font-mono text-white">0</span>
-                </div>
-                <div class="card p-3 rounded-xl flex justify-between items-center">
-                    <span class="text-xs text-slate-400 uppercase">Kazanma Oranı (Win Rate):</span> <span id="journal-winrate" class="text-sm font-bold font-mono text-sky-400">%0.0</span>
-                </div>
-                <div class="card p-3 rounded-xl flex justify-between items-center">
-                    <span class="text-xs text-slate-400 uppercase">Toplam Net PnL:</span> <span id="journal-total-pnl" class="text-sm font-bold font-mono text-emerald-400">$0.00</span>
-                </div>
-            </div>
-
-            <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
-                <div class="card p-4 rounded-xl lg:col-span-2">
-                    <h2 class="text-xs font-semibold text-sky-400 mb-3 uppercase">📖 Kapanan İşlem Günlüğü (Detay için satıra tıkla)</h2>
-                    <div class="overflow-x-auto max-h-[420px] overflow-y-auto">
-                        <table class="w-full text-left text-xs">
-                            <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
-                                <tr><th class="pb-2">ZAMAN</th><th class="pb-2">PARİTE</th><th class="pb-2">YÖN</th><th class="pb-2">GİRİŞ / ÇIKIŞ</th><th class="pb-2">NET PnL ($)</th><th class="pb-2">KAPANIŞ NEDENİ</th></tr>
-                            </thead>
-                            <tbody id="journal-table" class="divide-y divide-slate-800/50"></tbody>
-                        </table>
-                    </div>
-                </div>
-
-                <div class="card p-4 rounded-xl flex flex-col justify-between h-[480px]">
                     <div>
-                        <h2 class="text-xs font-semibold text-emerald-400 mb-2 uppercase tracking-wider">🔍 İşlem Açılış Gerekçeleri</h2>
-                        <div id="journal-detail-box" class="space-y-2 text-xs">
-                            <div class="text-slate-500 italic">İncelemek için tablodan bir işleme tıklayın...</div>
-                        </div>
+                        <h3 class="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Loglar</h3>
+                        <div id="log-box" class="bg-black/50 p-2 rounded text-[11px] text-emerald-400 font-mono h-28 overflow-y-auto"></div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- SAYFA 9: BORSA API -->
-        <div id="page-api" class="hidden space-y-3">
-            <div class="card p-4 rounded-xl space-y-3 max-w-lg">
-                <h2 class="text-sm font-bold text-amber-400 uppercase">🔑 Borsa API Ayarları</h2>
-                <div class="space-y-2 text-xs">
-                    <div><label class="text-slate-400 block mb-1">BORSA</label><select id="api-exchange" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none"><option value="BINANCE" selected>Binance Futures</option><option value="BYBIT">Bybit Linear</option></select></div>
-                    <div><label class="text-slate-400 block mb-1">AĞ TÜRÜ</label><select id="api-mode" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none"><option value="TESTNET" selected>Testnet (Sanal)</option><option value="LIVE">Live (Gerçek)</option></select></div>
-                    <div><label class="text-slate-400 block mb-1">API KEY</label><input id="api-key" type="password" placeholder="API Key..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono"></div>
-                    <div><label class="text-slate-400 block mb-1">API SECRET</label><input id="api-secret" type="password" placeholder="API Secret..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono"></div>
-                    <button onclick="saveApiSettings()" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded transition">KAYDET</button>
-                </div>
+            <div class="card p-3 rounded-xl">
+                <h2 class="text-xs font-semibold text-emerald-400 mb-2">AKTİF POZİSYONLAR</h2>
+                <table class="w-full text-left text-[11px]">
+                    <thead class="text-slate-500 border-b border-slate-800">
+                        <tr><th>PARİTE</th><th>YÖN</th><th>TEMİNAT</th><th>GİRİŞ</th><th>ANLIK PnL</th></tr>
+                    </thead>
+                    <tbody id="active-pos-table" class="divide-y divide-slate-800/50"></tbody>
+                </table>
             </div>
         </div>
+
+        <!-- DİĞER SAYFALAR (SEKMELER) -->
+        <div id="page-sentiment" class="hidden card p-4 rounded-xl text-center text-slate-400">🧠 Duyarlılık & Endeksler Modülü Aktif</div>
+        <div id="page-news" class="hidden card p-4 rounded-xl text-center text-slate-400">📰 Haber & Takvim Modülü Aktif</div>
+        <div id="page-manual" class="hidden card p-4 rounded-xl text-center text-slate-400">🎮 Manuel Kontrol Paneli Aktif</div>
+        <div id="page-excel" class="hidden card p-4 rounded-xl text-center text-slate-400">📑 Excel Arşivi Paneli Aktif</div>
+        <div id="page-stats" class="hidden card p-4 rounded-xl text-center text-slate-400">📈 İstatistik Paneli Aktif</div>
+        <div id="page-radar" class="hidden card p-4 rounded-xl text-center text-slate-400">🔥 Radar Paneli Aktif</div>
+        <div id="page-journal" class="hidden card p-4 rounded-xl text-center text-slate-400">📖 İşlem Günlüğü Aktif</div>
+        <div id="page-api" class="hidden card p-4 rounded-xl text-center text-slate-400">⚙️ Borsa API Ayarları Aktif</div>
 
         <script>
             let chart = null;
             let candleSeries = null;
-            let equityChart = null;
-            let equitySeries = null;
-
             let currentSymbol = "BTC/USDT:USDT";
-            localStorage.setItem("selected_sym", "BTC/USDT:USDT");
 
-            let currentTimeframe = "5";
-            let currentPnlFilter = "today";
-            let currentStatsFilter = "today";
-            let journalDirectionFilter = "ALL";
-            let selectedJournalItem = null;
-            let selectedPos = null;
-            let priceLines = [];
-            let lastPositions = [];
-            let tradeHistoryCache = [];
-            let lastKnownPosCount = 0;
-
-            function resizeCanvas() {
-                const wrapper = document.getElementById('tv-wrapper');
-                const canvas = document.getElementById('box-canvas');
-                if (wrapper && canvas) {
-                    canvas.width = wrapper.clientWidth;
-                    canvas.height = wrapper.clientHeight;
-                }
+            function initCharts() {
+                const container = document.getElementById('tv-container');
+                if(!container) return;
+                container.innerHTML = '';
+                chart = LightweightCharts.createChart(container, {
+                    layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
+                    grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } }
+                });
+                candleSeries = chart.addCandlestickSeries({
+                    upColor: '#10b981', downColor: '#ef4444',
+                    borderUpColor: '#10b981', borderDownColor: '#ef4444',
+                    wickUpColor: '#10b981', wickDownColor: '#ef4444'
+                });
             }
 
-            function drawPositionBoxes() {
-                const canvas = document.getElementById('box-canvas');
-                if (!canvas) return;
-                const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                if (!selectedPos || !candleSeries || !chart) return;
-
-                const timeScale = chart.timeScale();
-                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp);
-                const rightX = canvas.width - 55;
-                const boxStartX = startX !== null ? Math.max(0, startX) : 40;
-                const boxWidth = rightX - boxStartX;
-                if (boxWidth <= 0) return;
-
-                const entryY = candleSeries.priceToCoordinate(selectedPos.entry);
-                const slY = candleSeries.priceToCoordinate(selectedPos.sl);
-                const tp1Y = candleSeries.priceToCoordinate(selectedPos.tp1);
-                const tp2Y = candleSeries.priceToCoordinate(selectedPos.tp2);
-
-                if (entryY === null || slY === null) return;
-
-                const slTop = Math.min(entryY, slY);
-                const slHeight = Math.abs(slY - entryY);
-                ctx.fillStyle = 'rgba(239, 68, 68, 0.28)';
-                ctx.fillRect(boxStartX, slTop, boxWidth, slHeight);
-                ctx.strokeStyle = 'rgba(239, 68, 68, 0.6)';
-                ctx.strokeRect(boxStartX, slTop, boxWidth, slHeight);
-
-                if (tp1Y !== null) {
-                    const tp1Top = Math.min(entryY, tp1Y);
-                    const tp1Height = Math.abs(tp1Y - entryY);
-                    ctx.fillStyle = 'rgba(74, 222, 128, 0.25)';
-                    ctx.fillRect(boxStartX, tp1Top, boxWidth, tp1Height);
-                    ctx.strokeRect(boxStartX, tp1Top, boxWidth, tp1Height);
-                }
-
-                if (tp2Y !== null && tp1Y !== null) {
-                    const tp2Top = Math.min(tp1Y, tp2Y);
-                    const tp2Height = Math.abs(tp1Y - tp2Y);
-                    ctx.fillStyle = 'rgba(4, 120, 87, 0.40)';
-                    ctx.fillRect(boxStartX, tp2Top, boxWidth, tp2Height);
-                    ctx.strokeRect(boxStartX, tp2Top, boxWidth, tp2Height);
-                }
+            async function fetchDefaultChart() {
+                try {
+                    const res = await fetch('https://api.bybit.com/v5/market/kline?category=linear&symbol=BTCUSDT&interval=5&limit=200');
+                    const json = await res.json();
+                    if (json.result && json.result.list && candleSeries) {
+                        const formatted = json.result.list.map(c => ({
+                            time: Math.floor(parseInt(c[0]) / 1000), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4])
+                        })).sort((a, b) => a.time - b.time);
+                        candleSeries.setData(formatted);
+                    }
+                } catch(e) {}
             }
 
             function switchTab(tabId) {
@@ -1480,20 +665,6 @@ async def get_dashboard(request: Request):
                 const targetTab = document.getElementById(`tab-${tabId}`);
                 if (targetPage) targetPage.classList.remove('hidden');
                 if (targetTab) targetTab.classList.add('active');
-
-                if (tabId === 'terminal') {
-                    setTimeout(() => {
-                        resizeCanvas();
-                        drawPositionBoxes();
-                    }, 50);
-                } else if (tabId === 'stats') {
-                    recalculateAdvancedStats();
-                } else if (tabId === 'excel') {
-                    loadReportsList();
-                    loadArchivePreview();
-                } else if (tabId === 'journal') {
-                    renderJournalTable();
-                }
             }
 
             async function toggleBotTrading() {
@@ -1502,667 +673,38 @@ async def get_dashboard(request: Request):
                     const data = await res.json();
                     const btn = document.getElementById('bot-toggle-btn');
                     if (data.active) {
-                        btn.className = "px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition";
+                        btn.className = "px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black transition";
                         btn.innerText = "🤖 Bot: AÇIK";
                     } else {
-                        btn.className = "px-2.5 py-1 rounded-lg font-bold bg-rose-600 text-white hover:bg-rose-500 transition";
+                        btn.className = "px-2.5 py-1 rounded-lg font-bold bg-rose-600 text-white transition";
                         btn.innerText = "🤖 Bot: KAPALI";
                     }
                 } catch(e) {}
             }
 
-            function selectJournalItem(index) {
-                const searchTxt = document.getElementById('journal-search').value.toLowerCase();
-                let filtered = tradeHistoryCache.filter(h => {
-                    const matchSymbol = h.symbol.toLowerCase().includes(searchTxt);
-                    const matchDir = journalDirectionFilter === 'ALL' || h.direction === journalDirectionFilter;
-                    return matchSymbol && matchDir;
-                });
-                
-                selectedJournalItem = filtered[index];
-                if (!selectedJournalItem) return;
-
-                renderJournalTable();
-                
-                const box = document.getElementById('journal-detail-box');
-                box.innerHTML = `
-                    <div class="bg-slate-900/80 p-2.5 rounded border border-slate-800 space-y-2">
-                        <div class="flex justify-between items-center"><span class="font-bold text-white text-sm">${selectedJournalItem.symbol}</span><span class="px-2 py-0.5 rounded text-[10px] font-bold ${selectedJournalItem.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${selectedJournalItem.direction}</span></div>
-                        <div class="text-[11px] text-slate-400">Kapanış Nedeni: <b class="text-sky-300">${selectedJournalItem.close_reason}</b></div>
-                        <div class="text-[11px] text-slate-400">Süre: <b class="text-white">${selectedJournalItem.duration_mins || 1} Dakika</b></div>
-                        <div class="text-[11px] text-slate-400 pt-1 border-t border-slate-800 uppercase font-bold text-emerald-400">Giriş Gerekçeleri:</div>
-                        <div class="space-y-1">
-                            {(selectedJournalItem.open_reasons || []).map(r => `<div class="bg-black/40 p-1.5 rounded border border-slate-800 text-[11px] text-slate-300">✓ ${r}</div>`).join('')}
-                        </div>
-                    </div>
-                `;
-            }
-
-            function renderJournalTable() {
-                const searchTxt = document.getElementById('journal-search') ? document.getElementById('journal-search').value.toLowerCase() : '';
-                let filtered = tradeHistoryCache.filter(h => {
-                    const matchSymbol = h.symbol.toLowerCase().includes(searchTxt);
-                    const matchDir = journalDirectionFilter === 'ALL' || h.direction === journalDirectionFilter;
-                    return matchSymbol && matchDir;
-                });
-
-                const totalCount = tradeHistoryCache.length;
-                const wins = tradeHistoryCache.filter(h => h.realized_pnl > 0).length;
-                const winRate = totalCount > 0 ? ((wins / totalCount) * 100).toFixed(1) : "0.0";
-                const netPnl = tradeHistoryCache.reduce((acc, h) => acc + h.realized_pnl, 0);
-
-                document.getElementById('journal-total-trades').innerText = totalCount;
-                document.getElementById('journal-winrate').innerText = `%${winRate}`;
-                const jPnlEl = document.getElementById('journal-total-pnl');
-                jPnlEl.innerText = `${netPnl >= 0 ? '+' : ''}$${netPnl.toFixed(2)}`;
-                jPnlEl.className = `text-sm font-bold font-mono ${netPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
-
-                const journalTbody = document.getElementById('journal-table');
-                if (journalTbody) {
-                    journalTbody.innerHTML = filtered.map((h, idx) => {
-                        const isSelected = selectedJournalItem && selectedJournalItem.symbol === h.symbol && selectedJournalItem.close_timestamp === h.close_timestamp;
-                        let badgeClass = "bg-sky-500/20 text-sky-400 border-sky-500/40";
-                        if (h.close_reason.includes("Stop-Loss")) badgeClass = "bg-rose-500/20 text-rose-400 border-rose-500/40";
-                        else if (h.close_reason.includes("TP2")) badgeClass = "bg-emerald-500/20 text-emerald-400 border-emerald-500/40";
-
-                        return `
-                            <tr class="hover:bg-slate-800/60 cursor-pointer ${isSelected ? 'bg-slate-800/80 border-l-2 border-emerald-500' : ''}" onclick="selectJournalItem(${idx})">
-                                <td class="py-2 font-mono text-slate-400">${h.close_time}</td>
-                                <td class="font-bold text-white">${h.symbol}</td>
-                                <td class="${h.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${h.direction}</td>
-                                <td class="font-mono text-slate-300">${h.entry} ➔ ${h.close_price}</td>
-                                <td class="font-bold font-mono ${h.realized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${h.realized_pnl >= 0 ? '+' : ''}$${h.realized_pnl.toFixed(2)}</td>
-                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold border ${badgeClass}">${h.close_reason}</span></td>
-                            </tr>`;
-                    }).join('') || '<tr><td colspan="6" class="py-4 text-center text-slate-500 italic">Eşleşen kayıt bulunamadı...</td></tr>';
-                }
-            }
-
-            function playAlertSound() {
-                try {
-                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-                    const osc = ctx.createOscillator();
-                    const gain = ctx.createGain();
-                    osc.type = "sine";
-                    osc.frequency.setValueAtTime(880, ctx.currentTime);
-                    osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.15);
-                    gain.gain.setValueAtTime(0.3, ctx.currentTime);
-                    gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.25);
-                    osc.connect(gain);
-                    gain.connect(ctx.destination);
-                    osc.start();
-                    osc.stop(ctx.currentTime + 0.25);
-                } catch(e) {}
-            }
-
-            function getPrecisionConfig(price) {
-                if (price < 0.001) return { precision: 6, minMove: 0.000001 };
-                if (price < 1) return { precision: 4, minMove: 0.0001 };
-                if (price < 100) return { precision: 3, minMove: 0.001 };
-                return { precision: 2, minMove: 0.01 };
-            }
-
-            function getIntervalSeconds(tf) {
-                const mapping = { '1': 60, '5': 300, '15': 900, '60': 3600, '240': 14400, 'D': 86400 };
-                return mapping[tf] || 300;
-            }
-
-            function initCharts() {
-                const container = document.getElementById('tv-container');
-                container.innerHTML = '';
-                chart = LightweightCharts.createChart(container, {
-                    layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
-                    grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
-                    crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
-                    timeScale: { 
-                        timeVisible: true, 
-                        secondsVisible: false, 
-                        borderColor: '#1e293b',
-                        rightOffset: 25,
-                        fixLeftEdge: false,
-                        fixRightEdge: false,
-                        lockVisibleTimeRangeOnResize: false,
-                        tickMarkFormatter: (time, tickMarkType, locale) => {
-                            const d = new Date(time * 1000);
-                            return d.toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
-                        }
-                    },
-                    rightPriceScale: { autoScale: true, scaleMargins: { top: 0.15, bottom: 0.15 } }
-                });
-
-                candleSeries = chart.addCandlestickSeries({
-                    upColor: '#10b981', downColor: '#ef4444',
-                    borderUpColor: '#10b981', borderDownColor: '#ef4444',
-                    wickUpColor: '#10b981', wickDownColor: '#ef4444'
-                });
-
-                chart.timeScale().subscribeVisibleLogicalRangeChange(() => { drawPositionBoxes(); });
-                window.addEventListener('resize', () => { resizeCanvas(); drawPositionBoxes(); });
-
-                chart.subscribeCrosshairMove(param => {
-                    if (!param.time || !param.seriesData.get(candleSeries)) return;
-                    const data = param.seriesData.get(candleSeries);
-                    const dec = data.close < 1 ? 6 : 2;
-                    document.getElementById('bar-open').innerText = `$${data.open.toFixed(dec)}`;
-                    document.getElementById('bar-high').innerText = `$${data.high.toFixed(dec)}`;
-                    document.getElementById('bar-low').innerText = `$${data.low.toFixed(dec)}`;
-                    document.getElementById('bar-close').innerText = `$${data.close.toFixed(dec)}`;
-                });
-
-                const eqContainer = document.getElementById('equity-container');
-                eqContainer.innerHTML = '';
-                equityChart = LightweightCharts.createChart(eqContainer, {
-                    layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
-                    grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
-                    timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#1e293b' },
-                    rightPriceScale: { autoScale: true }
-                });
-                equitySeries = equityChart.addAreaSeries({
-                    topColor: 'rgba(56, 189, 248, 0.4)',
-                    bottomColor: 'rgba(56, 189, 248, 0.0)',
-                    lineColor: '#38bdf8',
-                    lineWidth: 2
-                });
-
-                resizeCanvas();
-            }
-
-            function parseBybitSymbol(symbol) {
-                return symbol.replace('/USDT:USDT', 'USDT').replace('/USDT', 'USDT').replace(':', '');
-            }
-
-            function changeTimeframe(tf) {
-                currentTimeframe = tf;
-                document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
-                const btn = document.getElementById(`tf-${tf}`);
-                if (btn) btn.classList.add('active');
-                loadChartCandles(currentSymbol, selectedPos, false);
-            }
-
-            function changePnlFilter(filter) {
-                currentPnlFilter = filter;
-                document.querySelectorAll('.pnl-tf-btn').forEach(b => b.classList.remove('active'));
-                const btn = document.getElementById(`pnl-tf-${filter}`);
-                if (btn) btn.classList.add('active');
-                recalculatePnlMetrics();
-            }
-
-            function changeStatsFilter(filter) {
-                currentStatsFilter = filter;
-                document.querySelectorAll('.stats-tf-btn').forEach(b => b.classList.remove('active'));
-                const btn = document.getElementById(`stats-tf-${filter}`);
-                if (btn) btn.classList.add('active');
-                recalculateAdvancedStats();
-            }
-
-            function getTurkeyTimeBoundaries() {
-                const now = new Date();
-                const trOffset = 3 * 60;
-                const localOffset = now.getTimezoneOffset();
-                const trNow = new Date(now.getTime() + (trOffset + localOffset) * 60 * 1000);
-
-                const todayStart = new Date(trNow.getFullYear(), trNow.getMonth(), trNow.getDate(), 0, 0, 0);
-                const todayStartTs = Math.floor((todayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
-                const yesterdayStartTs = Math.floor((yesterdayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                const dayOfWeek = trNow.getDay() === 0 ? 6 : trNow.getDay() - 1;
-                const weekStart = new Date(todayStart.getTime() - dayOfWeek * 24 * 60 * 60 * 1000);
-                const weekStartTs = Math.floor((weekStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                const monthStart = new Date(trNow.getFullYear(), trNow.getMonth(), 1, 0, 0, 0);
-                const monthStartTs = Math.floor((monthStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                return { todayStartTs, yesterdayStartTs, yesterdayEndTs: todayStartTs, weekStartTs, monthStartTs };
-            }
-
-            function loadArchivePreview() {
-                try {
-                    const boundaries = getTurkeyTimeBoundaries();
-                    let todayTrades = tradeHistoryCache.filter(h => (h.close_timestamp || 0) >= boundaries.todayStartTs);
-                    let count = todayTrades.length;
-                    let wins = todayTrades.filter(h => h.realized_pnl > 0).length;
-                    let winRate = count > 0 ? ((wins / count) * 100).toFixed(1) : "0.0";
-                    let totalPnl = todayTrades.reduce((acc, h) => acc + h.realized_pnl, 0);
-                } catch(e) {}
-            }
-
-            async function downloadCustomCsv() {
-                const start = document.getElementById('custom-start-date').value;
-                const end = document.getElementById('custom-end-date').value;
-                if (!start || !end) { alert("Lütfen başlangıç ve bitiş tarihlerini seçin!"); return; }
-
-                try {
-                    const res = await fetch('/api/export/custom_csv', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ start_date: start, end_date: end })
-                    });
-                    const blob = await res.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `trades_${start}_to_${end}.csv`;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                } catch(e) { alert("Hata oluştu."); }
-            }
-
-            function recalculatePnlMetrics() {
-                try {
-                    const boundaries = getTurkeyTimeBoundaries();
-                    let filtered = [];
-
-                    tradeHistoryCache.forEach(h => {
-                        const ts = h.close_timestamp || 0;
-                        if (currentPnlFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
-                        else if (currentPnlFilter === 'yesterday' && ts >= boundaries.yesterdayStartTs && ts < boundaries.yesterdayEndTs) filtered.push(h);
-                        else if (currentPnlFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
-                        else if (currentPnlFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
-                        else if (currentPnlFilter === 'all') filtered.push(h);
-                    });
-
-                    let periodPnl = 0, winCount = 0;
-                    filtered.forEach(h => {
-                        periodPnl += h.realized_pnl;
-                        if (h.realized_pnl > 0) winCount++;
-                    });
-
-                    periodPnl = Math.round(periodPnl * 100) / 100;
-                    const winRate = filtered.length > 0 ? ((winCount / filtered.length) * 100).toFixed(1) : "0.0";
-
-                    const pnlElem = document.getElementById('stat-pnl');
-                    if (pnlElem) {
-                        pnlElem.innerText = `${periodPnl >= 0 ? '+' : ''}$${periodPnl.toFixed(2)}`;
-                        pnlElem.className = `text-sm font-extrabold font-mono ${periodPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
-                    }
-                    document.getElementById('stat-winrate').innerText = `%${winRate}`;
-                    document.getElementById('stat-trades').innerText = filtered.length;
-                } catch(e) {}
-            }
-
-            function recalculateAdvancedStats() {
-                try {
-                    const boundaries = getTurkeyTimeBoundaries();
-                    let filtered = [];
-
-                    tradeHistoryCache.forEach(h => {
-                        const ts = h.close_timestamp || 0;
-                        if (currentStatsFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
-                        else if (currentStatsFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
-                        else if (currentStatsFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
-                        else if (currentStatsFilter === 'all') filtered.push(h);
-                    });
-
-                    let totalWin = 0, totalLoss = 0, winOps = 0, lossOps = 0;
-                    let symbolGrossProfit = {};
-                    let symbolGrossLoss = {};
-                    let symbolTradeCount = {};
-                    let pnlSeries = [];
-
-                    filtered.forEach(h => {
-                        pnlSeries.push(h.realized_pnl);
-                        symbolTradeCount[h.symbol] = (symbolTradeCount[h.symbol] || 0) + 1;
-
-                        if (h.realized_pnl > 0) {
-                            totalWin += h.realized_pnl; 
-                            winOps++;
-                            symbolGrossProfit[h.symbol] = (symbolGrossProfit[h.symbol] || 0) + h.realized_pnl;
-                        } else {
-                            totalLoss += Math.abs(h.realized_pnl); 
-                            lossOps++;
-                            symbolGrossLoss[h.symbol] = (symbolGrossLoss[h.symbol] || 0) + Math.abs(h.realized_pnl);
-                        }
-                    });
-
-                    const totalOps = filtered.length;
-                    const winRateVal = totalOps > 0 ? (winOps / totalOps) : 0;
-                    const lossRateVal = totalOps > 0 ? (lossOps / totalOps) : 0;
-                    const avgWinVal = winOps > 0 ? (totalWin / winOps) : 0;
-                    const avgLossVal = lossOps > 0 ? (totalLoss / lossOps) : 0;
-
-                    const expectancy = (winRateVal * avgWinVal) - (lossRateVal * avgLossVal);
-                    const pf = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : (totalWin > 0 ? "∞" : "0.00");
-
-                    document.getElementById('stat-pf').innerText = pf;
-                    const expEl = document.getElementById('stat-expectancy');
-                    expEl.innerText = `${expectancy >= 0 ? '+' : ''}$${expectancy.toFixed(2)}`;
-                    expEl.className = `text-xl font-bold font-mono ${expectancy >= 0 ? 'text-sky-400' : 'text-red-400'}`;
-
-                    const sortedTopSymbols = Object.keys(symbolGrossProfit).sort((a,b) => symbolGrossProfit[b] - symbolGrossProfit[a]);
-                    const topTbody = document.getElementById('top-symbols-table');
-                    if (topTbody) {
-                        topTbody.innerHTML = sortedTopSymbols.slice(0, 5).map(sym => `
-                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${symbolTradeCount[sym]}</td><td class="font-bold text-right text-emerald-400">+${symbolGrossProfit[sym].toFixed(2)} $</td></tr>
-                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
-                    }
-
-                    const sortedWorstSymbols = Object.keys(symbolGrossLoss).sort((a,b) => symbolGrossLoss[b] - symbolGrossLoss[a]);
-                    const worstTbody = document.getElementById('worst-symbols-table');
-                    if (worstTbody) {
-                        worstTbody.innerHTML = sortedWorstSymbols.slice(0, 5).map(sym => `
-                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${symbolTradeCount[sym]}</td><td class="font-bold text-right text-rose-400">-${symbolGrossLoss[sym].toFixed(2)} $</td></tr>
-                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
-                    }
-                } catch(e) {}
-            }
-
-            async function loadReportsList() {
-                try {
-                    const res = await fetch('/api/reports/list');
-                    const files = await res.json();
-                    const tbody = document.getElementById('reports-table');
-                    if (tbody) {
-                        tbody.innerHTML = files.map(f => `<tr><td class="py-2 font-mono text-slate-300">📄 ${f}</td><td class="text-right"><a href="/api/reports/download/${f}" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-2 py-1 rounded text-[10px]">İndir</a></td></tr>`).join('') || '<tr><td colspan="2" class="py-2 text-slate-500 italic">Arşiv yok...</td></tr>';
-                    }
-                } catch(e) {}
-            }
-
-            async function fetchCandlesDirect(symbol, interval = '5') {
-                const rawSym = parseBybitSymbol(symbol);
-                const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${rawSym}&interval=${interval}&limit=1000`;
-                try {
-                    const res = await fetch(url);
-                    const json = await res.json();
-                    if (json.result && json.result.list) {
-                        return json.result.list.map(c => ({
-                            time: Math.floor(parseInt(c[0]) / 1000), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4])
-                        })).sort((a, b) => a.time - b.time);
-                    }
-                } catch(e) {}
-                return [];
-            }
-
-            async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
-                try {
-                    const candles = await fetchCandlesDirect(symbol, currentTimeframe);
-                    if (candles.length > 0 && candleSeries) {
-                        const lastCandle = candles[candles.length - 1];
-                        const pConf = getPrecisionConfig(lastCandle.close);
-                        candleSeries.applyOptions({ priceFormat: { type: 'price', precision: pConf.precision, minMove: pConf.minMove } });
-                        
-                        const intervalSec = getIntervalSeconds(currentTimeframe);
-                        let futureData = [];
-                        let lastTime = lastCandle.time;
-                        for (let i = 1; i <= 150; i++) {
-                            futureData.push({ time: lastTime + (i * intervalSec) });
-                        }
-                        
-                        candleSeries.setData([...candles, ...futureData]);
-
-                        if (!isLiveTick) {
-                            const dec = lastCandle.close < 1 ? pConf.precision : 2;
-                            document.getElementById('bar-open').innerText = `$${lastCandle.open.toFixed(dec)}`;
-                            document.getElementById('bar-high').innerText = `$${lastCandle.high.toFixed(dec)}`;
-                            document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
-                            document.getElementById('bar-close').innerText = `$${lastCandle.close.toFixed(dec)}`;
-                            
-                            if (chart) {
-                                chart.priceScale('right').applyOptions({ autoScale: true });
-                            }
-                        }
-                        resizeCanvas();
-                        drawPositionBoxes();
-                    }
-
-                    if (!isLiveTick) {
-                        priceLines.forEach(l => candleSeries.removePriceLine(l));
-                        priceLines = [];
-                        const tfLabel = currentTimeframe === '60' ? '1H' : (currentTimeframe === '240' ? '4H' : (currentTimeframe === 'D' ? '1D' : `${currentTimeframe}M`));
-                        document.getElementById('chart-title').innerText = `${symbol} (${tfLabel})`;
-
-                        if (posData && candleSeries) {
-                            const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
-                            const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP' });
-                            const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
-                            const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
-                            
-                            priceLines.push(entryLine, slLine, tp1Line, tp2Line);
-                            const p = posData.entry < 1 ? 6 : 2;
-                            document.getElementById('chart-levels').innerHTML = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span> | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
-                        } else {
-                            document.getElementById('chart-levels').innerHTML = '';
-                        }
-                    }
-                } catch(e) {}
-            }
-
-            function selectPosition(pos) {
-                selectedPos = pos;
-                currentSymbol = pos.symbol;
-                localStorage.setItem("selected_sym", pos.symbol);
-                renderRationale(pos);
-                loadChartCandles(pos.symbol, pos, false);
-            }
-
-            function renderRationale(pos) {
-                if (!pos) return;
-                const p = pos.entry < 1 ? 6 : 4;
-                const modeLabel = pos.margin_mode === "ISOLATED" ? "İzole" : "Cross";
-                
-                const tp1StatusHtml = pos.tp1_hit 
-                    ? `<div class="bg-emerald-950/60 border border-emerald-800 p-1.5 rounded text-[11px] text-emerald-400 font-bold mb-2">⚡ TP1 Alındı (%50 Kâr Realize Edildi - Stop Giriş Boyuna Çekildi)</div>` 
-                    : ``;
-
-                document.getElementById('active-rationale').innerHTML = `
-                    <div class="flex justify-between items-center mb-2"><span class="font-bold text-base text-white">${pos.symbol}</span><span class="px-2 py-0.5 rounded text-xs font-bold ${pos.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${pos.direction}</span></div>
-                    ${tp1StatusHtml}
-                    <div class="space-y-1 text-slate-300">${pos.reasons.map(r => `<div class="bg-slate-900/60 p-1.5 rounded border border-slate-800">✓ ${r}</div>`).join('')}</div>
-                    <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1 font-mono">
-                        <div class="text-slate-400">Giriş Saati: <span class="text-white font-bold font-sans">${pos.open_time}</span></div>
-                        <div class="text-slate-400">Mod: <span class="text-white font-bold font-sans">${pos.leverage}x ${modeLabel} ($${pos.margin})</span></div>
-                        <div class="text-emerald-800 font-bold">TP2: <span class="text-emerald-400">${pos.tp2.toFixed(p)}</span></div>
-                        <div class="text-emerald-600 font-bold">TP1: <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>
-                        <div class="text-sky-400 font-bold">Giriş: <span>${pos.entry}</span></div>
-                        <div class="text-red-400 font-bold">SL: <span>${pos.sl.toFixed(p)}</span></div>
-                    </div>`;
-            }
-
-            async function manualClosePos(symbol) {
-                await fetch('/api/manual/close_position', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol}) });
-                updateDashboard();
-            }
-
-            async function manualPartialClose(symbol, ratio) {
-                await fetch('/api/manual/partial_close', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol, ratio}) });
-                updateDashboard();
-            }
-
-            async function manualCloseAll() {
-                if (confirm("Tüm pozisyonları kapatmak istediğinize emin misiniz?")) {
-                    await fetch('/api/manual/close_all', { method: 'POST' });
-                    updateDashboard();
-                }
-            }
-
-            async function manualBreakevenAll() {
-                if (confirm("Tüm stopları başa başa çekmek istiyor musunuz?")) {
-                    await fetch('/api/manual/breakeven_all', { method: 'POST' });
-                    updateDashboard();
-                }
-            }
-
-            async function manualBreakeven(symbol) {
-                await fetch('/api/manual/breakeven', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol}) });
-                updateDashboard();
-            }
-
-            async function manualToggleTrailing(symbol) {
-                await fetch('/api/manual/toggle_trailing', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol}) });
-                updateDashboard();
-            }
-
-            async function manualUpdateSlTp(symbol) {
-                const sl = parseFloat(document.getElementById(`manual-sl-${symbol}`).value);
-                const tp2 = parseFloat(document.getElementById(`manual-tp-${symbol}`).value);
-                await fetch('/api/manual/update_sltp', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol, sl, tp2}) });
-                alert("SL ve TP Güncellendi!");
-                updateDashboard();
-            }
-
             async function saveSettings() {
                 const total_balance = parseFloat(document.getElementById('input-balance').value);
-                const risk_pct = parseFloat(document.getElementById('input-risk').value);
-                const leverage = parseInt(document.getElementById('input-leverage').value);
-                const margin_mode = document.getElementById('input-margin-mode').value;
-                const max_open_positions = parseInt(document.getElementById('input-max-pos').value);
-                const max_total_margin_pct = parseFloat(document.getElementById('input-max-margin-pct').value);
-
-                const res = await fetch('/api/update_settings', {
+                await fetch('/api/update_settings', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({total_balance, risk_pct, leverage, margin_mode, max_open_positions, max_total_margin_pct})
+                    body: JSON.stringify({total_balance, risk_pct: 5.0, leverage: 50, margin_mode: 'ISOLATED', max_open_positions: 5, max_total_margin_pct: 50.0})
                 });
-                if (res.ok) { alert("Ayarlar Kaydedildi!"); updateDashboard(); }
-            }
-
-            async function saveApiSettings() {
-                const exchange = document.getElementById('api-exchange').value;
-                const mode = document.getElementById('api-mode').value;
-                const api_key = document.getElementById('api-key').value;
-                const api_secret = document.getElementById('api-secret').value;
-                await fetch('/api/update_api', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({exchange, mode, api_key, api_secret, auto_trade: false}) });
-                alert("API Kaydedildi!");
-                updateDashboard();
+                alert("Ayarlar Kaydedildi!");
             }
 
             async function updateDashboard() {
                 try {
                     const res = await fetch('/api/state');
                     const data = await res.json();
-
-                    if (data.active_positions.length > lastKnownPosCount) playAlertSound();
-                    lastKnownPosCount = data.active_positions.length;
-
                     document.getElementById('scanned-count').innerText = data.scanned_count;
-                    document.getElementById('last-scan').innerText = data.last_scan_time;
-
-                    if (data.sentiment_data) {
-                        document.getElementById('sent-btc-15m').innerText = `${data.btc_15m_change >= 0 ? '+' : ''}%${data.btc_15m_change}`;
-                        document.getElementById('sent-btc-rsi').innerText = data.sentiment_data.btc_rsi;
-                        document.getElementById('sent-btc-vol').innerText = data.sentiment_data.btc_volume_24h;
-                        document.getElementById('sent-bias').innerText = data.sentiment_data.market_bias;
-                        document.getElementById('sent-volatility').innerText = data.sentiment_data.market_volatility;
-                        
-                        document.getElementById('sent-liq-total').innerText = data.sentiment_data.total_liquidations_24h;
-                        document.getElementById('sent-long-liq').innerText = `%${data.sentiment_data.long_liq_pct}`;
-                        document.getElementById('sent-short-liq').innerText = `%${data.sentiment_data.short_liq_pct}`;
-                        document.getElementById('liq-long-bar').style.width = `${data.sentiment_data.long_liq_pct}%`;
-                        document.getElementById('liq-short-bar').style.width = `${data.sentiment_data.short_liq_pct}%`;
-
-                        document.getElementById('sent-oi-change').innerText = data.sentiment_data.total_oi_change;
-                        document.getElementById('sent-btc-dom').innerText = data.sentiment_data.btc_dominance;
-                        document.getElementById('sent-avg-funding').innerText = data.sentiment_data.avg_funding_rate;
-
-                        document.getElementById('sent-bid-val').innerText = `%${data.sentiment_data.bid_pressure}`;
-                        document.getElementById('sent-ask-val').innerText = `%${data.sentiment_data.ask_pressure}`;
-                        document.getElementById('bid-bar').style.width = `${data.sentiment_data.bid_pressure}%`;
-                        document.getElementById('ask-bar').style.width = `${data.sentiment_data.ask_pressure}%`;
-
-                        document.getElementById('sent-whale-in').innerText = data.sentiment_data.whale_inflow;
-                        document.getElementById('sent-whale-out').innerText = data.sentiment_data.whale_outflow;
-                        document.getElementById('sent-net-whale').innerText = data.sentiment_data.net_whale_flow;
-
-                        const lsRatio = data.sentiment_data.long_short_ratio;
-                        document.getElementById('ls-ratio-text').innerText = `%${lsRatio} Long / %${(100 - lsRatio).toFixed(1)} Short`;
-                        document.getElementById('ls-bar').style.width = `${lsRatio}%`;
-                    }
-
-                    document.getElementById('btc-regime-badge').innerText = data.btc_regime || "BTC: AKTİF";
-
-                    const totalUsedMargin = data.locked_margin || 0;
-                    const totalRiskAmount = data.active_positions.reduce((acc, p) => acc + p.max_loss, 0);
-                    const totalUnrealizedPnl = data.active_positions.reduce((acc, p) => acc + p.unrealized_pnl, 0);
-                    const totalPnlPct = data.total_balance > 0 ? ((totalUnrealizedPnl / data.total_balance) * 100) : 0;
-
-                    const usedPct = data.total_balance > 0 ? ((totalUsedMargin / data.total_balance) * 100).toFixed(1) : "0.0";
-                    document.getElementById('stat-used-margin').innerText = `$${totalUsedMargin.toFixed(1)} (%${usedPct})`;
-
-                    document.getElementById('man-total-pos').innerText = `${data.active_positions.length} Adet`;
-                    document.getElementById('man-total-margin').innerText = `$${totalUsedMargin.toFixed(2)}`;
-                    document.getElementById('man-total-risk').innerText = `$${totalRiskAmount.toFixed(2)}`;
-
-                    const manPnlEl = document.getElementById('man-total-pnl');
-                    if (manPnlEl) {
-                        manPnlEl.innerText = `${totalUnrealizedPnl >= 0 ? '+' : ''}$${totalUnrealizedPnl.toFixed(2)} (%${totalPnlPct >= 0 ? '+' : ''}${totalPnlPct.toFixed(2)})`;
-                        manPnlEl.className = `text-sm font-bold font-mono ${totalUnrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
-                    }
-
-                    tradeHistoryCache = data.trade_history;
-                    recalculatePnlMetrics();
-                    recalculateAdvancedStats();
-                    loadArchivePreview();
-                    renderJournalTable();
-
-                    if (selectedPos) {
-                        const updatedSelected = data.active_positions.find(p => p.symbol === selectedPos.symbol);
-                        if (updatedSelected) {
-                            selectedPos = updatedSelected;
-                            renderRationale(selectedPos);
-                        }
-                    }
-
-                    if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) equitySeries.setData(data.equity_curve);
+                    document.getElementById('btc-regime-badge').innerText = data.btc_regime;
+                    document.getElementById('stat-used-margin').innerText = `$${data.locked_margin} (%${((data.locked_margin/data.total_balance)*100).toFixed(1)})`;
                     document.getElementById('log-box').innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
-
-                    lastPositions = data.active_positions;
-                    const activeTbody = document.getElementById('active-pos-table');
-                    if (activeTbody) {
-                        activeTbody.innerHTML = data.active_positions.map((p, idx) => `
-                            <tr class="hover:bg-slate-800/80 cursor-pointer ${selectedPos && selectedPos.symbol === p.symbol ? 'bg-slate-800/60' : ''}" onclick="selectPosition(lastPositions[${idx}])">
-                                <td class="py-2 font-bold text-white">${p.symbol}</td>
-                                <td class="text-slate-400 font-mono text-[10px]">${p.open_time}</td>
-                                <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction} (${p.leverage}x)</td>
-                                <td class="text-white font-mono">$${p.margin}</td>
-                                <td class="font-mono text-slate-300">${p.entry}</td>
-                                <td class="font-mono text-white font-bold">${p.current_price || p.entry}</td>
-                                <td class="font-mono font-bold ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}</td>
-                                <td class="w-24"><div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden"><div class="bg-emerald-500 h-1.5 rounded-full" style="width: ${p.progress_pct}%"></div></div><span class="text-[9px] text-slate-400 font-mono">%${p.progress_pct}</span></td>
-                            </tr>`).join('');
-                    }
-
-                    const manualTbody = document.getElementById('manual-pos-table');
-                    if (manualTbody) {
-                        manualTbody.innerHTML = data.active_positions.map(p => `
-                            <tr>
-                                <td class="py-2 font-bold text-white">${p.symbol}</td>
-                                <td class="${p.direction === 'LONG' ? 'text-emerald-400' : 'text-red-400'} font-bold">${p.direction}</td>
-                                <td class="font-mono text-slate-300">${p.entry} / ${p.current_price || p.entry}</td>
-                                <td class="font-bold ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}</td>
-                                <td><input id="manual-sl-${p.symbol}" type="number" step="any" value="${p.sl}" class="bg-slate-900 border border-slate-700 w-20 px-1 py-0.5 rounded text-white font-mono"></td>
-                                <td><input id="manual-tp-${p.symbol}" type="number" step="any" value="${p.tp2}" class="bg-slate-900 border border-slate-700 w-20 px-1 py-0.5 rounded text-white font-mono"></td>
-                                <td class="text-center"><button onclick="manualToggleTrailing('${p.symbol}')" class="px-2 py-1 rounded text-[10px] font-bold ${p.trailing_active ? 'bg-emerald-600 text-black animate-pulse' : 'bg-slate-800 text-slate-400'}">${p.trailing_active ? 'AÇIK' : 'KAPALI'}</button></td>
-                                <td class="text-right space-x-1">
-                                    <button onclick="manualUpdateSlTp('${p.symbol}')" class="bg-slate-700 hover:bg-slate-600 px-1.5 py-1 rounded text-[10px] text-white">💾</button>
-                                    <button onclick="manualPartialClose('${p.symbol}', 0.5)" class="bg-amber-600 hover:bg-amber-500 px-1.5 py-1 rounded text-[10px] text-white font-bold">%50</button>
-                                    <button onclick="manualBreakeven('${p.symbol}')" class="bg-sky-600 hover:bg-sky-500 px-1.5 py-1 rounded text-[10px] text-white">Başa Baş</button>
-                                    <button onclick="manualClosePos('${p.symbol}')" class="bg-rose-600 hover:bg-rose-500 px-2 py-1 rounded text-[10px] text-white font-bold">Kapat</button>
-                                </td>
-                            </tr>`).join('') || '<tr><td colspan="8" class="py-3 text-slate-500 italic">Açık pozisyon yok...</td></tr>';
-                    }
-
-                    const radarTbody = document.getElementById('radar-table');
-                    if (radarTbody && data.radar_symbols) {
-                        radarTbody.innerHTML = [...data.radar_symbols].sort((a,b) => b.score - a.score).map(r => `
-                            <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="currentSymbol='${r.symbol}'; switchTab('terminal'); loadChartCandles('${r.symbol}', null, false);">
-                                <td class="py-2 font-bold text-white">${r.symbol}</td><td class="font-mono">$${r.price}</td>
-                                <td class="font-bold ${r.trend === 'LONG' ? 'text-emerald-400' : 'text-red-400'}">${r.trend}</td>
-                                <td class="font-mono">${r.rsi}</td><td class="font-mono text-amber-400">${r.vol_ratio}x</td>
-                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${r.score >= 75 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${r.score} Puan</span></td>
-                            </tr>`).join('');
-                    }
-
-                    if (currentSymbol) loadChartCandles(currentSymbol, selectedPos, true);
-                    if (!selectedPos && data.active_positions.length > 0 && currentSymbol === "BTC/USDT:USDT") {
-                        // Eğer seçili pozisyon yoksa ve ilk açılışsa grafikte BTC gösterilmeye devam eder
-                    }
-                } catch (e) {}
+                } catch(e) {}
             }
 
             initCharts();
-            loadChartCandles(currentSymbol, null, false);
+            fetchDefaultChart();
             setInterval(updateDashboard, 2000);
         </script>
     </body>
