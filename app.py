@@ -282,18 +282,17 @@ async def analyze_symbol(exchange, symbol):
             score += 35
             reasons.append("📉 1H & 4H Güçlü Ayı Trend Dizilimi (EMA 20/50)")
         else:
-            return None  # Trend belirsizse veya yataydaysa hiç bulaşma
+            return None
 
         # 2. KATMAN: Akıllı Geri Çekilme (Pullback / Discount Alanı)
-        # Fiyat ana trend yönünde hareket ederken EMA20 civarına veya altına/üstüne sağlıklı bir nefes alma (pullback) yapmış olmalı
         dist_to_ema20 = abs(c_5m['close'] - c_5m['ema20']) / c_5m['close']
-        is_pullback = dist_to_ema20 <= 0.012  % Fiyat EMA20'ye yakın (%1.2 esneklik içinde)
+        is_pullback = dist_to_ema20 <= 0.012
 
         if is_pullback:
             score += 25
             reasons.append("🎯 Akıllı Geri Çekilme (EMA 20 Pullback Bölgesi)")
         else:
-            return None  # Fiyat ortalamadan çok uzaktaysa tepeye/dibe koşulmaz, beklenir
+            return None
 
         # 3. KATMAN: Hacim ve Momentum Patlaması (Tetikleyici)
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
@@ -308,9 +307,8 @@ async def analyze_symbol(exchange, symbol):
             score += 20
             reasons.append(f"🔥 Güçlü Momentum & Hacim Patlaması ({vol_ratio:.1f}x)")
         else:
-            return None  # Hacimli tetik mum gelmediyse işlem açma
+            return None
 
-        # Kurumsal OI Desteği Ek Puanı
         if len(oi_data) >= 3:
             oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
             oi_curr = oi_data[-1].get('openInterestValue') or oi_data[-1].get('openInterest', 0)
@@ -318,7 +316,6 @@ async def analyze_symbol(exchange, symbol):
                 score += 10
                 reasons.append("📊 Açık Pozisyon (OI) Artışı Onayı")
 
-        # RSI Dengesi Ek Puanı
         if 40 <= c_5m['rsi'] <= 65:
             score += 10
             reasons.append(f"🎯 Sağlıklı Momentum RSI ({c_5m['rsi']:.1f})")
@@ -342,7 +339,6 @@ async def analyze_symbol(exchange, symbol):
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
-        # SL ve TP Hesaplamaları (Piyasa Yapısına Tam Uyumlu & Esnetilmiş Güvenli Bölgeler)
         if direction == "LONG":
             sl = float(df_5m['low'].iloc[-12:].min() - (2.2 * atr))
             if (entry - sl) / entry < 0.015:
