@@ -35,10 +35,10 @@ system_state = {
     "unrealized_pnl": 0.0,
     "peak_balance": 1000.0,
     "max_drawdown_pct": 0.0,
-    "risk_pct": 0.0,         # 0.0 = Yapay Zeka (Oto)
-    "leverage": 0,           # 0 = Yapay Zeka (Oto)
+    "risk_pct": 5.0,
+    "leverage": 50,
     "margin_mode": "ISOLATED",
-    "max_open_positions": -1, # -1 = Yapay Zeka (Oto)
+    "max_open_positions": 5,
     "max_total_margin_pct": 50.0,
     "daily_drawdown_limit_pct": 10.0,
     "daily_loss_locked": False,
@@ -389,35 +389,25 @@ async def analyze_symbol(exchange, symbol):
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
-        # --- YAPAY ZEKA (OTO) KUTUCUK KONTROLLERİ ---
+        effective_leverage = system_state["leverage"]
+        effective_risk = system_state["risk_pct"]
         vol_pct = (atr / entry) * 100
-        
-        # Kaldıraç Kutucuğu (0 = Oto)
-        if system_state["leverage"] == 0:
+
+        if effective_leverage == 0:
             if vol_pct > 0.8:
                 effective_leverage = 10
             elif vol_pct > 0.4:
                 effective_leverage = 20
             else:
                 effective_leverage = 50
-        else:
-            effective_leverage = system_state["leverage"]
 
-        # Risk Kutucuğu (0.0 = Oto)
-        if system_state["risk_pct"] == 0.0:
+        if effective_risk == 0.0:
             if score >= 90:
                 effective_risk = 5.0
             elif score >= 80:
                 effective_risk = 3.0
             else:
                 effective_risk = 1.0
-                
-            peak = system_state.get("peak_balance", 1000)
-            curr = system_state.get("total_balance", 1000)
-            if peak > 0 and (((peak - curr) / peak) * 100) >= 5.0:
-                effective_risk = 0.5
-        else:
-            effective_risk = system_state["risk_pct"]
 
         try:
             market_info = exchange.markets.get(symbol, {})
@@ -427,24 +417,23 @@ async def analyze_symbol(exchange, symbol):
         except Exception:
             pass
 
-        # --- 0.5 ATR ÖNCESİ (FRONT-RUNNING) TP HESAPLAMASI ---
         if direction == "LONG":
             sl = float(df_5m['low'].iloc[-8:].min() - (1.8 * atr))
             if (entry - sl) / entry < 0.012:
                 sl = entry * 0.988
             risk_dist = entry - sl
 
-            raw_tp1 = float(df_15m['high'].iloc[-25:-1].max()) - (0.5 * atr)
-            if (raw_tp1 - entry) < (1.0 * risk_dist):
-                raw_tp1 = entry + (1.0 * risk_dist)
+            dyn_tp1 = float(df_15m['high'].iloc[-25:-1].max()) - (0.5 * atr)
+            if (dyn_tp1 - entry) < (1.0 * risk_dist):
+                dyn_tp1 = entry + (1.0 * risk_dist)
 
-            raw_tp2 = float(df_1h['high'].iloc[-25:-1].max()) - (0.5 * atr)
-            if abs(raw_tp2 - raw_tp1) / entry < 0.001:
-                raw_tp2 = raw_tp1
-            elif (raw_tp2 - entry) < (2.0 * risk_dist):
-                raw_tp2 = entry + (2.0 * risk_dist)
+            dyn_tp2 = float(df_1h['high'].iloc[-25:-1].max()) - (0.5 * atr)
+            if abs(dyn_tp2 - dyn_tp1) / entry < 0.001:
+                dyn_tp2 = dyn_tp1
+            elif (dyn_tp2 - entry) < (2.0 * risk_dist):
+                dyn_tp2 = entry + (2.0 * risk_dist)
 
-            tp1, tp2 = raw_tp1, raw_tp2
+            tp1, tp2 = dyn_tp1, dyn_tp2
 
         else:
             sl = float(df_5m['high'].iloc[-8:].max() + (1.8 * atr))
@@ -452,17 +441,17 @@ async def analyze_symbol(exchange, symbol):
                 sl = entry * 1.012
             risk_dist = sl - entry
 
-            raw_tp1 = float(df_15m['low'].iloc[-25:-1].min()) + (0.5 * atr)
-            if (entry - raw_tp1) < (1.0 * risk_dist):
-                raw_tp1 = entry - (1.0 * risk_dist)
+            dyn_tp1 = float(df_15m['low'].iloc[-25:-1].min()) + (0.5 * atr)
+            if (entry - dyn_tp1) < (1.0 * risk_dist):
+                dyn_tp1 = entry - (1.0 * risk_dist)
 
-            raw_tp2 = float(df_1h['low'].iloc[-25:-1].min()) + (0.5 * atr)
-            if abs(raw_tp1 - raw_tp2) / entry < 0.001:
-                raw_tp2 = raw_tp1
-            elif (entry - raw_tp2) < (2.0 * risk_dist):
-                raw_tp2 = entry - (2.0 * risk_dist)
+            dyn_tp2 = float(df_1h['low'].iloc[-25:-1].min()) + (0.5 * atr)
+            if abs(dyn_tp1 - dyn_tp2) / entry < 0.001:
+                dyn_tp2 = dyn_tp1
+            elif (entry - dyn_tp2) < (2.0 * risk_dist):
+                dyn_tp2 = entry - (2.0 * risk_dist)
 
-            tp1, tp2 = raw_tp1, raw_tp2
+            tp1, tp2 = dyn_tp1, dyn_tp2
 
         pos_size, margin, max_loss = compute_position_metrics(entry, sl, effective_leverage, effective_risk)
 
@@ -505,7 +494,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: Hibrit YZ & Gerçek Bakiye Entegrasyonu Devrede...")
+    add_log("Quant Motoru: 1H Ana Trend Filtresi Aktif | Likit Kripto Taraması Devrede...")
 
     while True:
         exchange = None
@@ -513,18 +502,6 @@ async def market_scanner_loop():
             exchange = await create_exchange_instance()
 
             check_daily_drawdown()
-            
-            # --- SEÇENEK B: BİNANCE / BYBİT GERÇEK CÜZDAN ENTEGRASYONU ---
-            api_conf = system_state["api_settings"]
-            if api_conf.get("auto_trade") and api_conf.get("api_key") and api_conf.get("api_secret"):
-                try:
-                    balance_data = await exchange.fetch_balance()
-                    real_usdt = float(balance_data.get('total', {}).get('USDT', 0))
-                    if real_usdt > 0:
-                        system_state["total_balance"] = real_usdt
-                except Exception:
-                    pass
-
             sync_wallet_accounting()
             await update_btc_metrics(exchange)
             await fetch_fear_greed()
@@ -554,17 +531,14 @@ async def market_scanner_loop():
                     if sig and isinstance(sig, dict):
                         exists = any(p['symbol'] == sig['symbol'] for p in system_state["active_positions"])
                         if not exists:
-                            # Max Pozisyon Kutucuğu (-1 = Oto)
-                            if system_state["max_open_positions"] == -1:
+                            max_pos = system_state["max_open_positions"]
+                            
+                            if max_pos == -1:
                                 if system_state["btc_shock_lock"] or "AYI" in system_state["btc_regime"]:
-                                    max_pos = 3
+                                    max_pos = 5
                                 else:
-                                    max_pos = 8
-                            else:
-                                max_pos = system_state["max_open_positions"]
+                                    max_pos = 15
 
-                            if max_pos == 0:
-                                continue
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
 
@@ -600,7 +574,7 @@ async def market_scanner_loop():
             for pos in list(system_state["active_positions"]):
                 try:
                     ticker = await exchange.fetch_ticker(pos['symbol'])
-                    curr_price = float(ticker['last'])
+                    curr_price = ticker['last']
                     pos['current_price'] = curr_price
                     direction = pos['direction']
                     close_reason = None
@@ -762,10 +736,10 @@ async def update_settings(payload: SettingsPayload):
     system_state["max_total_margin_pct"] = payload.max_total_margin_pct
     sync_wallet_accounting()
     
-    pos_limit_str = "Yapay Zeka (Oto)" if payload.max_open_positions == -1 else ("Sınırsız" if payload.max_open_positions == 0 else f"{payload.max_open_positions} Adet")
+    pos_limit_str = "Sınırsız" if payload.max_open_positions == 0 else ("Yapay Zeka" if payload.max_open_positions == -1 else f"{payload.max_open_positions} Adet")
     mode_str = "İzole" if payload.margin_mode == "ISOLATED" else "Cross"
-    risk_str = "Yapay Zeka (Oto)" if payload.risk_pct == 0.0 else f"%{payload.risk_pct}"
-    lev_str = "Yapay Zeka (Oto)" if payload.leverage == 0 else f"{payload.leverage}x"
+    risk_str = "Yapay Zeka" if payload.risk_pct == 0.0 else f"%{payload.risk_pct}"
+    lev_str = "Yapay Zeka" if payload.leverage == 0 else f"{payload.leverage}x"
     
     add_log(f"⚙️ AYARLAR GÜNCELLENDİ: Kasa: ${payload.total_balance} | Mod: {mode_str} | Risk: {risk_str} | Kaldıraç: {lev_str} | Max Poz: {pos_limit_str} | Max Marjin: %{payload.max_total_margin_pct}")
     return {"status": "success"}
@@ -853,7 +827,7 @@ async def manual_close_all():
     for pos in list(system_state["active_positions"]):
         curr_price = pos.get('current_price', pos['entry'])
         direction = pos['direction']
-        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
+        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
         apply_realized_pnl(realized_pnl)
 
@@ -1023,15 +997,8 @@ async def get_dashboard(request: Request):
                 <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ API</button>
             </div>
 
-            <!-- GÜNCEL KASA EKLENDİ -->
             <div class="flex items-center space-x-3 text-xs text-slate-400">
                 <button onclick="toggleBotTrading()" id="bot-toggle-btn" class="px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition">🤖 Bot: AÇIK</button>
-                <div class="border-l border-slate-700 h-4 mx-1"></div>
-                <div class="flex items-center space-x-1">
-                    <span class="uppercase tracking-wider">Güncel Kasa:</span>
-                    <span id="top-total-balance" class="text-emerald-400 font-extrabold text-sm font-mono">$1000.00</span>
-                </div>
-                <div class="border-l border-slate-700 h-4 mx-1"></div>
                 <div>Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
                 <div>Son: <span id="last-scan" class="text-white font-bold">-</span></div>
             </div>
@@ -1095,33 +1062,33 @@ async def get_dashboard(request: Request):
                     <div>
                         <label class="text-slate-400 block text-[9px]">RİSK (%)</label>
                         <select id="input-risk" class="bg-slate-800 text-white font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
-                            <option value="0.0" class="text-fuchsia-400 font-bold" selected>Yapay Zeka (Oto)</option>
+                            <option value="0.0" class="text-fuchsia-400">Otomatik (Yapay Zeka)</option>
                             <option value="0.5">%0.5</option>
                             <option value="1.0">%1.0</option>
                             <option value="2.0">%2.0</option>
                             <option value="3.0">%3.0</option>
-                            <option value="5.0">%5.0</option>
+                            <option value="5.0" selected>%5.0</option>
                         </select>
                     </div>
                     <div>
                         <label class="text-slate-400 block text-[9px]">KALDIRAÇ</label>
                         <select id="input-leverage" class="bg-slate-800 text-emerald-400 font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
-                            <option value="0" class="text-fuchsia-400 font-bold" selected>Yapay Zeka (Oto)</option>
+                            <option value="0" class="text-fuchsia-400">Otomatik (Yapay Zeka)</option>
                             <option value="5">5x</option>
                             <option value="10">10x</option>
                             <option value="20">20x</option>
-                            <option value="50">50x</option>
+                            <option value="50" selected>50x</option>
                             <option value="75">75x</option>
                         </select>
                     </div>
                     <div>
                         <label class="text-slate-400 block text-[9px]">MAX POZİSYON</label>
                         <select id="input-max-pos" class="bg-slate-800 text-amber-400 font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
-                            <option value="-1" class="text-fuchsia-400 font-bold" selected>Yapay Zeka (Oto)</option>
+                            <option value="-1" class="text-fuchsia-400">Otomatik (Yapay Zeka)</option>
                             <option value="1">1 Adet</option>
                             <option value="2">2 Adet</option>
                             <option value="3">3 Adet</option>
-                            <option value="5">5 Adet</option>
+                            <option value="5" selected>5 Adet</option>
                             <option value="10">10 Adet</option>
                             <option value="0">Sınırsız</option>
                         </select>
@@ -1550,7 +1517,7 @@ async def get_dashboard(request: Request):
                 <div class="card p-4 rounded-xl"><div class="text-[10px] text-slate-400 uppercase">Ortalama Kârlı / Zararlı İşlem</div><div class="text-base font-bold font-mono text-emerald-400 mt-1" id="stat-avg-win">+$0.00</div><div class="text-base font-bold font-mono text-rose-400 mt-0.5" id="stat-avg-loss">-$0.00</div></div>
                 <div class="card p-4 rounded-xl space-y-2"><div class="text-[10px] text-slate-400 uppercase">Ardışık Seri (Max Seriler)</div><div class="text-xs font-bold font-mono text-white pt-1">Kazanç: <b id="stat-max-win-streak" class="text-emerald-400">0</b> | Kayıp: <b id="stat-max-loss-streak" class="text-rose-400">0</b></div></div>
                 <div class="card p-4 rounded-xl space-y-2"><div class="text-[10px] text-slate-400 uppercase">Ortalama İşlem Süresi</div><div id="stat-avg-duration" class="text-sm font-bold font-mono text-amber-400 mt-1">-- Dakika</div></div>
-                <div class="card p-4 rounded-xl space-y-2"><div class="text-[10px] text-slate-400 uppercase">Yön Dağılımı (Long vs Short)</div><div id="stat-ls-ratio" class="text-xs font-bold font-mono text-white">L: %0 | S: %0</div><div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden flex"><div id="stat-ls-bar" class="bg-sky-500 h-1.5" style="width: 50%"></div></div></div></div>
+                <div class="card p-4 rounded-xl space-y-2"><div class="text-[10px] text-slate-400 uppercase">Yön Dağılımı (Long vs Short)</div><div id="stat-ls-ratio" class="text-xs font-bold font-mono text-white">L: %0 | S: %0</div><div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden flex"><div id="stat-ls-bar" class="bg-sky-500 h-1.5" style="width: 50%"></div></div></div>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1671,6 +1638,221 @@ async def get_dashboard(request: Request):
             let lastPositions = [];
             let tradeHistoryCache = [];
             let lastKnownPosCount = 0;
+
+            // EKLENEN EKSİK FONKSİYONLAR (Hatanın çözümü)
+            function recalculatePnlMetrics() {
+                try {
+                    const now = new Date();
+                    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+                    const startOfYesterday = startOfToday - 86400;
+                    const startOfWeek = startOfToday - (now.getDay() === 0 ? 6 : now.getDay() - 1) * 86400;
+                    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime() / 1000;
+
+                    let filtered = tradeHistoryCache.filter(h => {
+                        const ts = h.close_timestamp || 0;
+                        if (currentPnlFilter === 'today') return ts >= startOfToday;
+                        if (currentPnlFilter === 'yesterday') return ts >= startOfYesterday && ts < startOfToday;
+                        if (currentPnlFilter === 'week') return ts >= startOfWeek;
+                        if (currentPnlFilter === 'month') return ts >= startOfMonth;
+                        return true; // all
+                    });
+
+                    const totalPnl = filtered.reduce((acc, h) => acc + (h.realized_pnl || 0), 0);
+                    const totalCount = filtered.length;
+                    const wins = filtered.filter(h => (h.realized_pnl || 0) > 0).length;
+                    const winRate = totalCount > 0 ? ((wins / totalCount) * 100).toFixed(1) : "0.0";
+
+                    const pnlEl = document.getElementById('stat-pnl');
+                    if (pnlEl) {
+                        pnlEl.innerText = `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`;
+                        pnlEl.className = `text-sm font-extrabold font-mono ${totalPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+                    }
+
+                    const winrateEl = document.getElementById('stat-winrate');
+                    if (winrateEl) winrateEl.innerText = `%${winRate}`;
+
+                    const tradesEl = document.getElementById('stat-trades');
+                    if (tradesEl) tradesEl.innerText = totalCount;
+
+                    const labelMap = {
+                        'today': 'Bugün Net PnL',
+                        'yesterday': 'Dün Net PnL',
+                        'week': 'Bu Hafta Net PnL',
+                        'month': 'Bu Ay Net PnL',
+                        'all': 'Tüm Zamanlar Net PnL'
+                    };
+                    const labelEl = document.getElementById('pnl-label');
+                    if (labelEl) labelEl.innerText = labelMap[currentPnlFilter] || 'Net PnL';
+                } catch(e) {}
+            }
+
+            function recalculateAdvancedStats() {
+                try {
+                    const now = new Date();
+                    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000;
+                    const startOfWeek = startOfToday - (now.getDay() === 0 ? 6 : now.getDay() - 1) * 86400;
+                    const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).getTime() / 1000;
+
+                    let filtered = tradeHistoryCache.filter(h => {
+                        const ts = h.close_timestamp || 0;
+                        if (currentStatsFilter === 'today') return ts >= startOfToday;
+                        if (currentStatsFilter === 'week') return ts >= startOfWeek;
+                        if (currentStatsFilter === 'month') return ts >= startOfMonth;
+                        return true;
+                    });
+
+                    const totalCount = filtered.length;
+                    const winsList = filtered.filter(h => (h.realized_pnl || 0) > 0);
+                    const lossesList = filtered.filter(h => (h.realized_pnl || 0) < 0);
+
+                    const grossProfit = winsList.reduce((acc, h) => acc + h.realized_pnl, 0);
+                    const grossLoss = Math.abs(lossesList.reduce((acc, h) => acc + h.realized_pnl, 0));
+                    const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : (grossProfit > 0 ? "99.0" : "0.00");
+
+                    const netSum = filtered.reduce((acc, h) => acc + h.realized_pnl, 0);
+                    const expectancy = totalCount > 0 ? (netSum / totalCount).toFixed(2) : "0.00";
+
+                    const avgWin = winsList.length > 0 ? (grossProfit / winsList.length).toFixed(2) : "0.00";
+                    const avgLoss = lossesList.length > 0 ? (grossLoss / lossesList.length).toFixed(2) : "0.00";
+
+                    // Seri hesaplama
+                    let maxWinStreak = 0, maxLossStreak = 0, curWin = 0, curLoss = 0;
+                    [...filtered].reverse().forEach(h => {
+                        if ((h.realized_pnl || 0) > 0) {
+                            curWin++; curLoss = 0;
+                            if (curWin > maxWinStreak) maxWinStreak = curWin;
+                        } else if ((h.realized_pnl || 0) < 0) {
+                            curLoss++; curWin = 0;
+                            if (curLoss > maxLossStreak) maxLossStreak = curLoss;
+                        }
+                    });
+
+                    const longCount = filtered.filter(h => h.direction === 'LONG').length;
+                    const shortCount = filtered.filter(h => h.direction === 'SHORT').length;
+                    const longPct = totalCount > 0 ? ((longCount / totalCount) * 100).toFixed(0) : 50;
+
+                    if (document.getElementById('stat-pf')) document.getElementById('stat-pf').innerText = profitFactor;
+                    if (document.getElementById('stat-expectancy')) document.getElementById('stat-expectancy').innerText = `$${expectancy}`;
+                    if (document.getElementById('stat-avg-win')) document.getElementById('stat-avg-win').innerText = `+$${avgWin}`;
+                    if (document.getElementById('stat-avg-loss')) document.getElementById('stat-avg-loss').innerText = `-$${avgLoss}`;
+                    if (document.getElementById('stat-max-win-streak')) document.getElementById('stat-max-win-streak').innerText = maxWinStreak;
+                    if (document.getElementById('stat-max-loss-streak')) document.getElementById('stat-max-loss-streak').innerText = maxLossStreak;
+                    if (document.getElementById('stat-ls-ratio')) document.getElementById('stat-ls-ratio').innerText = `L: %${longPct} | S: %${100 - longPct}`;
+                    if (document.getElementById('stat-ls-bar')) document.getElementById('stat-ls-bar').style.width = `${longPct}%`;
+
+                    // Top/Worst Pariteler Tabloları
+                    let symbolMap = {};
+                    filtered.forEach(h => {
+                        if (!symbolMap[h.symbol]) symbolMap[h.symbol] = { count: 0, pnl: 0 };
+                        symbolMap[h.symbol].count++;
+                        symbolMap[h.symbol].pnl += (h.realized_pnl || 0);
+                    });
+
+                    let symbolArr = Object.keys(symbolMap).map(s => ({ symbol: s, ...symbolMap[s] }));
+                    let sortedBest = [...symbolArr].sort((a,b) => b.pnl - a.pnl);
+                    let sortedWorst = [...symbolArr].sort((a,b) => a.pnl - b.pnl);
+
+                    const topTable = document.getElementById('top-symbols-table');
+                    if (topTable) {
+                        topTable.innerHTML = sortedBest.slice(0, 5).map(s => `
+                            <tr><td class="py-1.5 font-bold text-white">${s.symbol}</td><td>${s.count} İşlem</td><td class="text-right font-mono font-bold text-emerald-400">+$${s.pnl.toFixed(2)}</td></tr>
+                        `).join('') || '<tr><td colspan="3" class="text-slate-500 italic py-2">Veri yok...</td></tr>';
+                    }
+
+                    const worstTable = document.getElementById('worst-symbols-table');
+                    if (worstTable) {
+                        worstTable.innerHTML = sortedWorst.slice(0, 5).map(s => `
+                            <tr><td class="py-1.5 font-bold text-white">${s.symbol}</td><td>${s.count} İşlem</td><td class="text-right font-mono font-bold text-rose-400">-$${Math.abs(s.pnl).toFixed(2)}</td></tr>
+                        `).join('') || '<tr><td colspan="3" class="text-slate-500 italic py-2">Veri yok...</td></tr>';
+                    }
+                } catch(e) {}
+            }
+
+            function changePnlFilter(tf) {
+                currentPnlFilter = tf;
+                ['today', 'yesterday', 'week', 'month', 'all'].forEach(t => {
+                    const btn = document.getElementById(`pnl-tf-${t}`);
+                    if (btn) {
+                        if (t === tf) btn.classList.add('active');
+                        else btn.classList.remove('active');
+                    }
+                });
+                recalculatePnlMetrics();
+            }
+
+            function changeStatsFilter(tf) {
+                currentStatsFilter = tf;
+                ['today', 'week', 'month', 'all'].forEach(t => {
+                    const btn = document.getElementById(`stats-tf-${t}`);
+                    if (btn) {
+                        if (t === tf) btn.classList.add('active');
+                        else btn.classList.remove('active');
+                    }
+                });
+                recalculateAdvancedStats();
+            }
+
+            function changeTimeframe(tf) {
+                currentTimeframe = tf;
+                ['1', '5', '15', '60', '240', 'D'].forEach(t => {
+                    const btn = document.getElementById(`tf-${t}`);
+                    if (btn) {
+                        if (t === tf) btn.classList.add('active');
+                        else btn.classList.remove('active');
+                    }
+                });
+                loadChartCandles(currentSymbol, selectedPos, false);
+            }
+
+            async function loadReportsList() {
+                try {
+                    const res = await fetch('/api/reports/list');
+                    const files = await res.json();
+                    const tb = document.getElementById('reports-table');
+                    if (tb) {
+                        tb.innerHTML = files.map(f => `
+                            <tr><td class="py-2 font-mono text-slate-300">${f}</td><td class="text-right"><a href="/api/reports/download/${f}" class="text-sky-400 hover:underline font-bold text-xs">İndir</a></td></tr>
+                        `).join('') || '<tr><td colspan="2" class="py-2 text-slate-500 italic">Arşiv dosyası bulunamadı.</td></tr>';
+                    }
+                } catch(e) {}
+            }
+
+            async function loadArchivePreview() {
+                try {
+                    const totalCount = tradeHistoryCache.length;
+                    const wins = tradeHistoryCache.filter(h => h.realized_pnl > 0).length;
+                    const winRate = totalCount > 0 ? ((wins / totalCount) * 100).toFixed(1) : "0.0";
+                    const netPnl = tradeHistoryCache.reduce((acc, h) => acc + h.realized_pnl, 0);
+
+                    if (document.getElementById('archive-prev-trades')) document.getElementById('archive-prev-trades').innerText = totalCount;
+                    if (document.getElementById('archive-prev-winrate')) document.getElementById('archive-prev-winrate').innerText = `%${winRate}`;
+                    const pnlElem = document.getElementById('archive-prev-pnl');
+                    if (pnlElem) {
+                        pnlElem.innerText = `${netPnl >= 0 ? '+' : ''}$${netPnl.toFixed(2)}`;
+                        pnlElem.className = `text-sm font-extrabold font-mono ${netPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+                    }
+                } catch(e) {}
+            }
+
+            async function downloadCustomCsv() {
+                const start_date = document.getElementById('custom-start-date').value;
+                const end_date = document.getElementById('custom-end-date').value;
+                if (!start_date || !end_date) { alert("Lütfen başlangıç ve bitiş tarihi seçin!"); return; }
+                
+                const res = await fetch('/api/export/custom_csv', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ start_date, end_date })
+                });
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `trades_${start_date}_to_${end_date}.csv`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+            }
 
             function resizeCanvas() {
                 const wrapper = document.getElementById('tv-wrapper');
@@ -1971,239 +2153,29 @@ async def get_dashboard(request: Request):
                 resizeCanvas();
             }
 
-            function parseBybitSymbol(symbol) {
-                return symbol.replace('/USDT:USDT', 'USDT').replace('/USDT', 'USDT').replace(':', '');
-            }
-
-            function changeTimeframe(tf) {
-                currentTimeframe = tf;
-                document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
-                const btn = document.getElementById(`tf-${tf}`);
-                if (btn) btn.classList.add('active');
-                loadChartCandles(currentSymbol, selectedPos, false);
-            }
-
-            function changePnlFilter(filter) {
-                currentPnlFilter = filter;
-                document.querySelectorAll('.pnl-tf-btn').forEach(b => b.classList.remove('active'));
-                const btn = document.getElementById(`pnl-tf-${filter}`);
-                if (btn) btn.classList.add('active');
-                recalculatePnlMetrics();
-            }
-
-            function changeStatsFilter(filter) {
-                currentStatsFilter = filter;
-                document.querySelectorAll('.stats-tf-btn').forEach(b => b.classList.remove('active'));
-                const btn = document.getElementById(`stats-tf-${filter}`);
-                if (btn) btn.classList.add('active');
-                recalculateAdvancedStats();
-            }
-
-            function getTurkeyTimeBoundaries() {
-                const now = new Date();
-                const trOffset = 3 * 60;
-                const localOffset = now.getTimezoneOffset();
-                const trNow = new Date(now.getTime() + (trOffset + localOffset) * 60 * 1000);
-
-                const todayStart = new Date(trNow.getFullYear(), trNow.getMonth(), trNow.getDate(), 0, 0, 0);
-                const todayStartTs = Math.floor((todayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
-                const yesterdayStartTs = Math.floor((yesterdayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                const dayOfWeek = trNow.getDay() === 0 ? 6 : trNow.getDay() - 1;
-                const weekStart = new Date(todayStart.getTime() - dayOfWeek * 24 * 60 * 60 * 1000);
-                const weekStartTs = Math.floor((weekStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                const monthStart = new Date(trNow.getFullYear(), trNow.getMonth(), 1, 0, 0, 0);
-                const monthStartTs = Math.floor((monthStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                return { todayStartTs, yesterdayStartTs, yesterdayEndTs: todayStartTs, weekStartTs, monthStartTs };
-            }
-
-            function loadArchivePreview() {
-                try {
-                    const boundaries = getTurkeyTimeBoundaries();
-                    let todayTrades = tradeHistoryCache.filter(h => (h.close_timestamp || 0) >= boundaries.todayStartTs);
-                    let count = todayTrades.length;
-                    let wins = todayTrades.filter(h => h.realized_pnl > 0).length;
-                    let winRate = count > 0 ? ((wins / count) * 100).toFixed(1) : "0.0";
-                    let totalPnl = todayTrades.reduce((acc, h) => acc + h.realized_pnl, 0);
-
-                    document.getElementById('archive-prev-trades').innerText = count;
-                    document.getElementById('archive-prev-winrate').innerText = `%${winRate}`;
-                    
-                    const pnlEl = document.getElementById('archive-prev-pnl');
-                    pnlEl.innerText = `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`;
-                    pnlEl.className = `text-sm font-extrabold font-mono mt-0.5 ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
-                } catch(e) {}
-            }
-
-            async function downloadCustomCsv() {
-                const start = document.getElementById('custom-start-date').value;
-                const end = document.getElementById('custom-end-date').value;
-                if (!start || !end) { alert("Lütfen başlangıç ve bitiş tarihlerini seçin!"); return; }
-
-                try {
-                    const res = await fetch('/api/export/custom_csv', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ start_date: start, end_date: end })
-                    });
-                    const blob = await res.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `trades_${start}_to_${end}.csv`;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                } catch(e) { alert("Hata oluştu."); }
-            }
-
-            // --- EKSİK OLAN PNL HESAPLAMA FONKSİYONU EKLENDİ ---
-            function recalculatePnlMetrics() {
-                try {
-                    const boundaries = getTurkeyTimeBoundaries();
-                    let filtered = [];
-
-                    tradeHistoryCache.forEach(h => {
-                        const ts = h.close_timestamp || 0;
-                        if (currentPnlFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
-                        else if (currentPnlFilter === 'yesterday' && ts >= boundaries.yesterdayStartTs && ts < boundaries.yesterdayEndTs) filtered.push(h);
-                        else if (currentPnlFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
-                        else if (currentPnlFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
-                        else if (currentPnlFilter === 'all') filtered.push(h);
-                    });
-
-                    let periodPnl = 0, winCount = 0;
-                    filtered.forEach(h => {
-                        periodPnl += h.realized_pnl;
-                        if (h.realized_pnl > 0) winCount++;
-                    });
-
-                    periodPnl = Math.round(periodPnl * 100) / 100;
-                    const winRate = filtered.length > 0 ? ((winCount / filtered.length) * 100).toFixed(1) : "0.0";
-
-                    const pnlElem = document.getElementById('stat-pnl');
-                    if (pnlElem) {
-                        pnlElem.innerText = `${periodPnl >= 0 ? '+' : ''}$${periodPnl.toFixed(2)}`;
-                        pnlElem.className = `text-sm font-extrabold font-mono ${periodPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
-                    }
-                    document.getElementById('stat-winrate').innerText = `%${winRate}`;
-                    document.getElementById('stat-trades').innerText = filtered.length;
-                } catch(e) {}
-            }
-
-            // --- EKSİK OLAN GELİŞMİŞ İSTATİSTİK FONKSİYONU EKLENDİ ---
-            function recalculateAdvancedStats() {
-                try {
-                    const boundaries = getTurkeyTimeBoundaries();
-                    let filtered = [];
-
-                    tradeHistoryCache.forEach(h => {
-                        const ts = h.close_timestamp || 0;
-                        if (currentStatsFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
-                        else if (currentStatsFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
-                        else if (currentStatsFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
-                        else if (currentStatsFilter === 'all') filtered.push(h);
-                    });
-
-                    let totalWin = 0, totalLoss = 0, winOps = 0, lossOps = 0, longTotal = 0, shortTotal = 0, totalDuration = 0;
-                    let symbolPnlMap = {}, pnlSeries = [], currentWinStreak = 0, maxWinStreak = 0, currentLossStreak = 0, maxLossStreak = 0;
-
-                    const sortedFiltered = [...filtered].sort((a,b) => (a.close_timestamp || 0) - (b.close_timestamp || 0));
-
-                    sortedFiltered.forEach(h => {
-                        totalDuration += (h.duration_mins || 1);
-                        pnlSeries.push(h.realized_pnl);
-
-                        if (h.realized_pnl > 0) {
-                            totalWin += h.realized_pnl; winOps++; currentWinStreak++; currentLossStreak = 0;
-                            if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak;
-                        } else {
-                            totalLoss += Math.abs(h.realized_pnl); lossOps++; currentLossStreak++; currentWinStreak = 0;
-                            if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak;
-                        }
-
-                        if (h.direction === 'LONG') longTotal++; else shortTotal++;
-                        symbolPnlMap[h.symbol] = (symbolPnlMap[h.symbol] || 0) + h.realized_pnl;
-                    });
-
-                    const totalOps = filtered.length;
-                    const winRateVal = totalOps > 0 ? (winOps / totalOps) : 0;
-                    const lossRateVal = totalOps > 0 ? (lossOps / totalOps) : 0;
-                    const avgWinVal = winOps > 0 ? (totalWin / winOps) : 0;
-                    const avgLossVal = lossOps > 0 ? (totalLoss / lossOps) : 0;
-
-                    const expectancy = (winRateVal * avgWinVal) - (lossRateVal * avgLossVal);
-                    const pf = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : (totalWin > 0 ? "∞" : "0.00");
-
-                    let sharpe = "0.00", sortino = "0.00";
-                    if (pnlSeries.length > 1) {
-                        const meanPnl = pnlSeries.reduce((a,b)=>a+b,0) / pnlSeries.length;
-                        const variance = pnlSeries.reduce((a,b)=>a + Math.pow(b - meanPnl, 2), 0) / pnlSeries.length;
-                        const stdDev = Math.sqrt(variance) || 1;
-                        sharpe = (meanPnl / stdDev * Math.sqrt(365)).toFixed(2);
-                        const negativeReturns = pnlSeries.filter(p => p < 0);
-                        const downsideVar = negativeReturns.length > 0 ? negativeReturns.reduce((a,b)=>a + Math.pow(b, 2), 0) / negativeReturns.length : 1;
-                        sortino = (meanPnl / (Math.sqrt(downsideVar) || 1) * Math.sqrt(365)).toFixed(2);
-                    }
-
-                    document.getElementById('stat-pf').innerText = pf;
-                    const expEl = document.getElementById('stat-expectancy');
-                    expEl.innerText = `${expectancy >= 0 ? '+' : ''}$${expectancy.toFixed(2)}`;
-                    expEl.className = `text-xl font-bold font-mono ${expectancy >= 0 ? 'text-sky-400' : 'text-red-400'}`;
-
-                    document.getElementById('stat-sharpe').innerText = `${sharpe} / ${sortino}`;
-                    document.getElementById('stat-avg-win').innerText = `+$${avgWinVal.toFixed(2)}`;
-                    document.getElementById('stat-avg-loss').innerText = `-$${avgLossVal.toFixed(2)}`;
-                    document.getElementById('stat-max-win-streak').innerText = maxWinStreak;
-                    document.getElementById('stat-max-loss-streak').innerText = maxLossStreak;
-                    document.getElementById('stat-avg-duration').innerText = `${totalOps > 0 ? Math.round(totalDuration / totalOps) : 0} Dakika`;
-
-                    const lPct = (longTotal + shortTotal) > 0 ? Math.round((longTotal / (longTotal + shortTotal)) * 100) : 50;
-                    document.getElementById('stat-ls-ratio').innerText = `L: %${lPct} | S: %${100 - lPct}`;
-                    document.getElementById('stat-ls-bar').style.width = `${lPct}%`;
-
-                    const sortedSymbols = Object.keys(symbolPnlMap).sort((a,b) => symbolPnlMap[b] - symbolPnlMap[a]);
-                    const topTbody = document.getElementById('top-symbols-table');
-                    if (topTbody) {
-                        topTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] > 0).slice(0, 5).map(sym => `
-                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-emerald-400">+$${symbolPnlMap[sym].toFixed(2)}</td></tr>
-                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
-                    }
-
-                    const worstTbody = document.getElementById('worst-symbols-table');
-                    if (worstTbody) {
-                        worstTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] < 0).reverse().slice(0, 5).map(sym => `
-                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-rose-400">-$${Math.abs(symbolPnlMap[sym]).toFixed(2)}</td></tr>
-                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
-                    }
-                } catch(e) {}
-            }
-
-            async function loadReportsList() {
-                try {
-                    const res = await fetch('/api/reports/list');
-                    const files = await res.json();
-                    const tbody = document.getElementById('reports-table');
-                    if (tbody) {
-                        tbody.innerHTML = files.map(f => `<tr><td class="py-2 font-mono text-slate-300">📄 ${f}</td><td class="text-right"><a href="/api/reports/download/${f}" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-2 py-1 rounded text-[10px]">İndir</a></td></tr>`).join('') || '<tr><td colspan="2" class="py-2 text-slate-500 italic">Arşiv yok...</td></tr>';
-                    }
-                } catch(e) {}
-            }
-
             async function fetchCandlesDirect(symbol, interval = '5') {
-                const rawSym = parseBybitSymbol(symbol);
-                const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${rawSym}&interval=${interval}&limit=1000`;
+                let rawSym = symbol.split('/')[0] + 'USDT'; 
+                const thCoins = ['PEPE', 'SHIB', 'FLOKI', 'BONK', 'LUNC', 'XEC', 'SATS', 'RATS', 'BTT', 'TURBO', 'MEME', 'DOGS'];
+                const baseSym = symbol.split('/')[0].toUpperCase();
+                if (thCoins.includes(baseSym)) {
+                    rawSym = '1000' + baseSym + 'USDT';
+                }
+
+                const tfMap = { '1': '1m', '5': '5m', '15': '15m', '60': '1h', '240': '4h', 'D': '1d' };
+                const binanceInterval = tfMap[interval] || '5m';
+
+                const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${rawSym}&interval=${binanceInterval}&limit=1000`;
                 try {
                     const res = await fetch(url);
-                    const json = await res.json();
-                    if (json.result && json.result.list) {
-                        return json.result.list.map(c => ({
-                            time: Math.floor(parseInt(c[0]) / 1000), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4])
-                        })).sort((a, b) => a.time - b.time);
+                    const data = await res.json();
+                    if (Array.isArray(data)) {
+                        return data.map(c => ({
+                            time: Math.floor(c[0] / 1000), 
+                            open: parseFloat(c[1]), 
+                            high: parseFloat(c[2]), 
+                            low: parseFloat(c[3]), 
+                            close: parseFloat(c[4])
+                        }));
                     }
                 } catch(e) {}
                 return [];
@@ -2250,12 +2222,24 @@ async def get_dashboard(request: Request):
                         if (posData && candleSeries) {
                             const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
                             const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP' });
-                            const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
-                            const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
                             
-                            priceLines.push(entryLine, slLine, tp1Line, tp2Line);
+                            priceLines.push(entryLine, slLine);
+                            
                             const p = posData.entry < 1 ? 6 : 2;
-                            document.getElementById('chart-levels').innerHTML = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span> | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
+                            let htmlStr = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span>`;
+                            
+                            if (Math.abs(posData.tp1 - posData.tp2) / posData.entry < 0.001) {
+                                const tpLine = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP (TAM ÇIKIŞ)' });
+                                priceLines.push(tpLine);
+                                htmlStr += ` | <span class="text-emerald-500 font-mono font-bold">TP: ${posData.tp1.toFixed(p)}</span>`;
+                            } else {
+                                const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
+                                const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
+                                priceLines.push(tp1Line, tp2Line);
+                                htmlStr += ` | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
+                            }
+                            
+                            document.getElementById('chart-levels').innerHTML = htmlStr;
                         } else {
                             document.getElementById('chart-levels').innerHTML = '';
                         }
@@ -2280,6 +2264,16 @@ async def get_dashboard(request: Request):
                     ? `<div class="bg-emerald-950/60 border border-emerald-800 p-1.5 rounded text-[11px] text-emerald-400 font-bold mb-2">⚡ TP1 Alındı (%50 Kâr Realize Edildi - Stop Giriş Boyuna Çekildi)</div>` 
                     : ``;
 
+                let tpDisplayHtml = "";
+                if (Math.abs(pos.tp1 - pos.tp2) / pos.entry < 0.001) {
+                    tpDisplayHtml = `<div class="text-emerald-500 font-bold">TP (TAM ÇIKIŞ): <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>`;
+                } else {
+                    tpDisplayHtml = `
+                        <div class="text-emerald-800 font-bold">TP2: <span class="text-emerald-400">${pos.tp2.toFixed(p)}</span></div>
+                        <div class="text-emerald-600 font-bold">TP1: <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>
+                    `;
+                }
+
                 document.getElementById('active-rationale').innerHTML = `
                     <div class="flex justify-between items-center mb-2"><span class="font-bold text-base text-white">${pos.symbol}</span><span class="px-2 py-0.5 rounded text-xs font-bold ${pos.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${pos.direction}</span></div>
                     ${tp1StatusHtml}
@@ -2287,8 +2281,7 @@ async def get_dashboard(request: Request):
                     <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1 font-mono">
                         <div class="text-slate-400">Giriş Saati: <span class="text-white font-bold font-sans">${pos.open_time}</span></div>
                         <div class="text-slate-400">Mod: <span class="text-white font-bold font-sans">${pos.leverage}x ${modeLabel} ($${pos.margin})</span></div>
-                        <div class="text-emerald-800 font-bold">TP2: <span class="text-emerald-400">${pos.tp2.toFixed(p)}</span></div>
-                        <div class="text-emerald-600 font-bold">TP1: <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>
+                        ${tpDisplayHtml}
                         <div class="text-sky-400 font-bold">Giriş: <span>${pos.entry}</span></div>
                         <div class="text-red-400 font-bold">SL: <span>${pos.sl.toFixed(p)}</span></div>
                     </div>`;
@@ -2332,7 +2325,7 @@ async def get_dashboard(request: Request):
                 const sl = parseFloat(document.getElementById(`manual-sl-${symbol}`).value);
                 const tp2 = parseFloat(document.getElementById(`manual-tp-${symbol}`).value);
                 await fetch('/api/manual/update_sltp', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol, sl, tp2}) });
-                alert("SL ve TP Güncellendi!");
+                alert("SL and TP Updated!");
                 updateDashboard();
             }
 
@@ -2369,6 +2362,11 @@ async def get_dashboard(request: Request):
 
                     if (data.active_positions.length > lastKnownPosCount) playAlertSound();
                     lastKnownPosCount = data.active_positions.length;
+
+                    const logBoxElem = document.getElementById('log-box');
+                    if(logBoxElem) {
+                        logBoxElem.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
+                    }
 
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
@@ -2457,9 +2455,6 @@ async def get_dashboard(request: Request):
                         }
                     }
 
-                    if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) equitySeries.setData(data.equity_curve);
-                    document.getElementById('log-box').innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
-
                     lastPositions = data.active_positions;
                     const activeTbody = document.getElementById('active-pos-table');
                     if (activeTbody) {
@@ -2507,9 +2502,41 @@ async def get_dashboard(request: Request):
                             </tr>`).join('');
                     }
 
+                    try {
+                        if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) {
+                            let eqMap = new Map();
+                            data.equity_curve.forEach(d => {
+                                if(d && !isNaN(d.time)) {
+                                    eqMap.set(Number(d.time), Number(d.value));
+                                }
+                            });
+                            
+                            let sortedEq = Array.from(eqMap.entries())
+                                .map(([t, v]) => ({time: t, value: v}))
+                                .sort((a,b) => a.time - b.time);
+                                
+                            let finalEq = [];
+                            let lastTime = 0;
+                            for (let i = 0; i < sortedEq.length; i++) {
+                                if (sortedEq[i].time > lastTime) {
+                                    finalEq.push(sortedEq[i]);
+                                    lastTime = sortedEq[i].time;
+                                }
+                            }
+                            
+                            if (finalEq.length > 0) {
+                                equitySeries.setData(finalEq);
+                            }
+                        }
+                    } catch(err) {
+                        console.error("Equity Curve Çizim Hatası: ", err);
+                    }
+
                     if (currentSymbol) loadChartCandles(currentSymbol, selectedPos, true);
                     if (!selectedPos && data.active_positions.length > 0) selectPosition(data.active_positions[0]);
-                } catch (e) {}
+                } catch (e) {
+                    console.error("Dashboard Güncelleme Hatası: ", e);
+                }
             }
 
             initCharts();
