@@ -86,6 +86,41 @@ EXCLUDED_KEYWORDS = [
     'CASHCAT', 'WLFI', 'TRUMP', 'MELANIA', 'PEPE2', 'SHIB2'
 ]
 
+async def create_exchange_instance():
+    api_conf = system_state["api_settings"]
+    exch_id = api_conf["exchange"].lower()
+    
+    args = {
+        'enableRateLimit': True,
+        'options': {'defaultType': 'future' if exch_id == 'binance' else 'linear'},
+        'timeout': 10000
+    }
+    
+    if api_conf.get("api_key") and api_conf.get("api_secret"):
+        args['apiKey'] = api_conf["api_key"]
+        args['secret'] = api_conf["api_secret"]
+        
+    exchange_class = getattr(ccxt, exch_id)
+    exchange = exchange_class(args)
+    
+    if api_conf.get("mode") == "TESTNET":
+        exchange.set_sandbox_mode(True)
+        
+    return exchange
+
+async def execute_manual_real_order(symbol, direction, amount_raw):
+    if not system_state["api_settings"]["auto_trade"] or not system_state["api_settings"]["api_key"]:
+        return
+    try:
+        exchange = await create_exchange_instance()
+        close_side = 'sell' if direction == 'LONG' else 'buy'
+        safe_amount = float(exchange.amount_to_precision(symbol, amount_raw))
+        await exchange.create_order(symbol, 'market', close_side, safe_amount)
+        add_log(f"🕹️ MANUEL GERÇEK EMİR İLETİLDİ: {symbol} {close_side.upper()} {safe_amount}")
+        await exchange.close()
+    except Exception as e:
+        add_log(f"❌ MANUEL EMİR HATASI ({symbol}): {str(e)[:60]}")
+
 def translate_fng(classification_en):
     mapping = {
         "Extreme Fear": "Aşırı Korku",
@@ -101,6 +136,19 @@ def add_log(msg: str):
     system_state["logs"].insert(0, f"[{ts}] {msg}")
     if len(system_state["logs"]) > 60:
         system_state["logs"].pop()
+
+def sync_wallet_accounting():
+    locked = round(sum(float(p.get("margin", 0.0)) for p in system_state["active_positions"]), 2)
+    unrealized = round(sum(float(p.get("unrealized_pnl", 0.0)) for p in system_state["active_positions"]), 2)
+    system_state["locked_margin"] = locked
+    system_state["unrealized_pnl"] = unrealized
+    system_state["free_balance"] = round(max(0.0, system_state["total_balance"] - locked), 2)
+
+def apply_realized_pnl(amount: float):
+    amount = round(float(amount), 2)
+    system_state["realized_pnl"] = round(system_state.get("realized_pnl", 0.0) + amount, 2)
+    system_state["total_balance"] = round(system_state["total_balance"] + amount, 2)
+    sync_wallet_accounting()
 
 def check_daily_drawdown():
     now_str = get_now_datetime().strftime("%Y-%m-%d")
@@ -345,32 +393,31 @@ async def analyze_symbol(exchange, symbol):
                 sl = entry * 0.985
             risk_dist = entry - sl
 
-            # LİKİDİTE ÖNÜNDE ÇIKIŞ (Front-running): TP1 ve TP2 iğne ucuna değil, 1.0 * ATR kadar altına çekildi
-            dyn_tp1 = float(df_1h['high'].iloc[-30:-1].max()) - (1.0 * atr)
-            if (dyn_tp1 - entry) < (1.5 * risk_dist):
-                dyn_tp1 = entry + (1.5 * risk_dist)
+            # LİKİDİTE ÖNÜNDE ÇIKIŞ (Front-running): İğne ucunun 0.5 * ATR altına
+            raw_tp1 = float(df_1h['high'].iloc[-30:-1].max()) - (0.5 * atr)
+            raw_tp2 = float(df_4h['high'].iloc[-15:-1].max()) - (0.5 * atr) if len(df_4h) >= 15 else raw_tp1 * 1.02
 
-            dyn_tp2 = float(df_4h['high'].iloc[-15:-1].max()) - (1.0 * atr) if len(df_4h) >= 15 else dyn_tp1 * 1.02
-            if dyn_tp2 <= dyn_tp1 or (dyn_tp2 - entry) < (2.5 * risk_dist):
-                dyn_tp2 = entry + (3.0 * risk_dist)
+            # KESİN KURAL: Hedefler risk/ödül oranını (1.5R ve 2.5R) kurtarmıyorsa zorla itme, işlemi REDDET!
+            if (raw_tp1 - entry) < (1.5 * risk_dist) or (raw_tp2 - entry) < (2.5 * risk_dist):
+                return None
 
-            tp1, tp2 = dyn_tp1, dyn_tp2
+            tp1, tp2 = raw_tp1, raw_tp2
+
         else:
             sl = float(df_5m['high'].iloc[-12:].max() + (2.2 * atr))
             if (sl - entry) / entry < 0.015:
                 sl = entry * 1.015
             risk_dist = sl - entry
 
-            # LİKİDİTE ÖNÜNDE ÇIKIŞ (Front-running): TP1 ve TP2 iğne ucuna değil, 1.0 * ATR kadar üstüne çekildi
-            dyn_tp1 = float(df_1h['low'].iloc[-30:-1].min()) + (1.0 * atr)
-            if (entry - dyn_tp1) < (1.5 * risk_dist):
-                dyn_tp1 = entry - (1.5 * risk_dist)
+            # LİKİDİTE ÖNÜNDE ÇIKIŞ (Front-running): İğne ucunun 0.5 * ATR üstüne
+            raw_tp1 = float(df_1h['low'].iloc[-30:-1].min()) + (0.5 * atr)
+            raw_tp2 = float(df_4h['low'].iloc[-15:-1].min()) + (0.5 * atr) if len(df_4h) >= 15 else raw_tp1 * 0.98
 
-            dyn_tp2 = float(df_4h['low'].iloc[-15:-1].min()) + (1.0 * atr) if len(df_4h) >= 15 else dyn_tp1 * 0.98
-            if dyn_tp2 >= dyn_tp1 or (entry - dyn_tp2) < (2.5 * risk_dist):
-                dyn_tp2 = entry - (3.0 * risk_dist)
+            # KESİN KURAL: Hedefler risk/ödül oranını kurtarmıyorsa işlemi REDDET!
+            if (entry - raw_tp1) < (1.5 * risk_dist) or (entry - raw_tp2) < (2.5 * risk_dist):
+                return None
 
-            tp1, tp2 = dyn_tp1, dyn_tp2
+            tp1, tp2 = raw_tp1, raw_tp2
 
         pos_size, margin, max_loss = compute_position_metrics(entry, sl)
 
@@ -413,7 +460,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: Likidite Önü Çıkış (Front-Running TP) Modülü Devrede...")
+    add_log("Quant Motoru: 1H & 4H Multi-Trend Filtresi ve Pullback Çekilme Modülü Devrede...")
 
     while True:
         exchange = None
@@ -1642,7 +1689,7 @@ async def get_dashboard(request: Request):
                         const isSelected = selectedJournalItem && selectedJournalItem.symbol === h.symbol && selectedJournalItem.close_timestamp === h.close_timestamp;
                         let badgeClass = "bg-sky-500/20 text-sky-400 border-sky-500/40";
                         if (h.close_reason.includes("Stop-Loss")) badgeClass = "bg-rose-500/20 text-rose-400 border-rose-500/40";
-                        else if (h.close_reason.includes("TP2")) badgeClass = "bg-emerald-500/20 text-emerald-400 border-emerald-500/40";
+                        else if (h.close_reason.includes("TP2") || h.close_reason.includes("%100")) badgeClass = "bg-emerald-500/20 text-emerald-400 border-emerald-500/40";
 
                         return `
                             <tr class="hover:bg-slate-800/60 cursor-pointer ${isSelected ? 'bg-slate-800/80 border-l-2 border-emerald-500' : ''}" onclick="selectJournalItem(${idx})">
@@ -1776,15 +1823,30 @@ async def get_dashboard(request: Request):
             }
 
             async function fetchCandlesDirect(symbol, interval = '5') {
-                const rawSym = parseBybitSymbol(symbol);
-                const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${rawSym}&interval=${interval}&limit=1000`;
+                let rawSym = symbol.split('/')[0] + 'USDT'; 
+                
+                // 1000x Coinlerin Binance İsim Formatları
+                const thCoins = ['PEPE', 'SHIB', 'FLOKI', 'BONK', 'LUNC', 'XEC', 'SATS', 'RATS', 'BTT', 'TURBO', 'MEME', 'DOGS'];
+                const baseSym = symbol.split('/')[0].toUpperCase();
+                if (thCoins.includes(baseSym)) {
+                    rawSym = '1000' + baseSym + 'USDT';
+                }
+
+                const tfMap = { '1': '1m', '5': '5m', '15': '15m', '60': '1h', '240': '4h', 'D': '1d' };
+                const binanceInterval = tfMap[interval] || '5m';
+
+                const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${rawSym}&interval=${binanceInterval}&limit=1000`;
                 try {
                     const res = await fetch(url);
-                    const json = await res.json();
-                    if (json.result && json.result.list) {
-                        return json.result.list.map(c => ({
-                            time: Math.floor(parseInt(c[0]) / 1000), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4])
-                        })).sort((a, b) => a.time - b.time);
+                    const data = await res.json();
+                    if (Array.isArray(data)) {
+                        return data.map(c => ({
+                            time: Math.floor(c[0] / 1000), 
+                            open: parseFloat(c[1]), 
+                            high: parseFloat(c[2]), 
+                            low: parseFloat(c[3]), 
+                            close: parseFloat(c[4])
+                        }));
                     }
                 } catch(e) {}
                 return [];
@@ -1831,12 +1893,25 @@ async def get_dashboard(request: Request):
                         if (posData && candleSeries) {
                             const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
                             const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP' });
-                            const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
-                            const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
                             
-                            priceLines.push(entryLine, slLine, tp1Line, tp2Line);
+                            priceLines.push(entryLine, slLine);
+                            
                             const p = posData.entry < 1 ? 6 : 2;
-                            document.getElementById('chart-levels').innerHTML = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span> | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
+                            let htmlStr = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span>`;
+                            
+                            // EĞER TP'LER AYNIYSA TEK ÇİZGİ
+                            if (Math.abs(posData.tp1 - posData.tp2) / posData.entry < 0.001) {
+                                const tpLine = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP (TAM ÇIKIŞ)' });
+                                priceLines.push(tpLine);
+                                htmlStr += ` | <span class="text-emerald-500 font-mono font-bold">TP: ${posData.tp1.toFixed(p)}</span>`;
+                            } else {
+                                const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
+                                const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
+                                priceLines.push(tp1Line, tp2Line);
+                                htmlStr += ` | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
+                            }
+                            
+                            document.getElementById('chart-levels').innerHTML = htmlStr;
                         } else {
                             document.getElementById('chart-levels').innerHTML = '';
                         }
@@ -1861,6 +1936,17 @@ async def get_dashboard(request: Request):
                     ? `<div class="bg-emerald-950/60 border border-emerald-800 p-1.5 rounded text-[11px] text-emerald-400 font-bold mb-2">⚡ TP1 Alındı (%50 Kâr Realize Edildi - Stop Giriş Boyuna Çekildi)</div>` 
                     : ``;
 
+                // TP'LER AYNIYSA GÖSTERİMİ DEĞİŞTİR
+                let tpDisplayHtml = "";
+                if (Math.abs(pos.tp1 - pos.tp2) / pos.entry < 0.001) {
+                    tpDisplayHtml = `<div class="text-emerald-500 font-bold">TP (TAM ÇIKIŞ): <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>`;
+                } else {
+                    tpDisplayHtml = `
+                        <div class="text-emerald-800 font-bold">TP2: <span class="text-emerald-400">${pos.tp2.toFixed(p)}</span></div>
+                        <div class="text-emerald-600 font-bold">TP1: <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>
+                    `;
+                }
+
                 document.getElementById('active-rationale').innerHTML = `
                     <div class="flex justify-between items-center mb-2"><span class="font-bold text-base text-white">${pos.symbol}</span><span class="px-2 py-0.5 rounded text-xs font-bold ${pos.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${pos.direction}</span></div>
                     ${tp1StatusHtml}
@@ -1868,8 +1954,7 @@ async def get_dashboard(request: Request):
                     <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1 font-mono">
                         <div class="text-slate-400">Giriş Saati: <span class="text-white font-bold font-sans">${pos.open_time}</span></div>
                         <div class="text-slate-400">Mod: <span class="text-white font-bold font-sans">${pos.leverage}x ${modeLabel} ($${pos.margin})</span></div>
-                        <div class="text-emerald-800 font-bold">TP2: <span class="text-emerald-400">${pos.tp2.toFixed(p)}</span></div>
-                        <div class="text-emerald-600 font-bold">TP1: <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>
+                        ${tpDisplayHtml}
                         <div class="text-sky-400 font-bold">Giriş: <span>${pos.entry}</span></div>
                         <div class="text-red-400 font-bold">SL: <span>${pos.sl.toFixed(p)}</span></div>
                     </div>`;
@@ -1951,6 +2036,12 @@ async def get_dashboard(request: Request):
                     if (data.active_positions.length > lastKnownPosCount) playAlertSound();
                     lastKnownPosCount = data.active_positions.length;
 
+                    // LOGLARI GÜNCELLE (Hemen üstte yapıyoruz ki hiçbir hata bunu engellemesin)
+                    const logBoxElem = document.getElementById('log-box');
+                    if(logBoxElem) {
+                        logBoxElem.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
+                    }
+
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
@@ -2012,6 +2103,18 @@ async def get_dashboard(request: Request):
                         manPnlEl.className = `text-sm font-bold font-mono ${totalUnrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
                     }
 
+                    const totalBalanceElem = document.getElementById('stat-total-balance');
+                    if (totalBalanceElem) {
+                        totalBalanceElem.innerText = `$${data.total_balance.toFixed(2)}`;
+                        if (data.total_balance > data.initial_balance) {
+                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-emerald-400";
+                        } else if (data.total_balance < data.initial_balance) {
+                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-rose-400";
+                        } else {
+                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-white";
+                        }
+                    }
+
                     tradeHistoryCache = data.trade_history;
                     recalculatePnlMetrics();
                     recalculateAdvancedStats();
@@ -2025,9 +2128,6 @@ async def get_dashboard(request: Request):
                             renderRationale(selectedPos);
                         }
                     }
-
-                    if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) equitySeries.setData(data.equity_curve);
-                    document.getElementById('log-box').innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
 
                     lastPositions = data.active_positions;
                     const activeTbody = document.getElementById('active-pos-table');
@@ -2076,9 +2176,43 @@ async def get_dashboard(request: Request):
                             </tr>`).join('');
                     }
 
+                    // GRAFİKLERİ VE KASA EĞRİSİ ÇİZİMİNİ EN SONA VE TRY/CATCH İÇİNE ALIYORUZ
+                    try {
+                        if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) {
+                            let eqMap = new Map();
+                            data.equity_curve.forEach(d => {
+                                if(d && !isNaN(d.time)) {
+                                    eqMap.set(Number(d.time), Number(d.value));
+                                }
+                            });
+                            
+                            let sortedEq = Array.from(eqMap.entries())
+                                .map(([t, v]) => ({time: t, value: v}))
+                                .sort((a,b) => a.time - b.time);
+                                
+                            // Olası çökme için son güvenlik (zamanların kesin artan sırada olduğundan emin ol)
+                            let finalEq = [];
+                            let lastTime = 0;
+                            for (let i = 0; i < sortedEq.length; i++) {
+                                if (sortedEq[i].time > lastTime) {
+                                    finalEq.push(sortedEq[i]);
+                                    lastTime = sortedEq[i].time;
+                                }
+                            }
+                            
+                            if (finalEq.length > 0) {
+                                equitySeries.setData(finalEq);
+                            }
+                        }
+                    } catch(err) {
+                        console.error("Equity Curve Çizim Hatası: ", err);
+                    }
+
                     if (currentSymbol) loadChartCandles(currentSymbol, selectedPos, true);
                     if (!selectedPos && data.active_positions.length > 0) selectPosition(data.active_positions[0]);
-                } catch (e) {}
+                } catch (e) {
+                    console.error("Dashboard Güncelleme Hatası: ", e);
+                }
             }
 
             initCharts();
