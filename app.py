@@ -648,6 +648,9 @@ class SettingsPayload(BaseModel):
     max_open_positions: int
     max_total_margin_pct: float
 
+class RiskModePayload(BaseModel):
+    enabled: bool
+
 class ApiPayload(BaseModel):
     exchange: str
     mode: str
@@ -685,6 +688,13 @@ async def update_settings(payload: SettingsPayload):
     mode_str = "İzole" if payload.margin_mode == "ISOLATED" else "Cross"
     add_log(f"⚙️ AYARLAR GÜNCELLENDİ: Kasa: ${payload.total_balance} | Mod: {mode_str} | Risk: %{payload.risk_pct} | Kaldıraç: {payload.leverage}x | Risk Motoru: {'OTO' if payload.auto_risk_enabled else 'MANUEL'} | Max Poz: {pos_limit_str} | Max Marjin: %{payload.max_total_margin_pct}")
     return {"status": "success"}
+
+@app.post("/api/set_risk_mode")
+async def set_risk_mode(payload: RiskModePayload):
+    system_state["auto_risk_enabled"] = bool(payload.enabled)
+    mode = "OTO" if payload.enabled else "MANUEL"
+    add_log(f"🎛️ RİSK MODU DEĞİŞTİ: {mode}")
+    return {"status": "success", "auto_risk_enabled": system_state["auto_risk_enabled"]}
 
 @app.post("/api/update_api")
 async def update_api(payload: ApiPayload):
@@ -918,6 +928,7 @@ async def get_dashboard(request: Request):
                 <button onclick="switchTab('sentiment')" id="tab-sentiment" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🧠 Duyarlılık & Endeksler</button>
                 <button onclick="switchTab('news')" id="tab-news" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📰 Haber & Takvim</button>
                 <button onclick="switchTab('manual')" id="tab-manual" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🎮 Manuel Kontrol</button>
+                <button onclick="switchTab('auto-risk')" id="tab-auto-risk" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🤖 Oto Risk</button>
                 <button onclick="switchTab('excel')" id="tab-excel" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📑 Excel Arşivi</button>
                 <button onclick="switchTab('stats')" id="tab-stats" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📈 İstatistik</button>
                 <button onclick="switchTab('radar')" id="tab-radar" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🔥 Radar</button>
@@ -987,14 +998,24 @@ async def get_dashboard(request: Request):
                             <option value="CROSS">Cross</option>
                         </select>
                     </div>
+                    <div id="manual-risk-settings" class="flex items-center gap-2 bg-sky-950/30 border border-sky-800/60 rounded px-2 py-1">
+                        <div>
+                            <label class="text-sky-400 block text-[9px] font-bold">MANUEL RİSK</label>
+                            <select id="input-risk" class="bg-slate-800 text-white font-bold px-1 py-0.5 rounded border border-slate-700">
+                                <option value="0.25">%0.25</option><option value="0.5">%0.50</option><option value="0.75">%0.75</option><option value="1.0" selected>%1.00</option><option value="1.25">%1.25</option><option value="1.5">%1.50</option><option value="2">%2.00</option><option value="3">%3.00</option><option value="5">%5.00</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-sky-400 block text-[9px] font-bold">MANUEL KALDIRAÇ</label>
+                            <select id="input-leverage" class="bg-slate-800 text-white font-bold px-1 py-0.5 rounded border border-slate-700">
+                                <option value="1">1x</option><option value="3">3x</option><option value="5">5x</option><option value="7">7x</option><option value="10" selected>10x</option><option value="15">15x</option><option value="20">20x</option><option value="25">25x</option><option value="50">50x</option>
+                            </select>
+                        </div>
+                    </div>
                     <div class="bg-emerald-950/40 border border-emerald-800/60 rounded px-2 py-1 min-w-[170px]">
-                        <label class="text-emerald-400 block text-[9px] font-bold">🤖 RİSK / KALDIRAÇ</label>
+                        <label class="text-emerald-400 block text-[9px] font-bold">🤖 OTO RİSK / KALDIRAÇ</label>
                         <div id="auto-risk-label" class="text-emerald-300 font-bold font-mono">OTO: YÜKLENİYOR...</div>
                         <div id="auto-risk-reason" class="text-[8px] text-slate-400 mt-0.5">Piyasa koşulları analiz ediliyor</div>
-                    </div>
-                    <div class="hidden">
-                        <select id="input-risk"><option value="1.0" selected>%1.0</option></select>
-                        <select id="input-leverage"><option value="10" selected>10x</option></select>
                     </div>
                     <div>
                         <label class="text-slate-400 block text-[9px]">MAX POZİSYON</label>
@@ -1364,6 +1385,50 @@ async def get_dashboard(request: Request):
                         </thead>
                         <tbody id="manual-pos-table" class="divide-y divide-slate-800/60"></tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- SAYFA: OTO RİSK -->
+        <div id="page-auto-risk" class="hidden space-y-3">
+            <div class="card p-4 rounded-xl border-emerald-500/30">
+                <div class="flex flex-wrap items-center justify-between gap-4">
+                    <div>
+                        <h2 class="text-sm font-extrabold text-emerald-400">🤖 OTOMATİK RİSK & KALDIRAÇ MOTORU</h2>
+                        <p class="text-xs text-slate-400 mt-1">Buradan otomatik risk motorunu istediğin zaman açıp kapatabilirsin. Kapalıyken Manuel ayarlar kullanılır.</p>
+                    </div>
+                    <div class="flex items-center gap-2 bg-slate-900 p-1 rounded-xl border border-slate-800">
+                        <button onclick="setRiskMode(false)" id="risk-mode-manual" class="px-4 py-2 rounded-lg text-xs font-bold transition">MANUEL</button>
+                        <button onclick="setRiskMode(true)" id="risk-mode-auto" class="px-4 py-2 rounded-lg text-xs font-bold transition">🤖 OTO</button>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mt-4">
+                    <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+                        <div class="text-[9px] text-slate-500 uppercase">Durum</div>
+                        <div id="risk-mode-status" class="text-lg font-extrabold font-mono text-emerald-400">OTO</div>
+                    </div>
+                    <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+                        <div class="text-[9px] text-slate-500 uppercase">Oto Risk</div>
+                        <div id="auto-risk-page-value" class="text-lg font-extrabold font-mono text-emerald-400">%0.00</div>
+                    </div>
+                    <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+                        <div class="text-[9px] text-slate-500 uppercase">Oto Kaldıraç</div>
+                        <div id="auto-leverage-page-value" class="text-lg font-extrabold font-mono text-sky-400">0x</div>
+                    </div>
+                    <div class="bg-slate-900/80 border border-slate-800 rounded-xl p-3">
+                        <div class="text-[9px] text-slate-500 uppercase">Güncel Kasa</div>
+                        <div id="auto-balance-page-value" class="text-lg font-extrabold font-mono text-white">$0.00</div>
+                    </div>
+                </div>
+
+                <div class="mt-3 bg-black/30 border border-slate-800 rounded-xl p-3">
+                    <div class="text-[9px] text-slate-500 uppercase mb-1">Motor Açıklaması</div>
+                    <div id="auto-risk-page-reason" class="text-xs text-slate-300 font-mono">Piyasa koşulları analiz ediliyor...</div>
+                </div>
+
+                <div class="mt-4 bg-amber-950/20 border border-amber-800/40 rounded-xl p-3 text-xs text-amber-300">
+                    <b>MANUEL MOD:</b> Oto kapalıyken Terminal'deki manuel Risk % ve Kaldıraç değerleri aynen kullanılır. Oto açıldığında yeni işlemlerde motorun hesapladığı değerler kullanılır. Mevcut açık pozisyonların riski geriye dönük değiştirilmez.
                 </div>
             </div>
         </div>
@@ -2200,6 +2265,33 @@ async def get_dashboard(request: Request):
                 updateDashboard();
             }
 
+            async function setRiskMode(enabled) {
+                try {
+                    const res = await fetch('/api/set_risk_mode', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({enabled})
+                    });
+                    if (res.ok) {
+                        window.autoRiskEnabled = enabled;
+                        updateRiskModeUI(enabled);
+                        updateDashboard();
+                    }
+                } catch (e) {}
+            }
+
+            function updateRiskModeUI(enabled) {
+                const autoBtn = document.getElementById('risk-mode-auto');
+                const manualBtn = document.getElementById('risk-mode-manual');
+                const status = document.getElementById('risk-mode-status');
+                const manualSettings = document.getElementById('manual-risk-settings');
+                if (autoBtn) autoBtn.className = `px-4 py-2 rounded-lg text-xs font-bold transition ${enabled ? 'bg-emerald-500 text-black' : 'text-slate-400 hover:text-white'}`;
+                if (manualBtn) manualBtn.className = `px-4 py-2 rounded-lg text-xs font-bold transition ${!enabled ? 'bg-sky-500 text-black' : 'text-slate-400 hover:text-white'}`;
+                if (status) { status.innerText = enabled ? 'OTO AÇIK' : 'MANUEL'; status.className = `text-lg font-extrabold font-mono ${enabled ? 'text-emerald-400' : 'text-sky-400'}`; }
+                if (manualSettings) manualSettings.classList.toggle('opacity-50', enabled);
+                if (manualSettings) manualSettings.classList.toggle('pointer-events-none', enabled);
+            }
+
             async function saveSettings() {
                 const total_balance = parseFloat(document.getElementById('input-balance').value);
                 const risk_pct = parseFloat(document.getElementById('input-risk').value);
@@ -2207,7 +2299,7 @@ async def get_dashboard(request: Request):
                 const margin_mode = document.getElementById('input-margin-mode').value;
                 const max_open_positions = parseInt(document.getElementById('input-max-pos').value);
                 const max_total_margin_pct = parseFloat(document.getElementById('input-max-margin-pct').value);
-                const auto_risk_enabled = true;
+                const auto_risk_enabled = window.autoRiskEnabled !== false;
 
                 const res = await fetch('/api/update_settings', {
                     method: 'POST',
@@ -2243,8 +2335,18 @@ async def get_dashboard(request: Request):
                     if (eqEl) eqEl.innerText = `Equity: $${Number(data.current_equity || data.total_balance || 0).toFixed(2)}`;
                     const autoRiskEl = document.getElementById('auto-risk-label');
                     const autoReasonEl = document.getElementById('auto-risk-reason');
-                    if (autoRiskEl) autoRiskEl.innerText = `OTO: %${Number(data.auto_risk_pct || 0).toFixed(2)} RİSK | ${data.auto_leverage || 0}x`;
+                    window.autoRiskEnabled = data.auto_risk_enabled !== false;
+                    if (autoRiskEl) autoRiskEl.innerText = `${window.autoRiskEnabled ? 'OTO' : 'MANUEL'}: %${Number(data.auto_risk_pct || 0).toFixed(2)} RİSK | ${data.auto_leverage || 0}x`;
                     if (autoReasonEl) autoReasonEl.innerText = data.auto_risk_reason || 'Piyasa koşulları analiz ediliyor';
+                    updateRiskModeUI(window.autoRiskEnabled);
+                    const autoPageRisk = document.getElementById('auto-risk-page-value');
+                    const autoPageLev = document.getElementById('auto-leverage-page-value');
+                    const autoPageBal = document.getElementById('auto-balance-page-value');
+                    const autoPageReason = document.getElementById('auto-risk-page-reason');
+                    if (autoPageRisk) autoPageRisk.innerText = `%${Number(data.auto_risk_pct || 0).toFixed(2)}`;
+                    if (autoPageLev) autoPageLev.innerText = `${data.auto_leverage || 0}x`;
+                    if (autoPageBal) autoPageBal.innerText = `$${Number(data.total_balance || 0).toFixed(2)}`;
+                    if (autoPageReason) autoPageReason.innerText = data.auto_risk_reason || 'Piyasa koşulları analiz ediliyor';
 
                     if (data.sentiment_data) {
                         document.getElementById('sent-btc-15m').innerText = `${data.btc_15m_change >= 0 ? '+' : ''}%${data.btc_15m_change}`;
@@ -2373,6 +2475,8 @@ async def get_dashboard(request: Request):
                 } catch (e) {}
             }
 
+            window.autoRiskEnabled = true;
+            updateRiskModeUI(true);
             initCharts();
             loadChartCandles(currentSymbol, null, false);
             setInterval(updateDashboard, 2000);
