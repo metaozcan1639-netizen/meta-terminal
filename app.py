@@ -434,12 +434,14 @@ async def analyze_symbol(exchange, symbol):
                 sl = entry * 0.988
             risk_dist = entry - sl
 
-            dyn_tp1 = float(df_15m['high'].iloc[-25:-1].max())
+            dyn_tp1 = float(df_15m['high'].iloc[-25:-1].max()) - (0.5 * atr)
             if (dyn_tp1 - entry) < (1.0 * risk_dist):
                 dyn_tp1 = entry + (1.0 * risk_dist)
 
-            dyn_tp2 = float(df_1h['high'].iloc[-25:-1].max())
-            if dyn_tp2 <= dyn_tp1 or (dyn_tp2 - entry) < (2.0 * risk_dist):
+            dyn_tp2 = float(df_1h['high'].iloc[-25:-1].max()) - (0.5 * atr)
+            if abs(dyn_tp2 - dyn_tp1) / entry < 0.001:
+                dyn_tp2 = dyn_tp1
+            elif (dyn_tp2 - entry) < (2.0 * risk_dist):
                 dyn_tp2 = entry + (2.0 * risk_dist)
 
             tp1, tp2 = dyn_tp1, dyn_tp2
@@ -450,12 +452,14 @@ async def analyze_symbol(exchange, symbol):
                 sl = entry * 1.012
             risk_dist = sl - entry
 
-            dyn_tp1 = float(df_15m['low'].iloc[-25:-1].min())
+            dyn_tp1 = float(df_15m['low'].iloc[-25:-1].min()) + (0.5 * atr)
             if (entry - dyn_tp1) < (1.0 * risk_dist):
                 dyn_tp1 = entry - (1.0 * risk_dist)
 
-            dyn_tp2 = float(df_1h['low'].iloc[-25:-1].min())
-            if dyn_tp2 >= dyn_tp1 or (entry - dyn_tp2) < (2.0 * risk_dist):
+            dyn_tp2 = float(df_1h['low'].iloc[-25:-1].min()) + (0.5 * atr)
+            if abs(dyn_tp1 - dyn_tp2) / entry < 0.001:
+                dyn_tp2 = dyn_tp1
+            elif (entry - dyn_tp2) < (2.0 * risk_dist):
                 dyn_tp2 = entry - (2.0 * risk_dist)
 
             tp1, tp2 = dyn_tp1, dyn_tp2
