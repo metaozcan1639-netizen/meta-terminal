@@ -92,7 +92,6 @@ EXCLUDED_KEYWORDS = [
 ]
 
 async def create_exchange_instance():
-    """Arayüzdeki ayarlara göre Dinamik Borsa Bağlantısı Kurar."""
     api_conf = system_state["api_settings"]
     exch_id = api_conf["exchange"].lower()
     
@@ -115,7 +114,6 @@ async def create_exchange_instance():
     return exchange
 
 async def execute_manual_real_order(symbol, direction, amount_raw):
-    """Manuel müdahalelerde gerçek borsaya çıkış emri gönderir."""
     if not system_state["api_settings"]["auto_trade"] or not system_state["api_settings"]["api_key"]:
         return
     try:
@@ -200,7 +198,6 @@ def calculate_indicators(df):
     df['vol_ma'] = df['volume'].rolling(window=20).mean()
     return df
 
-# YAPAY ZEKA DİNAMİK RİSK YÖNETİMİ GÜNCELLEMESİ
 def compute_position_metrics(entry, sl, lev, risk_pct):
     balance = system_state["total_balance"]
     actual_risk_pct = risk_pct / 100.0
@@ -351,14 +348,10 @@ async def analyze_symbol(exchange, symbol):
             if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
                 score += 25
                 reasons.append("📈 1H Güçlü Ana Trend (Boğa) Onayı")
-            else:
-                return None
         elif direction == "SHORT":
             if c_1h['close'] < c_1h['ema50'] and c_1h['close'] < c_1h['ema20']:
                 score += 25
                 reasons.append("📉 1H Güçlü Ana Trend (Ayı) Onayı")
-            else:
-                return None
 
         if len(oi_data) >= 3 and direction:
             oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
@@ -376,6 +369,7 @@ async def analyze_symbol(exchange, symbol):
             score += 10
             reasons.append(f"🎯 Dengeli Momentum RSI ({c_5m['rsi']:.1f})")
 
+        # --- RADAR EKLEMESİ (GÜNCELLENDİ) ---
         radar_item = {
             "symbol": symbol,
             "price": float(c_5m['close']),
@@ -384,42 +378,39 @@ async def analyze_symbol(exchange, symbol):
             "trend": direction if direction else ("LONG" if c_5m['close'] > c_1h['ema50'] else "SHORT"),
             "score": score
         }
+        
         system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
         system_state["radar_symbols"].append(radar_item)
         if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
+        # İşlem onaylanmazsa buradan çık
         if not direction or score < 75:
             return None
 
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
-        # --- YAPAY ZEKA DİNAMİK RİSK & KALDIRAÇ YÖNETİMİ ---
         effective_leverage = system_state["leverage"]
         effective_risk = system_state["risk_pct"]
-
         vol_pct = (atr / entry) * 100
 
-        # Eğer Otomatik Kaldıraç seçildiyse (0)
         if effective_leverage == 0:
             if vol_pct > 0.8:
-                effective_leverage = 10 # Yüksek volatilite -> Düşük Kaldıraç
+                effective_leverage = 10
             elif vol_pct > 0.4:
-                effective_leverage = 20 # Orta volatilite
+                effective_leverage = 20
             else:
-                effective_leverage = 50 # Düşük volatilite -> Yüksek Kaldıraç
+                effective_leverage = 50
 
-        # Eğer Otomatik Risk seçildiyse (0.0)
         if effective_risk == 0.0:
             if score >= 90:
-                effective_risk = 5.0  # Çok güçlü sinyal
+                effective_risk = 5.0
             elif score >= 80:
-                effective_risk = 3.0  # Güçlü sinyal
+                effective_risk = 3.0
             else:
-                effective_risk = 1.0  # Zayıf sinyal
+                effective_risk = 1.0
 
-        # Binance Kaldıraç Sınırı Koruması
         try:
             market_info = exchange.markets.get(symbol, {})
             max_lev_allowed = market_info.get('limits', {}).get('leverage', {}).get('max', 50)
@@ -544,12 +535,11 @@ async def market_scanner_loop():
                         if not exists:
                             max_pos = system_state["max_open_positions"]
                             
-                            # --- YAPAY ZEKA DİNAMİK MAX POZİSYON ---
                             if max_pos == -1:
                                 if system_state["btc_shock_lock"] or "AYI" in system_state["btc_regime"]:
-                                    max_pos = 5 # Defansif Mod
+                                    max_pos = 5
                                 else:
-                                    max_pos = 15 # Agresif Mod
+                                    max_pos = 15
 
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
