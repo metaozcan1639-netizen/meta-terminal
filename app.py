@@ -369,7 +369,6 @@ async def analyze_symbol(exchange, symbol):
             score += 10
             reasons.append(f"🎯 Dengeli Momentum RSI ({float(c_5m['rsi']):.1f})")
 
-        # RADAR İÇİN GÜVENLİ TİP DÖNÜŞÜMLERİ
         safe_trend = str(direction) if direction else ("LONG" if float(c_5m['close']) > float(c_1h['ema50']) else "SHORT")
         
         radar_item = {
@@ -381,6 +380,7 @@ async def analyze_symbol(exchange, symbol):
             "score": int(score)
         }
         
+        # Kesin eşleşme ve güvenli güncelleme
         system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
         system_state["radar_symbols"].append(radar_item)
         if len(system_state["radar_symbols"]) > 60:
@@ -394,7 +394,6 @@ async def analyze_symbol(exchange, symbol):
 
         effective_leverage = system_state["leverage"]
         effective_risk = system_state["risk_pct"]
-
         vol_pct = (atr / entry) * 100
 
         if effective_leverage == 0:
@@ -760,7 +759,7 @@ async def update_api(payload: ApiPayload):
 async def toggle_bot_trading():
     system_state["bot_trading_active"] = not system_state.get("bot_trading_active", True)
     status_str = "AÇIK (Yeni Sinyal Alınıyor)" if system_state["bot_trading_active"] else "KAPALI (Yeni Sinyal Durduruldu)"
-    add_log(f"🤖 Bot İŞLEM ALIMI: {status_str}")
+    add_log(f"🤖 BOT İŞLEM ALIMI: {status_str}")
     return {"status": "success", "active": system_state["bot_trading_active"]}
 
 @app.post("/api/manual/close_position")
