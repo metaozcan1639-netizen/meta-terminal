@@ -92,6 +92,7 @@ EXCLUDED_KEYWORDS = [
 ]
 
 async def create_exchange_instance():
+    """Arayüzdeki ayarlara göre Dinamik Borsa Bağlantısı Kurar."""
     api_conf = system_state["api_settings"]
     exch_id = api_conf["exchange"].lower()
     
@@ -114,6 +115,7 @@ async def create_exchange_instance():
     return exchange
 
 async def execute_manual_real_order(symbol, direction, amount_raw):
+    """Manuel müdahalelerde gerçek borsaya çıkış emri gönderir."""
     if not system_state["api_settings"]["auto_trade"] or not system_state["api_settings"]["api_key"]:
         return
     try:
@@ -198,6 +200,7 @@ def calculate_indicators(df):
     df['vol_ma'] = df['volume'].rolling(window=20).mean()
     return df
 
+# YAPAY ZEKA DİNAMİK RİSK YÖNETİMİ GÜNCELLEMESİ
 def compute_position_metrics(entry, sl, lev, risk_pct):
     balance = system_state["total_balance"]
     actual_risk_pct = risk_pct / 100.0
@@ -292,12 +295,8 @@ async def update_btc_metrics(exchange):
 
 async def analyze_symbol(exchange, symbol):
     try:
-        # Radar her zaman çalışır. Bot kapalı veya günlük zarar kilidi aktif olsa bile
-        # pariteler analiz edilip Radar ekranında gösterilmeye devam eder.
-        trading_allowed = (
-            not system_state["daily_loss_locked"]
-            and system_state.get("bot_trading_active", True)
-        )
+        if system_state["daily_loss_locked"] or not system_state.get("bot_trading_active", True):
+            return None
 
         base = symbol.split('/')[0].upper()
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
@@ -352,10 +351,14 @@ async def analyze_symbol(exchange, symbol):
             if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
                 score += 25
                 reasons.append("📈 1H Güçlü Ana Trend (Boğa) Onayı")
+            else:
+                return None
         elif direction == "SHORT":
             if c_1h['close'] < c_1h['ema50'] and c_1h['close'] < c_1h['ema20']:
                 score += 25
                 reasons.append("📉 1H Güçlü Ana Trend (Ayı) Onayı")
+            else:
+                return None
 
         if len(oi_data) >= 3 and direction:
             oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
@@ -373,7 +376,6 @@ async def analyze_symbol(exchange, symbol):
             score += 10
             reasons.append(f"🎯 Dengeli Momentum RSI ({c_5m['rsi']:.1f})")
 
-        # --- RADAR EKLEMESİ (GÜNCELLENDİ) ---
         radar_item = {
             "symbol": symbol,
             "price": float(c_5m['close']),
@@ -382,47 +384,42 @@ async def analyze_symbol(exchange, symbol):
             "trend": direction if direction else ("LONG" if c_5m['close'] > c_1h['ema50'] else "SHORT"),
             "score": score
         }
-        
-        # Radar'da taranan tüm uygun pariteleri tut.
-        # Eski 60 parite sınırı kaldırıldı; 700+ taranan paritenin tamamı
-        # mümkün olduğunca arayüzde gösterilebilir.
-        system_state["radar_symbols"] = [
-            r for r in system_state["radar_symbols"] if r["symbol"] != symbol
-        ]
+        system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
         system_state["radar_symbols"].append(radar_item)
+        if len(system_state["radar_symbols"]) > 60:
+            system_state["radar_symbols"].pop(0)
 
-        # İşlem tarafı Radar'dan bağımsızdır.
-        # Bot kapalıysa / günlük zarar kilitliyse sadece sinyal üretme.
-        if not trading_allowed:
-            return None
-
-        # İşlem onaylanmazsa buradan çık
         if not direction or score < 75:
             return None
 
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
+        # --- YAPAY ZEKA DİNAMİK RİSK & KALDIRAÇ YÖNETİMİ ---
         effective_leverage = system_state["leverage"]
         effective_risk = system_state["risk_pct"]
+
         vol_pct = (atr / entry) * 100
 
+        # Eğer Otomatik Kaldıraç seçildiyse (0)
         if effective_leverage == 0:
             if vol_pct > 0.8:
-                effective_leverage = 10
+                effective_leverage = 10 # Yüksek volatilite -> Düşük Kaldıraç
             elif vol_pct > 0.4:
-                effective_leverage = 20
+                effective_leverage = 20 # Orta volatilite
             else:
-                effective_leverage = 50
+                effective_leverage = 50 # Düşük volatilite -> Yüksek Kaldıraç
 
+        # Eğer Otomatik Risk seçildiyse (0.0)
         if effective_risk == 0.0:
             if score >= 90:
-                effective_risk = 5.0
+                effective_risk = 5.0  # Çok güçlü sinyal
             elif score >= 80:
-                effective_risk = 3.0
+                effective_risk = 3.0  # Güçlü sinyal
             else:
-                effective_risk = 1.0
+                effective_risk = 1.0  # Zayıf sinyal
 
+        # Binance Kaldıraç Sınırı Koruması
         try:
             market_info = exchange.markets.get(symbol, {})
             max_lev_allowed = market_info.get('limits', {}).get('leverage', {}).get('max', 50)
@@ -535,13 +532,6 @@ async def market_scanner_loop():
 
             system_state["scanned_count"] = len(crypto_symbols)
 
-            # Her tam taramada Radar, o an gerçekten taranan paritelerle senkronize olur.
-            # Böylece delist/volume filtresinden çıkan eski pariteler ekranda kalmaz.
-            scanned_set = set(crypto_symbols)
-            system_state["radar_symbols"] = [
-                r for r in system_state["radar_symbols"] if r.get("symbol") in scanned_set
-            ]
-
             batch_size = 10
             for i in range(0, len(crypto_symbols), batch_size):
                 chunk = crypto_symbols[i:i + batch_size]
@@ -554,11 +544,12 @@ async def market_scanner_loop():
                         if not exists:
                             max_pos = system_state["max_open_positions"]
                             
+                            # --- YAPAY ZEKA DİNAMİK MAX POZİSYON ---
                             if max_pos == -1:
                                 if system_state["btc_shock_lock"] or "AYI" in system_state["btc_regime"]:
-                                    max_pos = 5
+                                    max_pos = 5 # Defansif Mod
                                 else:
-                                    max_pos = 15
+                                    max_pos = 15 # Agresif Mod
 
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
@@ -1568,10 +1559,7 @@ async def get_dashboard(request: Request):
         <!-- SAYFA 7: RADAR -->
         <div id="page-radar" class="hidden space-y-3">
             <div class="card p-4 rounded-xl">
-                <div class="flex items-center justify-between gap-2 mb-3">
-            <h2 class="text-xs font-semibold text-emerald-400 uppercase">🔥 Canlı Taranan Parite Radarı</h2>
-            <span id="radar-count" class="text-[10px] font-mono text-slate-400">0 parite</span>
-        </div>
+                <h2 class="text-xs font-semibold text-emerald-400 uppercase mb-3">🔥 700+ Canlı Taranan Parite Radarı</h2>
                 <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
                     <table class="w-full text-left text-xs">
                         <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
@@ -2309,34 +2297,14 @@ async def get_dashboard(request: Request):
                     }
 
                     const radarTbody = document.getElementById('radar-table');
-                    const radarCount = document.getElementById('radar-count');
-                    if (radarTbody) {
-                        const radarItems = Array.isArray(data.radar_symbols) ? data.radar_symbols : [];
-
-                        if (radarCount) {
-                            radarCount.innerText = `${radarItems.length} parite`;
-                        }
-
-                        if (radarItems.length === 0) {
-                            radarTbody.innerHTML = '<tr><td colspan="6" class="py-6 text-center text-slate-500 italic">Pariteler analiz ediliyor... İlk tarama tamamlandığında burada görünecek.</td></tr>';
-                        } else {
-                            radarTbody.innerHTML = [...radarItems]
-                                .sort((a,b) => Number(b.score || 0) - Number(a.score || 0))
-                                .map(r => {
-                                    const trend = r.trend || '-';
-                                    const trendClass = trend === 'LONG' ? 'text-emerald-400' : (trend === 'SHORT' ? 'text-red-400' : 'text-slate-400');
-                                    const score = Number(r.score || 0);
-                                    return `
-                                    <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="currentSymbol='${r.symbol}'; switchTab('terminal'); loadChartCandles('${r.symbol}', null, false);">
-                                        <td class="py-2 font-bold text-white">${r.symbol}</td>
-                                        <td class="font-mono">$${Number(r.price || 0).toLocaleString(undefined, {maximumFractionDigits: 8})}</td>
-                                        <td class="font-bold ${trendClass}">${trend}</td>
-                                        <td class="font-mono">${Number(r.rsi || 0).toFixed(1)}</td>
-                                        <td class="font-mono text-amber-400">${Number(r.vol_ratio || 0).toFixed(2)}x</td>
-                                        <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${score >= 75 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${score} Puan</span></td>
-                                    </tr>`;
-                                }).join('');
-                        }
+                    if (radarTbody && data.radar_symbols) {
+                        radarTbody.innerHTML = [...data.radar_symbols].sort((a,b) => b.score - a.score).map(r => `
+                            <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="currentSymbol='${r.symbol}'; switchTab('terminal'); loadChartCandles('${r.symbol}', null, false);">
+                                <td class="py-2 font-bold text-white">${r.symbol}</td><td class="font-mono">$${r.price}</td>
+                                <td class="font-bold ${r.trend === 'LONG' ? 'text-emerald-400' : 'text-red-400'}">${r.trend}</td>
+                                <td class="font-mono">${r.rsi}</td><td class="font-mono text-amber-400">${r.vol_ratio}x</td>
+                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${r.score >= 75 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${r.score} Puan</span></td>
+                            </tr>`).join('');
                     }
 
                     // GRAFİKLERİ VE KASA EĞRİSİ ÇİZİMİNİ EN SONA VE TRY/CATCH İÇİNE ALIYORUZ
