@@ -411,12 +411,12 @@ async def analyze_symbol(exchange, symbol):
             risk_dist = entry - sl
 
             dyn_tp1 = float(df_15m['high'].iloc[-25:-1].max())
-            if (dyn_tp1 - entry) < (1.5 * risk_dist):
-                dyn_tp1 = entry + (1.5 * risk_dist)
+            if (dyn_tp1 - entry) < (1.0 * risk_dist):
+                dyn_tp1 = entry + (1.0 * risk_dist)
 
             dyn_tp2 = float(df_1h['high'].iloc[-25:-1].max())
-            if dyn_tp2 <= dyn_tp1 or (dyn_tp2 - entry) < (2.5 * risk_dist):
-                dyn_tp2 = entry + (3.0 * risk_dist)
+            if dyn_tp2 <= dyn_tp1 or (dyn_tp2 - entry) < (2.0 * risk_dist):
+                dyn_tp2 = entry + (2.0 * risk_dist)
 
             tp1, tp2 = dyn_tp1, dyn_tp2
 
@@ -427,12 +427,12 @@ async def analyze_symbol(exchange, symbol):
             risk_dist = sl - entry
 
             dyn_tp1 = float(df_15m['low'].iloc[-25:-1].min())
-            if (entry - dyn_tp1) < (1.5 * risk_dist):
-                dyn_tp1 = entry - (1.5 * risk_dist)
+            if (entry - dyn_tp1) < (1.0 * risk_dist):
+                dyn_tp1 = entry - (1.0 * risk_dist)
 
             dyn_tp2 = float(df_1h['low'].iloc[-25:-1].min())
-            if dyn_tp2 >= dyn_tp1 or (entry - dyn_tp2) < (2.5 * risk_dist):
-                dyn_tp2 = entry - (3.0 * risk_dist)
+            if dyn_tp2 >= dyn_tp1 or (entry - dyn_tp2) < (2.0 * risk_dist):
+                dyn_tp2 = entry - (2.0 * risk_dist)
 
             tp1, tp2 = dyn_tp1, dyn_tp2
 
@@ -482,7 +482,6 @@ async def market_scanner_loop():
     while True:
         exchange = None
         try:
-            # Sınırsız gerçek / testnet API geçişi (Dinamik Bağlantı)
             exchange = await create_exchange_instance()
 
             check_daily_drawdown()
@@ -522,7 +521,6 @@ async def market_scanner_loop():
                             current_total_margin = system_state["locked_margin"]
                             allowed_margin = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
                             
-                            # Kasa ve Serbest Bakiye Kilidi
                             if (current_total_margin + sig['margin']) > allowed_margin or sig['margin'] > system_state["free_balance"]:
                                 continue
 
@@ -531,7 +529,6 @@ async def market_scanner_loop():
                             mode_label = "İzole" if sig['margin_mode'] == "ISOLATED" else "Cross"
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['score']} Puan | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}")
 
-                            # --- GERÇEK BORSA EMİR İLETİMİ (GİRİŞ) ---
                             if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
                                 try:
                                     try:
@@ -539,7 +536,6 @@ async def market_scanner_loop():
                                     except Exception as e:
                                         add_log(f"⚠️ Kaldıraç uyarısı: {str(e)[:40]}")
                                     
-                                    # Miktar Precision Yuvarlama (Borsa limitleri için kritik)
                                     safe_amount = float(exchange.amount_to_precision(sig['symbol'], sig['pos_size']))
                                     side = 'buy' if sig['direction'] == 'LONG' else 'sell'
                                     
@@ -592,7 +588,6 @@ async def market_scanner_loop():
                             system_state["equity_curve"].append({"time": now_ts, "value": round(system_state["total_balance"], 2)})
                             add_log(f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi.")
 
-                            # --- GERÇEK BORSA TP1 İLETİMİ ---
                             if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
                                 try:
                                     close_side = 'sell' if pos['direction'] == 'LONG' else 'buy'
@@ -631,7 +626,6 @@ async def market_scanner_loop():
                         add_log(f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}")
                         check_daily_drawdown()
 
-                        # --- GERÇEK BORSA TAM ÇIKIŞ İLETİMİ ---
                         if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
                             try:
                                 close_side = 'sell' if pos['direction'] == 'LONG' else 'buy'
@@ -2260,7 +2254,7 @@ async def get_dashboard(request: Request):
                 const sl = parseFloat(document.getElementById(`manual-sl-${symbol}`).value);
                 const tp2 = parseFloat(document.getElementById(`manual-tp-${symbol}`).value);
                 await fetch('/api/manual/update_sltp', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol, sl, tp2}) });
-                alert("SL ve TP Güncellendi!");
+                alert("SL and TP Updated!");
                 updateDashboard();
             }
 
