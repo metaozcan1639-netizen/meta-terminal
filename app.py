@@ -985,6 +985,13 @@ async def get_dashboard(request: Request):
                     </div>
 
                     <div class="flex items-center space-x-3 pt-0.5">
+                        <!-- YENİ EKLENEN: TOPLAM KASA -->
+                        <div>
+                            <div class="text-[9px] text-slate-400 uppercase tracking-wider">Toplam Kasa</div>
+                            <div id="stat-total-balance" class="text-sm font-extrabold font-mono text-white">$1000.00</div>
+                        </div>
+                        <div class="border-r border-slate-800 h-6"></div>
+                        <!-- MEVCUT KISIMLAR -->
                         <div>
                             <div class="text-[9px] text-slate-400 uppercase tracking-wider" id="pnl-label">Bugün Net PnL</div>
                             <div id="stat-pnl" class="text-sm font-extrabold font-mono text-emerald-400">$0.00</div>
@@ -2351,6 +2358,20 @@ async def get_dashboard(request: Request):
                     if (manPnlEl) {
                         manPnlEl.innerText = `${totalUnrealizedPnl >= 0 ? '+' : ''}$${totalUnrealizedPnl.toFixed(2)} (%${totalPnlPct >= 0 ? '+' : ''}${totalPnlPct.toFixed(2)})`;
                         manPnlEl.className = `text-sm font-bold font-mono ${totalUnrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+                    }
+
+                    // YENİ EKLENEN: CANLI KASA GÜNCELLEMESİ
+                    const totalBalanceElem = document.getElementById('stat-total-balance');
+                    if (totalBalanceElem) {
+                        totalBalanceElem.innerText = `$${data.total_balance.toFixed(2)}`;
+                        // Bakiye ana paradan (1000$) yüksekse yeşil, düşükse kırmızı, eşitse beyaz yapalım
+                        if (data.total_balance > data.initial_balance) {
+                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-emerald-400";
+                        } else if (data.total_balance < data.initial_balance) {
+                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-rose-400";
+                        } else {
+                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-white";
+                        }
                     }
 
                     tradeHistoryCache = data.trade_history;
