@@ -396,7 +396,7 @@ async def analyze_symbol(exchange, symbol):
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
-        # --- YAPAY ZEKA HİBRİT YÖNETİMİ (Kutucuklardaki "0 / Oto" Seçenekleri) ---
+        # --- YAPAN ZEKA HİBRİT YÖNETİMİ (Kutucuklardaki "0 / Oto" Seçenekleri) ---
         vol_pct = (atr / entry) * 100
         
         # 1. Kaldıraç Zekası (Eğer kutucuk 0 yani Oto seçilmişse)
@@ -868,7 +868,7 @@ async def manual_close_all():
     for pos in list(system_state["active_positions"]):
         curr_price = pos.get('current_price', pos['entry'])
         direction = pos['direction']
-        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
+        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
         apply_realized_pnl(realized_pnl)
 
@@ -1564,7 +1564,7 @@ async def get_dashboard(request: Request):
                 <div class="card p-4 rounded-xl"><div class="text-[10px] text-slate-400 uppercase">Ortalama Kârlı / Zararlı İşlem</div><div class="text-base font-bold font-mono text-emerald-400 mt-1" id="stat-avg-win">+$0.00</div><div class="text-base font-bold font-mono text-rose-400 mt-0.5" id="stat-avg-loss">-$0.00</div></div>
                 <div class="card p-4 rounded-xl space-y-2"><div class="text-[10px] text-slate-400 uppercase">Ardışık Seri (Max Seriler)</div><div class="text-xs font-bold font-mono text-white pt-1">Kazanç: <b id="stat-max-win-streak" class="text-emerald-400">0</b> | Kayıp: <b id="stat-max-loss-streak" class="text-rose-400">0</b></div></div>
                 <div class="card p-4 rounded-xl space-y-2"><div class="text-[10px] text-slate-400 uppercase">Ortalama İşlem Süresi</div><div id="stat-avg-duration" class="text-sm font-bold font-mono text-amber-400 mt-1">-- Dakika</div></div>
-                <div class="card p-4 rounded-xl space-y-2"><div class="text-[10px] text-slate-400 uppercase">Yön Dağılımı (Long vs Short)</div><div id="stat-ls-ratio" class="text-xs font-bold font-mono text-white">L: %0 | S: %0</div><div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden flex"><div id="stat-ls-bar" class="bg-sky-500 h-1.5" style="width: 50%"></div></div></div>
+                <div class="card p-4 rounded-xl space-y-2"><div class="text-[10px] text-slate-400 uppercase">Yön Dağılımı (Long vs Short)</div><div id="stat-ls-ratio" class="text-xs font-bold font-mono text-white">L: %0 | S: %0</div><div class="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden flex"><div id="stat-ls-bar" class="bg-sky-500 h-1.5" style="width: 50%"></div></div></div></div>
             </div>
 
             <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1768,23 +1768,6 @@ async def get_dashboard(request: Request):
                 }
             }
 
-            async function toggleBotTrading() {
-                try {
-                    const res = await fetch('/api/toggle_bot_trading', { method: 'POST' });
-                    const data = await res.json();
-                    const btn = document.getElementById('bot-toggle-btn');
-                    if (btn) {
-                        if (data.active) {
-                            btn.className = "px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition";
-                            btn.innerText = "🤖 Bot: AÇIK";
-                        } else {
-                            btn.className = "px-2.5 py-1 rounded-lg font-bold bg-rose-600 text-white hover:bg-rose-500 transition";
-                            btn.innerText = "🤖 Bot: KAPALI";
-                        }
-                    }
-                } catch(e) {}
-            }
-
             function setJournalFilter(dir) {
                 journalDirectionFilter = dir;
                 ['ALL', 'LONG', 'SHORT'].forEach(d => {
@@ -1985,30 +1968,237 @@ async def get_dashboard(request: Request):
                 resizeCanvas();
             }
 
+            function parseBybitSymbol(symbol) {
+                return symbol.replace('/USDT:USDT', 'USDT').replace('/USDT', 'USDT').replace(':', '');
+            }
+
+            function changeTimeframe(tf) {
+                currentTimeframe = tf;
+                document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+                const btn = document.getElementById(`tf-${tf}`);
+                if (btn) btn.classList.add('active');
+                loadChartCandles(currentSymbol, selectedPos, false);
+            }
+
+            function changePnlFilter(filter) {
+                currentPnlFilter = filter;
+                document.querySelectorAll('.pnl-tf-btn').forEach(b => b.classList.remove('active'));
+                const btn = document.getElementById(`pnl-tf-${filter}`);
+                if (btn) btn.classList.add('active');
+                recalculatePnlMetrics();
+            }
+
+            function changeStatsFilter(filter) {
+                currentStatsFilter = filter;
+                document.querySelectorAll('.stats-tf-btn').forEach(b => b.classList.remove('active'));
+                const btn = document.getElementById(`stats-tf-${filter}`);
+                if (btn) btn.classList.add('active');
+                recalculateAdvancedStats();
+            }
+
+            function getTurkeyTimeBoundaries() {
+                const now = new Date();
+                const trOffset = 3 * 60;
+                const localOffset = now.getTimezoneOffset();
+                const trNow = new Date(now.getTime() + (trOffset + localOffset) * 60 * 1000);
+
+                const todayStart = new Date(trNow.getFullYear(), trNow.getMonth(), trNow.getDate(), 0, 0, 0);
+                const todayStartTs = Math.floor((todayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+                const yesterdayStartTs = Math.floor((yesterdayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                const dayOfWeek = trNow.getDay() === 0 ? 6 : trNow.getDay() - 1;
+                const weekStart = new Date(todayStart.getTime() - dayOfWeek * 24 * 60 * 60 * 1000);
+                const weekStartTs = Math.floor((weekStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                const monthStart = new Date(trNow.getFullYear(), trNow.getMonth(), 1, 0, 0, 0);
+                const monthStartTs = Math.floor((monthStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                return { todayStartTs, yesterdayStartTs, yesterdayEndTs: todayStartTs, weekStartTs, monthStartTs };
+            }
+
+            function loadArchivePreview() {
+                try {
+                    const boundaries = getTurkeyTimeBoundaries();
+                    let todayTrades = tradeHistoryCache.filter(h => (h.close_timestamp || 0) >= boundaries.todayStartTs);
+                    let count = todayTrades.length;
+                    let wins = todayTrades.filter(h => h.realized_pnl > 0).length;
+                    let winRate = count > 0 ? ((wins / count) * 100).toFixed(1) : "0.0";
+                    let totalPnl = todayTrades.reduce((acc, h) => acc + h.realized_pnl, 0);
+
+                    document.getElementById('archive-prev-trades').innerText = count;
+                    document.getElementById('archive-prev-winrate').innerText = `%${winRate}`;
+                    
+                    const pnlEl = document.getElementById('archive-prev-pnl');
+                    pnlEl.innerText = `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`;
+                    pnlEl.className = `text-sm font-extrabold font-mono mt-0.5 ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+                } catch(e) {}
+            }
+
+            async function downloadCustomCsv() {
+                const start = document.getElementById('custom-start-date').value;
+                const end = document.getElementById('custom-end-date').value;
+                if (!start || !end) { alert("Lütfen başlangıç ve bitiş tarihlerini seçin!"); return; }
+
+                try {
+                    const res = await fetch('/api/export/custom_csv', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ start_date: start, end_date: end })
+                    });
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `trades_${start}_to_${end}.csv`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                } catch(e) { alert("Hata oluştu."); }
+            }
+
+            function recalculatePnlMetrics() {
+                try {
+                    const boundaries = getTurkeyTimeBoundaries();
+                    let filtered = [];
+
+                    tradeHistoryCache.forEach(h => {
+                        const ts = h.close_timestamp || 0;
+                        if (currentPnlFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'yesterday' && ts >= boundaries.yesterdayStartTs && ts < boundaries.yesterdayEndTs) filtered.push(h);
+                        else if (currentPnlFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'all') filtered.push(h);
+                    });
+
+                    let periodPnl = 0, winCount = 0;
+                    filtered.forEach(h => {
+                        periodPnl += h.realized_pnl;
+                        if (h.realized_pnl > 0) winCount++;
+                    });
+
+                    periodPnl = Math.round(periodPnl * 100) / 100;
+                    const winRate = filtered.length > 0 ? ((winCount / filtered.length) * 100).toFixed(1) : "0.0";
+
+                    const pnlElem = document.getElementById('stat-pnl');
+                    if (pnlElem) {
+                        pnlElem.innerText = `${periodPnl >= 0 ? '+' : ''}$${periodPnl.toFixed(2)}`;
+                        pnlElem.className = `text-sm font-extrabold font-mono ${periodPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+                    }
+                    document.getElementById('stat-winrate').innerText = `%${winRate}`;
+                    document.getElementById('stat-trades').innerText = filtered.length;
+                } catch(e) {}
+            }
+
+            function recalculateAdvancedStats() {
+                try {
+                    const boundaries = getTurkeyTimeBoundaries();
+                    let filtered = [];
+
+                    tradeHistoryCache.forEach(h => {
+                        const ts = h.close_timestamp || 0;
+                        if (currentStatsFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
+                        else if (currentStatsFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
+                        else if (currentStatsFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
+                        else if (currentStatsFilter === 'all') filtered.push(h);
+                    });
+
+                    let totalWin = 0, totalLoss = 0, winOps = 0, lossOps = 0, longTotal = 0, shortTotal = 0, totalDuration = 0;
+                    let symbolPnlMap = {}, pnlSeries = [], currentWinStreak = 0, maxWinStreak = 0, currentLossStreak = 0, maxLossStreak = 0;
+
+                    const sortedFiltered = [...filtered].sort((a,b) => (a.close_timestamp || 0) - (b.close_timestamp || 0));
+
+                    sortedFiltered.forEach(h => {
+                        totalDuration += (h.duration_mins || 1);
+                        pnlSeries.push(h.realized_pnl);
+
+                        if (h.realized_pnl > 0) {
+                            totalWin += h.realized_pnl; winOps++; currentWinStreak++; currentLossStreak = 0;
+                            if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak;
+                        } else {
+                            totalLoss += Math.abs(h.realized_pnl); lossOps++; currentLossStreak++; currentWinStreak = 0;
+                            if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak;
+                        }
+
+                        if (h.direction === 'LONG') longTotal++; else shortTotal++;
+                        symbolPnlMap[h.symbol] = (symbolPnlMap[h.symbol] || 0) + h.realized_pnl;
+                    });
+
+                    const totalOps = filtered.length;
+                    const winRateVal = totalOps > 0 ? (winOps / totalOps) : 0;
+                    const lossRateVal = totalOps > 0 ? (lossOps / totalOps) : 0;
+                    const avgWinVal = winOps > 0 ? (totalWin / winOps) : 0;
+                    const avgLossVal = lossOps > 0 ? (totalLoss / lossOps) : 0;
+
+                    const expectancy = (winRateVal * avgWinVal) - (lossRateVal * avgLossVal);
+                    const pf = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : (totalWin > 0 ? "∞" : "0.00");
+
+                    let sharpe = "0.00", sortino = "0.00";
+                    if (pnlSeries.length > 1) {
+                        const meanPnl = pnlSeries.reduce((a,b)=>a+b,0) / pnlSeries.length;
+                        const variance = pnlSeries.reduce((a,b)=>a + Math.pow(b - meanPnl, 2), 0) / pnlSeries.length;
+                        const stdDev = Math.sqrt(variance) || 1;
+                        sharpe = (meanPnl / stdDev * Math.sqrt(365)).toFixed(2);
+                        const negativeReturns = pnlSeries.filter(p => p < 0);
+                        const downsideVar = negativeReturns.length > 0 ? negativeReturns.reduce((a,b)=>a + Math.pow(b, 2), 0) / negativeReturns.length : 1;
+                        sortino = (meanPnl / (Math.sqrt(downsideVar) || 1) * Math.sqrt(365)).toFixed(2);
+                    }
+
+                    document.getElementById('stat-pf').innerText = pf;
+                    const expEl = document.getElementById('stat-expectancy');
+                    expEl.innerText = `${expectancy >= 0 ? '+' : ''}$${expectancy.toFixed(2)}`;
+                    expEl.className = `text-xl font-bold font-mono ${expectancy >= 0 ? 'text-sky-400' : 'text-red-400'}`;
+
+                    document.getElementById('stat-sharpe').innerText = `${sharpe} / ${sortino}`;
+                    document.getElementById('stat-avg-win').innerText = `+$${avgWinVal.toFixed(2)}`;
+                    document.getElementById('stat-avg-loss').innerText = `-$${avgLossVal.toFixed(2)}`;
+                    document.getElementById('stat-max-win-streak').innerText = maxWinStreak;
+                    document.getElementById('stat-max-loss-streak').innerText = maxLossStreak;
+                    document.getElementById('stat-avg-duration').innerText = `${totalOps > 0 ? Math.round(totalDuration / totalOps) : 0} Dakika`;
+
+                    const lPct = (longTotal + shortTotal) > 0 ? Math.round((longTotal / (longTotal + shortTotal)) * 100) : 50;
+                    document.getElementById('stat-ls-ratio').innerText = `L: %${lPct} | S: %${100 - lPct}`;
+                    document.getElementById('stat-ls-bar').style.width = `${lPct}%`;
+
+                    const sortedSymbols = Object.keys(symbolPnlMap).sort((a,b) => symbolPnlMap[b] - symbolPnlMap[a]);
+                    const topTbody = document.getElementById('top-symbols-table');
+                    if (topTbody) {
+                        topTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] > 0).slice(0, 5).map(sym => `
+                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-emerald-400">+$${symbolPnlMap[sym].toFixed(2)}</td></tr>
+                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
+                    }
+
+                    const worstTbody = document.getElementById('worst-symbols-table');
+                    if (worstTbody) {
+                        worstTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] < 0).reverse().slice(0, 5).map(sym => `
+                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-rose-400">-$${Math.abs(symbolPnlMap[sym]).toFixed(2)}</td></tr>
+                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
+                    }
+                } catch(e) {}
+            }
+
+            async function loadReportsList() {
+                try {
+                    const res = await fetch('/api/reports/list');
+                    const files = await res.json();
+                    const tbody = document.getElementById('reports-table');
+                    if (tbody) {
+                        tbody.innerHTML = files.map(f => `<tr><td class="py-2 font-mono text-slate-300">📄 ${f}</td><td class="text-right"><a href="/api/reports/download/${f}" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-2 py-1 rounded text-[10px]">İndir</a></td></tr>`).join('') || '<tr><td colspan="2" class="py-2 text-slate-500 italic">Arşiv yok...</td></tr>';
+                    }
+                } catch(e) {}
+            }
+
             async function fetchCandlesDirect(symbol, interval = '5') {
-                let rawSym = symbol.split('/')[0] + 'USDT'; 
-                
-                const thCoins = ['PEPE', 'SHIB', 'FLOKI', 'BONK', 'LUNC', 'XEC', 'SATS', 'RATS', 'BTT', 'TURBO', 'MEME', 'DOGS'];
-                const baseSym = symbol.split('/')[0].toUpperCase();
-                if (thCoins.includes(baseSym)) {
-                    rawSym = '1000' + baseSym + 'USDT';
-                }
-
-                const tfMap = { '1': '1m', '5': '5m', '15': '15m', '60': '1h', '240': '4h', 'D': '1d' };
-                const binanceInterval = tfMap[interval] || '5m';
-
-                const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${rawSym}&interval=${binanceInterval}&limit=1000`;
+                const rawSym = parseBybitSymbol(symbol);
+                const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${rawSym}&interval=${interval}&limit=1000`;
                 try {
                     const res = await fetch(url);
-                    const data = await res.json();
-                    if (Array.isArray(data)) {
-                        return data.map(c => ({
-                            time: Math.floor(c[0] / 1000), 
-                            open: parseFloat(c[1]), 
-                            high: parseFloat(c[2]), 
-                            low: parseFloat(c[3]), 
-                            close: parseFloat(c[4])
-                        }));
+                    const json = await res.json();
+                    if (json.result && json.result.list) {
+                        return json.result.list.map(c => ({
+                            time: Math.floor(parseInt(c[0]) / 1000), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4])
+                        })).sort((a, b) => a.time - b.time);
                     }
                 } catch(e) {}
                 return [];
@@ -2055,24 +2245,12 @@ async def get_dashboard(request: Request):
                         if (posData && candleSeries) {
                             const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
                             const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP' });
+                            const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
+                            const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
                             
-                            priceLines.push(entryLine, slLine);
-                            
+                            priceLines.push(entryLine, slLine, tp1Line, tp2Line);
                             const p = posData.entry < 1 ? 6 : 2;
-                            let htmlStr = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span>`;
-                            
-                            if (Math.abs(posData.tp1 - posData.tp2) / posData.entry < 0.001) {
-                                const tpLine = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP (TAM ÇIKIŞ)' });
-                                priceLines.push(tpLine);
-                                htmlStr += ` | <span class="text-emerald-500 font-mono font-bold">TP: ${posData.tp1.toFixed(p)}</span>`;
-                            } else {
-                                const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
-                                const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
-                                priceLines.push(tp1Line, tp2Line);
-                                htmlStr += ` | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
-                            }
-                            
-                            document.getElementById('chart-levels').innerHTML = htmlStr;
+                            document.getElementById('chart-levels').innerHTML = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span> | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
                         } else {
                             document.getElementById('chart-levels').innerHTML = '';
                         }
@@ -2097,16 +2275,6 @@ async def get_dashboard(request: Request):
                     ? `<div class="bg-emerald-950/60 border border-emerald-800 p-1.5 rounded text-[11px] text-emerald-400 font-bold mb-2">⚡ TP1 Alındı (%50 Kâr Realize Edildi - Stop Giriş Boyuna Çekildi)</div>` 
                     : ``;
 
-                let tpDisplayHtml = "";
-                if (Math.abs(pos.tp1 - pos.tp2) / pos.entry < 0.001) {
-                    tpDisplayHtml = `<div class="text-emerald-500 font-bold">TP (TAM ÇIKIŞ): <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>`;
-                } else {
-                    tpDisplayHtml = `
-                        <div class="text-emerald-800 font-bold">TP2: <span class="text-emerald-400">${pos.tp2.toFixed(p)}</span></div>
-                        <div class="text-emerald-600 font-bold">TP1: <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>
-                    `;
-                }
-
                 document.getElementById('active-rationale').innerHTML = `
                     <div class="flex justify-between items-center mb-2"><span class="font-bold text-base text-white">${pos.symbol}</span><span class="px-2 py-0.5 rounded text-xs font-bold ${pos.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${pos.direction}</span></div>
                     ${tp1StatusHtml}
@@ -2114,7 +2282,8 @@ async def get_dashboard(request: Request):
                     <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1 font-mono">
                         <div class="text-slate-400">Giriş Saati: <span class="text-white font-bold font-sans">${pos.open_time}</span></div>
                         <div class="text-slate-400">Mod: <span class="text-white font-bold font-sans">${pos.leverage}x ${modeLabel} ($${pos.margin})</span></div>
-                        ${tpDisplayHtml}
+                        <div class="text-emerald-800 font-bold">TP2: <span class="text-emerald-400">${pos.tp2.toFixed(p)}</span></div>
+                        <div class="text-emerald-600 font-bold">TP1: <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>
                         <div class="text-sky-400 font-bold">Giriş: <span>${pos.entry}</span></div>
                         <div class="text-red-400 font-bold">SL: <span>${pos.sl.toFixed(p)}</span></div>
                     </div>`;
@@ -2196,19 +2365,8 @@ async def get_dashboard(request: Request):
                     if (data.active_positions.length > lastKnownPosCount) playAlertSound();
                     lastKnownPosCount = data.active_positions.length;
 
-                    const logBoxElem = document.getElementById('log-box');
-                    if(logBoxElem) {
-                        logBoxElem.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
-                    }
-
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
-
-                    const topBalanceEl = document.getElementById('top-total-balance');
-                    if(topBalanceEl) {
-                        topBalanceEl.innerText = `$${data.total_balance.toFixed(2)}`;
-                        topBalanceEl.className = `text-emerald-400 font-extrabold text-sm font-mono ${data.total_balance >= data.initial_balance ? 'text-emerald-400' : 'text-rose-400'}`;
-                    }
 
                     if (data.sentiment_data) {
                         document.getElementById('sent-btc-15m').innerText = `${data.btc_15m_change >= 0 ? '+' : ''}%${data.btc_15m_change}`;
@@ -2256,7 +2414,7 @@ async def get_dashboard(request: Request):
                     const totalPnlPct = data.total_balance > 0 ? ((totalUnrealizedPnl / data.total_balance) * 100) : 0;
 
                     const usedPct = data.total_balance > 0 ? ((totalUsedMargin / data.total_balance) * 100).toFixed(1) : "0.0";
-                    document.getElementById('stat-used-margin').innerText = `$${totalUsedMargin.toFixed(1)} (%{usedPct})`;
+                    document.getElementById('stat-used-margin').innerText = `$${totalUsedMargin.toFixed(1)} (%${usedPct})`;
 
                     document.getElementById('man-total-pos').innerText = `${data.active_positions.length} Adet`;
                     document.getElementById('man-total-margin').innerText = `$${totalUsedMargin.toFixed(2)}`;
@@ -2266,6 +2424,18 @@ async def get_dashboard(request: Request):
                     if (manPnlEl) {
                         manPnlEl.innerText = `${totalUnrealizedPnl >= 0 ? '+' : ''}$${totalUnrealizedPnl.toFixed(2)} (%${totalPnlPct >= 0 ? '+' : ''}${totalPnlPct.toFixed(2)})`;
                         manPnlEl.className = `text-sm font-bold font-mono ${totalUnrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
+                    }
+
+                    const totalBalanceElem = document.getElementById('stat-total-balance');
+                    if (totalBalanceElem) {
+                        totalBalanceElem.innerText = `$${data.total_balance.toFixed(2)}`;
+                        if (data.total_balance > data.initial_balance) {
+                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-emerald-400";
+                        } else if (data.total_balance < data.initial_balance) {
+                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-rose-400";
+                        } else {
+                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-white";
+                        }
                     }
 
                     tradeHistoryCache = data.trade_history;
@@ -2282,35 +2452,8 @@ async def get_dashboard(request: Request):
                         }
                     }
 
-                    try {
-                        if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) {
-                            let eqMap = new Map();
-                            data.equity_curve.forEach(d => {
-                                if(d && !isNaN(d.time)) {
-                                    eqMap.set(Number(d.time), Number(d.value));
-                                }
-                            });
-                            
-                            let sortedEq = Array.from(eqMap.entries())
-                                .map(([t, v]) => ({time: t, value: v}))
-                                .sort((a,b) => a.time - b.time);
-                                
-                            let finalEq = [];
-                            let lastTime = 0;
-                            for (let i = 0; i < sortedEq.length; i++) {
-                                if (sortedEq[i].time > lastTime) {
-                                    finalEq.push(sortedEq[i]);
-                                    lastTime = sortedEq[i].time;
-                                }
-                            }
-                            
-                            if (finalEq.length > 0) {
-                                equitySeries.setData(finalEq);
-                            }
-                        }
-                    } catch(err) {
-                        console.error("Equity Curve Çizim Hatası: ", err);
-                    }
+                    if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) equitySeries.setData(data.equity_curve);
+                    document.getElementById('log-box').innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
 
                     lastPositions = data.active_positions;
                     const activeTbody = document.getElementById('active-pos-table');
@@ -2361,9 +2504,7 @@ async def get_dashboard(request: Request):
 
                     if (currentSymbol) loadChartCandles(currentSymbol, selectedPos, true);
                     if (!selectedPos && data.active_positions.length > 0) selectPosition(data.active_positions[0]);
-                } catch (e) {
-                    console.error("Dashboard Güncelleme Hatası: ", e);
-                }
+                } catch (e) {}
             }
 
             initCharts();
