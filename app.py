@@ -92,7 +92,6 @@ EXCLUDED_KEYWORDS = [
 ]
 
 async def create_exchange_instance():
-    """Arayüzdeki ayarlara göre Dinamik Borsa Bağlantısı Kurar."""
     api_conf = system_state["api_settings"]
     exch_id = api_conf["exchange"].lower()
     
@@ -115,7 +114,6 @@ async def create_exchange_instance():
     return exchange
 
 async def execute_manual_real_order(symbol, direction, amount_raw):
-    """Manuel müdahalelerde gerçek borsaya çıkış emri gönderir."""
     if not system_state["api_settings"]["auto_trade"] or not system_state["api_settings"]["api_key"]:
         return
     try:
@@ -200,7 +198,6 @@ def calculate_indicators(df):
     df['vol_ma'] = df['volume'].rolling(window=20).mean()
     return df
 
-# YAPAY ZEKA DİNAMİK RİSK YÖNETİMİ GÜNCELLEMESİ
 def compute_position_metrics(entry, sl, lev, risk_pct):
     balance = system_state["total_balance"]
     actual_risk_pct = risk_pct / 100.0
@@ -351,14 +348,10 @@ async def analyze_symbol(exchange, symbol):
             if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
                 score += 25
                 reasons.append("📈 1H Güçlü Ana Trend (Boğa) Onayı")
-            else:
-                return None
         elif direction == "SHORT":
             if c_1h['close'] < c_1h['ema50'] and c_1h['close'] < c_1h['ema20']:
                 score += 25
                 reasons.append("📉 1H Güçlü Ana Trend (Ayı) Onayı")
-            else:
-                return None
 
         if len(oi_data) >= 3 and direction:
             oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
@@ -381,7 +374,7 @@ async def analyze_symbol(exchange, symbol):
             "price": float(c_5m['close']),
             "rsi": round(float(c_5m['rsi']), 1) if pd.notnull(c_5m['rsi']) else 50.0,
             "vol_ratio": round(vol_ratio, 2),
-            "trend": direction if direction else ("LONG" if c_5m['close'] > c_5m['ema50'] else "SHORT"),
+            "trend": direction if direction else ("LONG" if c_5m['close'] > c_1h['ema50'] else "SHORT"),
             "score": score
         }
         system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
@@ -395,31 +388,27 @@ async def analyze_symbol(exchange, symbol):
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
-        # --- YAPAY ZEKA DİNAMİK RİSK & KALDIRAÇ YÖNETİMİ ---
         effective_leverage = system_state["leverage"]
         effective_risk = system_state["risk_pct"]
 
         vol_pct = (atr / entry) * 100
 
-        # Eğer Otomatik Kaldıraç seçildiyse (0)
         if effective_leverage == 0:
             if vol_pct > 0.8:
-                effective_leverage = 10 # Yüksek volatilite -> Düşük Kaldıraç
+                effective_leverage = 10
             elif vol_pct > 0.4:
-                effective_leverage = 20 # Orta volatilite
+                effective_leverage = 20
             else:
-                effective_leverage = 50 # Düşük volatilite -> Yüksek Kaldıraç
+                effective_leverage = 50
 
-        # Eğer Otomatik Risk seçildiyse (0.0)
         if effective_risk == 0.0:
             if score >= 90:
-                effective_risk = 5.0  # Çok güçlü sinyal
+                effective_risk = 5.0
             elif score >= 80:
-                effective_risk = 3.0  # Güçlü sinyal
+                effective_risk = 3.0
             else:
-                effective_risk = 1.0  # Zayıf sinyal
+                effective_risk = 1.0
 
-        # Binance Kaldıraç Sınırı Koruması
         try:
             market_info = exchange.markets.get(symbol, {})
             max_lev_allowed = market_info.get('limits', {}).get('leverage', {}).get('max', 50)
@@ -544,12 +533,11 @@ async def market_scanner_loop():
                         if not exists:
                             max_pos = system_state["max_open_positions"]
                             
-                            # --- YAPAY ZEKA DİNAMİK MAX POZİSYON ---
                             if max_pos == -1:
                                 if system_state["btc_shock_lock"] or "AYI" in system_state["btc_regime"]:
-                                    max_pos = 5 # Defansif Mod
+                                    max_pos = 5
                                 else:
-                                    max_pos = 15 # Agresif Mod
+                                    max_pos = 15
 
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
@@ -613,7 +601,6 @@ async def market_scanner_loop():
                     elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
                         close_reason = "🎯 TP2 Likidite Havuzuna Ulaşıldı"
                     elif (direction == "LONG" and curr_price >= pos['tp1']) or (direction == "SHORT" and curr_price <= pos['tp1']):
-                        # --- TP1 VE TP2 AYNIYSA %100 KAPAT (DİNAMİK TP BİRLEŞTİRME) ---
                         if abs(pos['tp1'] - pos['tp2']) / pos['entry'] < 0.001:
                             close_reason = "🎯 Tek Hedef (%100) Likidite Havuzuna Ulaşıldı"
                         elif not pos.get("tp1_hit"):
@@ -735,7 +722,6 @@ class DateRangePayload(BaseModel):
 
 @app.post("/api/update_settings")
 async def update_settings(payload: SettingsPayload):
-    # KASA DEĞİŞTİYSE EĞRİYİ YENİ KASADAN BAŞLAT
     if system_state["total_balance"] != payload.total_balance:
         system_state["initial_balance"] = payload.total_balance
         system_state["daily_start_balance"] = payload.total_balance
@@ -1034,13 +1020,11 @@ async def get_dashboard(request: Request):
                     </div>
 
                     <div class="flex items-center space-x-3 pt-0.5">
-                        <!-- YENİ EKLENEN: TOPLAM KASA -->
                         <div>
                             <div class="text-[9px] text-slate-400 uppercase tracking-wider">Toplam Kasa</div>
                             <div id="stat-total-balance" class="text-sm font-extrabold font-mono text-white">$1000.00</div>
                         </div>
                         <div class="border-r border-slate-800 h-6"></div>
-                        <!-- MEVCUT KISIMLAR -->
                         <div>
                             <div class="text-[9px] text-slate-400 uppercase tracking-wider" id="pnl-label">Bugün Net PnL</div>
                             <div id="stat-pnl" class="text-sm font-extrabold font-mono text-emerald-400">$0.00</div>
@@ -2258,7 +2242,13 @@ async def get_dashboard(request: Request):
                         }
                     }
 
-                    if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) equitySeries.setData(data.equity_curve);
+                    if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) {
+                        // KASA BÜYÜME EĞRİSİ ÇÖZÜMÜ (LightweightCharts Aynı Saniye Çökme Koruması)
+                        let eqMap = new Map();
+                        data.equity_curve.forEach(d => eqMap.set(d.time, d.value));
+                        let sortedEq = Array.from(eqMap.entries()).map(([t, v]) => ({time: t, value: v})).sort((a,b) => a.time - b.time);
+                        equitySeries.setData(sortedEq);
+                    }
                     document.getElementById('log-box').innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
 
                     lastPositions = data.active_positions;
