@@ -345,11 +345,12 @@ async def analyze_symbol(exchange, symbol):
                 sl = entry * 0.985
             risk_dist = entry - sl
 
-            dyn_tp1 = float(df_1h['high'].iloc[-30:-1].max())
+            # LİKİDİTE ÖNÜNDE ÇIKIŞ (Front-running): TP1 ve TP2 iğne ucuna değil, 1.0 * ATR kadar altına çekildi
+            dyn_tp1 = float(df_1h['high'].iloc[-30:-1].max()) - (1.0 * atr)
             if (dyn_tp1 - entry) < (1.5 * risk_dist):
                 dyn_tp1 = entry + (1.5 * risk_dist)
 
-            dyn_tp2 = float(df_4h['high'].iloc[-15:-1].max()) if len(df_4h) >= 15 else dyn_tp1 * 1.02
+            dyn_tp2 = float(df_4h['high'].iloc[-15:-1].max()) - (1.0 * atr) if len(df_4h) >= 15 else dyn_tp1 * 1.02
             if dyn_tp2 <= dyn_tp1 or (dyn_tp2 - entry) < (2.5 * risk_dist):
                 dyn_tp2 = entry + (3.0 * risk_dist)
 
@@ -360,11 +361,12 @@ async def analyze_symbol(exchange, symbol):
                 sl = entry * 1.015
             risk_dist = sl - entry
 
-            dyn_tp1 = float(df_1h['low'].iloc[-30:-1].min())
+            # LİKİDİTE ÖNÜNDE ÇIKIŞ (Front-running): TP1 ve TP2 iğne ucuna değil, 1.0 * ATR kadar üstüne çekildi
+            dyn_tp1 = float(df_1h['low'].iloc[-30:-1].min()) + (1.0 * atr)
             if (entry - dyn_tp1) < (1.5 * risk_dist):
                 dyn_tp1 = entry - (1.5 * risk_dist)
 
-            dyn_tp2 = float(df_4h['low'].iloc[-15:-1].min()) if len(df_4h) >= 15 else dyn_tp1 * 0.98
+            dyn_tp2 = float(df_4h['low'].iloc[-15:-1].min()) + (1.0 * atr) if len(df_4h) >= 15 else dyn_tp1 * 0.98
             if dyn_tp2 >= dyn_tp1 or (entry - dyn_tp2) < (2.5 * risk_dist):
                 dyn_tp2 = entry - (3.0 * risk_dist)
 
@@ -411,7 +413,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: 1H & 4H Multi-Trend Filtresi ve Pullback Çekilme Modülü Devrede...")
+    add_log("Quant Motoru: Likidite Önü Çıkış (Front-Running TP) Modülü Devrede...")
 
     while True:
         exchange = None
@@ -1556,6 +1558,23 @@ async def get_dashboard(request: Request):
                 }
             }
 
+            async function toggleBotTrading() {
+                try {
+                    const res = await fetch('/api/toggle_bot_trading', { method: 'POST' });
+                    const data = await res.json();
+                    const btn = document.getElementById('bot-toggle-btn');
+                    if (btn) {
+                        if (data.active) {
+                            btn.className = "px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition";
+                            btn.innerText = "🤖 Bot: AÇIK";
+                        } else {
+                            btn.className = "px-2.5 py-1 rounded-lg font-bold bg-rose-600 text-white hover:bg-rose-500 transition";
+                            btn.innerText = "🤖 Bot: KAPALI";
+                        }
+                    }
+                } catch(e) {}
+            }
+
             function setJournalFilter(dir) {
                 journalDirectionFilter = dir;
                 ['ALL', 'LONG', 'SHORT'].forEach(d => {
@@ -1754,227 +1773,6 @@ async def get_dashboard(request: Request):
                 });
 
                 resizeCanvas();
-            }
-
-            function parseBybitSymbol(symbol) {
-                return symbol.replace('/USDT:USDT', 'USDT').replace('/USDT', 'USDT').replace(':', '');
-            }
-
-            function changeTimeframe(tf) {
-                currentTimeframe = tf;
-                document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
-                const btn = document.getElementById(`tf-${tf}`);
-                if (btn) btn.classList.add('active');
-                loadChartCandles(currentSymbol, selectedPos, false);
-            }
-
-            function changePnlFilter(filter) {
-                currentPnlFilter = filter;
-                document.querySelectorAll('.pnl-tf-btn').forEach(b => b.classList.remove('active'));
-                const btn = document.getElementById(`pnl-tf-${filter}`);
-                if (btn) btn.classList.add('active');
-                recalculatePnlMetrics();
-            }
-
-            function changeStatsFilter(filter) {
-                currentStatsFilter = filter;
-                document.querySelectorAll('.stats-tf-btn').forEach(b => b.classList.remove('active'));
-                const btn = document.getElementById(`stats-tf-${filter}`);
-                if (btn) btn.classList.add('active');
-                recalculateAdvancedStats();
-            }
-
-            function getTurkeyTimeBoundaries() {
-                const now = new Date();
-                const trOffset = 3 * 60;
-                const localOffset = now.getTimezoneOffset();
-                const trNow = new Date(now.getTime() + (trOffset + localOffset) * 60 * 1000);
-
-                const todayStart = new Date(trNow.getFullYear(), trNow.getMonth(), trNow.getDate(), 0, 0, 0);
-                const todayStartTs = Math.floor((todayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
-                const yesterdayStartTs = Math.floor((yesterdayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                const dayOfWeek = trNow.getDay() === 0 ? 6 : trNow.getDay() - 1;
-                const weekStart = new Date(todayStart.getTime() - dayOfWeek * 24 * 60 * 60 * 1000);
-                const weekStartTs = Math.floor((weekStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                const monthStart = new Date(trNow.getFullYear(), trNow.getMonth(), 1, 0, 0, 0);
-                const monthStartTs = Math.floor((monthStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
-
-                return { todayStartTs, yesterdayStartTs, yesterdayEndTs: todayStartTs, weekStartTs, monthStartTs };
-            }
-
-            function loadArchivePreview() {
-                try {
-                    const boundaries = getTurkeyTimeBoundaries();
-                    let todayTrades = tradeHistoryCache.filter(h => (h.close_timestamp || 0) >= boundaries.todayStartTs);
-                    let count = todayTrades.length;
-                    let wins = todayTrades.filter(h => h.realized_pnl > 0).length;
-                    let winRate = count > 0 ? ((wins / count) * 100).toFixed(1) : "0.0";
-                    let totalPnl = todayTrades.reduce((acc, h) => acc + h.realized_pnl, 0);
-
-                    document.getElementById('archive-prev-trades').innerText = count;
-                    document.getElementById('archive-prev-winrate').innerText = `%${winRate}`;
-                    
-                    const pnlEl = document.getElementById('archive-prev-pnl');
-                    pnlEl.innerText = `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`;
-                    pnlEl.className = `text-sm font-extrabold font-mono mt-0.5 ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
-                } catch(e) {}
-            }
-
-            async function downloadCustomCsv() {
-                const start = document.getElementById('custom-start-date').value;
-                const end = document.getElementById('custom-end-date').value;
-                if (!start || !end) { alert("Lütfen başlangıç ve bitiş tarihlerini seçin!"); return; }
-
-                try {
-                    const res = await fetch('/api/export/custom_csv', {
-                        method: 'POST',
-                        headers: {'Content-Type': 'application/json'},
-                        body: JSON.stringify({ start_date: start, end_date: end })
-                    });
-                    const blob = await res.blob();
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `trades_${start}_to_${end}.csv`;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                } catch(e) { alert("Hata oluştu."); }
-            }
-
-            function recalculatePnlMetrics() {
-                try {
-                    const boundaries = getTurkeyTimeBoundaries();
-                    let filtered = [];
-
-                    tradeHistoryCache.forEach(h => {
-                        const ts = h.close_timestamp || 0;
-                        if (currentPnlFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
-                        else if (currentPnlFilter === 'yesterday' && ts >= boundaries.yesterdayStartTs && ts < boundaries.yesterdayEndTs) filtered.push(h);
-                        else if (currentPnlFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
-                        else if (currentPnlFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
-                        else if (currentPnlFilter === 'all') filtered.push(h);
-                    });
-
-                    let periodPnl = 0, winCount = 0;
-                    filtered.forEach(h => {
-                        periodPnl += h.realized_pnl;
-                        if (h.realized_pnl > 0) winCount++;
-                    });
-
-                    periodPnl = Math.round(periodPnl * 100) / 100;
-                    const winRate = filtered.length > 0 ? ((winCount / filtered.length) * 100).toFixed(1) : "0.0";
-
-                    const pnlElem = document.getElementById('stat-pnl');
-                    if (pnlElem) {
-                        pnlElem.innerText = `${periodPnl >= 0 ? '+' : ''}$${periodPnl.toFixed(2)}`;
-                        pnlElem.className = `text-sm font-extrabold font-mono ${periodPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
-                    }
-                    document.getElementById('stat-winrate').innerText = `%${winRate}`;
-                    document.getElementById('stat-trades').innerText = filtered.length;
-                } catch(e) {}
-            }
-
-            function recalculateAdvancedStats() {
-                try {
-                    const boundaries = getTurkeyTimeBoundaries();
-                    let filtered = [];
-
-                    tradeHistoryCache.forEach(h => {
-                        const ts = h.close_timestamp || 0;
-                        if (currentStatsFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
-                        else if (currentStatsFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
-                        else if (currentStatsFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
-                        else if (currentStatsFilter === 'all') filtered.push(h);
-                    });
-
-                    let totalWin = 0, totalLoss = 0, winOps = 0, lossOps = 0, longTotal = 0, shortTotal = 0, totalDuration = 0;
-                    let symbolPnlMap = {}, pnlSeries = [], currentWinStreak = 0, maxWinStreak = 0, currentLossStreak = 0, maxLossStreak = 0;
-
-                    const sortedFiltered = [...filtered].sort((a,b) => (a.close_timestamp || 0) - (b.close_timestamp || 0));
-
-                    sortedFiltered.forEach(h => {
-                        totalDuration += (h.duration_mins || 1);
-                        pnlSeries.push(h.realized_pnl);
-
-                        if (h.realized_pnl > 0) {
-                            totalWin += h.realized_pnl; winOps++; currentWinStreak++; currentLossStreak = 0;
-                            if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak;
-                        } else {
-                            totalLoss += Math.abs(h.realized_pnl); lossOps++; currentLossStreak++; currentWinStreak = 0;
-                            if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak;
-                        }
-
-                        if (h.direction === 'LONG') longTotal++; else shortTotal++;
-                        symbolPnlMap[h.symbol] = (symbolPnlMap[h.symbol] || 0) + h.realized_pnl;
-                    });
-
-                    const totalOps = filtered.length;
-                    const winRateVal = totalOps > 0 ? (winOps / totalOps) : 0;
-                    const lossRateVal = totalOps > 0 ? (lossOps / totalOps) : 0;
-                    const avgWinVal = winOps > 0 ? (totalWin / winOps) : 0;
-                    const avgLossVal = lossOps > 0 ? (totalLoss / lossOps) : 0;
-
-                    const expectancy = (winRateVal * avgWinVal) - (lossRateVal * avgLossVal);
-                    const pf = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : (totalWin > 0 ? "∞" : "0.00");
-
-                    let sharpe = "0.00", sortino = "0.00";
-                    if (pnlSeries.length > 1) {
-                        const meanPnl = pnlSeries.reduce((a,b)=>a+b,0) / pnlSeries.length;
-                        const variance = pnlSeries.reduce((a,b)=>a + Math.pow(b - meanPnl, 2), 0) / pnlSeries.length;
-                        const stdDev = Math.sqrt(variance) || 1;
-                        sharpe = (meanPnl / stdDev * Math.sqrt(365)).toFixed(2);
-                        const negativeReturns = pnlSeries.filter(p => p < 0);
-                        const downsideVar = negativeReturns.length > 0 ? negativeReturns.reduce((a,b)=>a + Math.pow(b, 2), 0) / negativeReturns.length : 1;
-                        sortino = (meanPnl / (Math.sqrt(downsideVar) || 1) * Math.sqrt(365)).toFixed(2);
-                    }
-
-                    document.getElementById('stat-pf').innerText = pf;
-                    const expEl = document.getElementById('stat-expectancy');
-                    expEl.innerText = `${expectancy >= 0 ? '+' : ''}$${expectancy.toFixed(2)}`;
-                    expEl.className = `text-xl font-bold font-mono ${expectancy >= 0 ? 'text-sky-400' : 'text-red-400'}`;
-
-                    document.getElementById('stat-sharpe').innerText = `${sharpe} / ${sortino}`;
-                    document.getElementById('stat-avg-win').innerText = `+$${avgWinVal.toFixed(2)}`;
-                    document.getElementById('stat-avg-loss').innerText = `-$${avgLossVal.toFixed(2)}`;
-                    document.getElementById('stat-max-win-streak').innerText = maxWinStreak;
-                    document.getElementById('stat-max-loss-streak').innerText = maxLossStreak;
-                    document.getElementById('stat-avg-duration').innerText = `${totalOps > 0 ? Math.round(totalDuration / totalOps) : 0} Dakika`;
-
-                    const lPct = (longTotal + shortTotal) > 0 ? Math.round((longTotal / (longTotal + shortTotal)) * 100) : 50;
-                    document.getElementById('stat-ls-ratio').innerText = `L: %${lPct} | S: %${100 - lPct}`;
-                    document.getElementById('stat-ls-bar').style.width = `${lPct}%`;
-
-                    const sortedSymbols = Object.keys(symbolPnlMap).sort((a,b) => symbolPnlMap[b] - symbolPnlMap[a]);
-                    const topTbody = document.getElementById('top-symbols-table');
-                    if (topTbody) {
-                        topTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] > 0).slice(0, 5).map(sym => `
-                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-emerald-400">+$${symbolPnlMap[sym].toFixed(2)}</td></tr>
-                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
-                    }
-
-                    const worstTbody = document.getElementById('worst-symbols-table');
-                    if (worstTbody) {
-                        worstTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] < 0).reverse().slice(0, 5).map(sym => `
-                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-rose-400">-$${Math.abs(symbolPnlMap[sym]).toFixed(2)}</td></tr>
-                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
-                    }
-                } catch(e) {}
-            }
-
-            async function loadReportsList() {
-                try {
-                    const res = await fetch('/api/reports/list');
-                    const files = await res.json();
-                    const tbody = document.getElementById('reports-table');
-                    if (tbody) {
-                        tbody.innerHTML = files.map(f => `<tr><td class="py-2 font-mono text-slate-300">📄 ${f}</td><td class="text-right"><a href="/api/reports/download/${f}" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-2 py-1 rounded text-[10px]">İndir</a></td></tr>`).join('') || '<tr><td colspan="2" class="py-2 text-slate-500 italic">Arşiv yok...</td></tr>';
-                    }
-                } catch(e) {}
             }
 
             async function fetchCandlesDirect(symbol, interval = '5') {
