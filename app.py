@@ -92,6 +92,7 @@ EXCLUDED_KEYWORDS = [
 ]
 
 async def create_exchange_instance():
+    """Arayüzdeki ayarlara göre Dinamik Borsa Bağlantısı Kurar."""
     api_conf = system_state["api_settings"]
     exch_id = api_conf["exchange"].lower()
     
@@ -114,6 +115,7 @@ async def create_exchange_instance():
     return exchange
 
 async def execute_manual_real_order(symbol, direction, amount_raw):
+    """Manuel müdahalelerde gerçek borsaya çıkış emri gönderir."""
     if not system_state["api_settings"]["auto_trade"] or not system_state["api_settings"]["api_key"]:
         return
     try:
@@ -198,6 +200,7 @@ def calculate_indicators(df):
     df['vol_ma'] = df['volume'].rolling(window=20).mean()
     return df
 
+# YAPAY ZEKA DİNAMİK RİSK YÖNETİMİ GÜNCELLEMESİ
 def compute_position_metrics(entry, sl, lev, risk_pct):
     balance = system_state["total_balance"]
     actual_risk_pct = risk_pct / 100.0
@@ -348,10 +351,14 @@ async def analyze_symbol(exchange, symbol):
             if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
                 score += 25
                 reasons.append("📈 1H Güçlü Ana Trend (Boğa) Onayı")
+            else:
+                return None
         elif direction == "SHORT":
             if c_1h['close'] < c_1h['ema50'] and c_1h['close'] < c_1h['ema20']:
                 score += 25
                 reasons.append("📉 1H Güçlü Ana Trend (Ayı) Onayı")
+            else:
+                return None
 
         if len(oi_data) >= 3 and direction:
             oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
@@ -388,27 +395,31 @@ async def analyze_symbol(exchange, symbol):
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
+        # --- YAPAY ZEKA DİNAMİK RİSK & KALDIRAÇ YÖNETİMİ ---
         effective_leverage = system_state["leverage"]
         effective_risk = system_state["risk_pct"]
 
         vol_pct = (atr / entry) * 100
 
+        # Eğer Otomatik Kaldıraç seçildiyse (0)
         if effective_leverage == 0:
             if vol_pct > 0.8:
-                effective_leverage = 10
+                effective_leverage = 10 # Yüksek volatilite -> Düşük Kaldıraç
             elif vol_pct > 0.4:
-                effective_leverage = 20
+                effective_leverage = 20 # Orta volatilite
             else:
-                effective_leverage = 50
+                effective_leverage = 50 # Düşük volatilite -> Yüksek Kaldıraç
 
+        # Eğer Otomatik Risk seçildiyse (0.0)
         if effective_risk == 0.0:
             if score >= 90:
-                effective_risk = 5.0
+                effective_risk = 5.0  # Çok güçlü sinyal
             elif score >= 80:
-                effective_risk = 3.0
+                effective_risk = 3.0  # Güçlü sinyal
             else:
-                effective_risk = 1.0
+                effective_risk = 1.0  # Zayıf sinyal
 
+        # Binance Kaldıraç Sınırı Koruması
         try:
             market_info = exchange.markets.get(symbol, {})
             max_lev_allowed = market_info.get('limits', {}).get('leverage', {}).get('max', 50)
@@ -533,11 +544,12 @@ async def market_scanner_loop():
                         if not exists:
                             max_pos = system_state["max_open_positions"]
                             
+                            # --- YAPAY ZEKA DİNAMİK MAX POZİSYON ---
                             if max_pos == -1:
                                 if system_state["btc_shock_lock"] or "AYI" in system_state["btc_regime"]:
-                                    max_pos = 5
+                                    max_pos = 5 # Defansif Mod
                                 else:
-                                    max_pos = 15
+                                    max_pos = 15 # Agresif Mod
 
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
@@ -1020,11 +1032,13 @@ async def get_dashboard(request: Request):
                     </div>
 
                     <div class="flex items-center space-x-3 pt-0.5">
+                        <!-- YENİ EKLENEN: TOPLAM KASA -->
                         <div>
                             <div class="text-[9px] text-slate-400 uppercase tracking-wider">Toplam Kasa</div>
                             <div id="stat-total-balance" class="text-sm font-extrabold font-mono text-white">$1000.00</div>
                         </div>
                         <div class="border-r border-slate-800 h-6"></div>
+                        <!-- MEVCUT KISIMLAR -->
                         <div>
                             <div class="text-[9px] text-slate-400 uppercase tracking-wider" id="pnl-label">Bugün Net PnL</div>
                             <div id="stat-pnl" class="text-sm font-extrabold font-mono text-emerald-400">$0.00</div>
@@ -2153,6 +2167,12 @@ async def get_dashboard(request: Request):
                     if (data.active_positions.length > lastKnownPosCount) playAlertSound();
                     lastKnownPosCount = data.active_positions.length;
 
+                    // LOGLARI GÜNCELLE (Hemen üstte yapıyoruz ki hiçbir hata bunu engellemesin)
+                    const logBoxElem = document.getElementById('log-box');
+                    if(logBoxElem) {
+                        logBoxElem.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
+                    }
+
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
@@ -2214,11 +2234,9 @@ async def get_dashboard(request: Request):
                         manPnlEl.className = `text-sm font-bold font-mono ${totalUnrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
                     }
 
-                    // YENİ EKLENEN: CANLI KASA GÜNCELLEMESİ
                     const totalBalanceElem = document.getElementById('stat-total-balance');
                     if (totalBalanceElem) {
                         totalBalanceElem.innerText = `$${data.total_balance.toFixed(2)}`;
-                        // Bakiye ana paradan (1000$) yüksekse yeşil, düşükse kırmızı, eşitse beyaz yapalım
                         if (data.total_balance > data.initial_balance) {
                             totalBalanceElem.className = "text-sm font-extrabold font-mono text-emerald-400";
                         } else if (data.total_balance < data.initial_balance) {
@@ -2241,15 +2259,6 @@ async def get_dashboard(request: Request):
                             renderRationale(selectedPos);
                         }
                     }
-
-                    if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) {
-                        // KASA BÜYÜME EĞRİSİ ÇÖZÜMÜ (LightweightCharts Aynı Saniye Çökme Koruması)
-                        let eqMap = new Map();
-                        data.equity_curve.forEach(d => eqMap.set(d.time, d.value));
-                        let sortedEq = Array.from(eqMap.entries()).map(([t, v]) => ({time: t, value: v})).sort((a,b) => a.time - b.time);
-                        equitySeries.setData(sortedEq);
-                    }
-                    document.getElementById('log-box').innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
 
                     lastPositions = data.active_positions;
                     const activeTbody = document.getElementById('active-pos-table');
@@ -2298,9 +2307,43 @@ async def get_dashboard(request: Request):
                             </tr>`).join('');
                     }
 
+                    // GRAFİKLERİ VE KASA EĞRİSİ ÇİZİMİNİ EN SONA VE TRY/CATCH İÇİNE ALIYORUZ
+                    try {
+                        if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) {
+                            let eqMap = new Map();
+                            data.equity_curve.forEach(d => {
+                                if(d && !isNaN(d.time)) {
+                                    eqMap.set(Number(d.time), Number(d.value));
+                                }
+                            });
+                            
+                            let sortedEq = Array.from(eqMap.entries())
+                                .map(([t, v]) => ({time: t, value: v}))
+                                .sort((a,b) => a.time - b.time);
+                                
+                            // Olası çökme için son güvenlik (zamanların kesin artan sırada olduğundan emin ol)
+                            let finalEq = [];
+                            let lastTime = 0;
+                            for (let i = 0; i < sortedEq.length; i++) {
+                                if (sortedEq[i].time > lastTime) {
+                                    finalEq.push(sortedEq[i]);
+                                    lastTime = sortedEq[i].time;
+                                }
+                            }
+                            
+                            if (finalEq.length > 0) {
+                                equitySeries.setData(finalEq);
+                            }
+                        }
+                    } catch(err) {
+                        console.error("Equity Curve Çizim Hatası: ", err);
+                    }
+
                     if (currentSymbol) loadChartCandles(currentSymbol, selectedPos, true);
                     if (!selectedPos && data.active_positions.length > 0) selectPosition(data.active_positions[0]);
-                } catch (e) {}
+                } catch (e) {
+                    console.error("Dashboard Güncelleme Hatası: ", e);
+                }
             }
 
             initCharts();
