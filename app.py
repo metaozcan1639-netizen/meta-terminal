@@ -145,14 +145,14 @@ def add_log(msg: str):
 def sync_wallet_accounting():
     locked = round(sum(float(p.get("margin", 0.0)) for p in system_state["active_positions"]), 2)
     unrealized = round(sum(float(p.get("unrealized_pnl", 0.0)) for p in system_state["active_positions"]), 2)
-    system_state["locked_margin"] = float(locked)
-    system_state["unrealized_pnl"] = float(unrealized)
-    system_state["free_balance"] = float(round(max(0.0, system_state["total_balance"] - locked), 2))
+    system_state["locked_margin"] = locked
+    system_state["unrealized_pnl"] = unrealized
+    system_state["free_balance"] = round(max(0.0, system_state["total_balance"] - locked), 2)
 
 def apply_realized_pnl(amount: float):
-    amount = float(round(amount, 2))
-    system_state["realized_pnl"] = float(round(system_state.get("realized_pnl", 0.0) + amount, 2))
-    system_state["total_balance"] = float(round(system_state["total_balance"] + amount, 2))
+    amount = round(float(amount), 2)
+    system_state["realized_pnl"] = round(system_state.get("realized_pnl", 0.0) + amount, 2)
+    system_state["total_balance"] = round(system_state["total_balance"] + amount, 2)
     sync_wallet_accounting()
 
 def check_daily_drawdown():
@@ -169,9 +169,9 @@ def check_daily_drawdown():
     peak = system_state["peak_balance"]
     curr = system_state["total_balance"]
     if peak > 0:
-        dd = float(((peak - curr) / peak) * 100)
+        dd = ((peak - curr) / peak) * 100
         if dd > system_state["max_drawdown_pct"]:
-            system_state["max_drawdown_pct"] = float(round(dd, 2))
+            system_state["max_drawdown_pct"] = round(dd, 2)
 
     daily_loss = system_state["daily_start_balance"] - system_state["total_balance"]
     max_allowed_loss = system_state["daily_start_balance"] * (system_state["daily_drawdown_limit_pct"] / 100.0)
@@ -207,12 +207,12 @@ def compute_position_metrics(entry, sl, lev, risk_pct):
     price_risk_pct = abs(entry - sl) / entry
     
     if price_risk_pct == 0:
-        return 0.0, 0.0, 0.0
+        return 0, 0, 0
 
     position_notional = risk_amount / price_risk_pct
     margin_required = position_notional / leverage
 
-    return float(round(position_notional, 2)), float(round(margin_required, 2)), float(round(risk_amount, 2))
+    return round(position_notional, 2), round(margin_required, 2), round(risk_amount, 2)
 
 async def fetch_fear_greed():
     try:
@@ -224,7 +224,7 @@ async def fetch_fear_greed():
                     tr_class = translate_fng(item.get('value_classification', 'Neutral'))
                     system_state["fear_and_greed"] = {
                         "value": int(item['value']),
-                        "classification": str(tr_class)
+                        "classification": tr_class
                     }
     except Exception:
         pass
@@ -239,10 +239,10 @@ async def update_btc_metrics(exchange):
         
         last_1h = df_1h.iloc[-1]
         
-        c_now = float(df_15m['close'].iloc[-1])
-        c_prev = float(df_15m['open'].iloc[-1])
+        c_now = df_15m['close'].iloc[-1]
+        c_prev = df_15m['open'].iloc[-1]
         pct_15m = ((c_now - c_prev) / c_prev) * 100
-        system_state["btc_15m_change"] = float(round(pct_15m, 2))
+        system_state["btc_15m_change"] = round(pct_15m, 2)
 
         if pct_15m <= -1.2:
             system_state["btc_shock_lock"] = True
@@ -254,7 +254,7 @@ async def update_btc_metrics(exchange):
             system_state["btc_shock_lock"] = False
             system_state["btc_shock_reason"] = ""
 
-        if float(last_1h['close']) > float(last_1h['ema50']):
+        if last_1h['close'] > last_1h['ema50']:
             system_state["btc_regime"] = "🟢 BOĞA (YÜKSELİŞ)"
             bias = "BOĞA / LONG"
         else:
@@ -262,18 +262,18 @@ async def update_btc_metrics(exchange):
             bias = "AYI / SHORT"
 
         ticker = await exchange.fetch_ticker('BTC/USDT:USDT')
-        vol_quote = float(ticker.get('quoteVolume', 0))
+        vol_quote = ticker.get('quoteVolume', 0)
         vol_str = f"${vol_quote/1e9:.2f} Milyar" if vol_quote > 1e9 else f"${vol_quote/1e6:.1f} Milyon"
 
-        vol_ratio = (float(last_1h['atr']) / float(last_1h['close'])) * 100 if pd.notnull(last_1h['atr']) else 0.5
+        vol_ratio = (last_1h['atr'] / last_1h['close']) * 100 if pd.notnull(last_1h['atr']) else 0.5
         vol_level = "YÜKSEK" if vol_ratio > 1.2 else ("ORTA" if vol_ratio > 0.6 else "DÜŞÜK")
-        ls_ratio = 47.6 if float(last_1h['close']) < float(last_1h['ema20']) else 52.4
+        ls_ratio = 47.6 if last_1h['close'] < last_1h['ema20'] else 52.4
 
         system_state["sentiment_data"] = {
-            "btc_rsi": float(round(last_1h['rsi'], 1)) if pd.notnull(last_1h['rsi']) else 52.2,
+            "btc_rsi": round(float(last_1h['rsi']), 1) if pd.notnull(last_1h['rsi']) else 52.2,
             "btc_volume_24h": vol_str,
             "market_bias": bias,
-            "long_short_ratio": float(ls_ratio),
+            "long_short_ratio": ls_ratio,
             "market_volatility": vol_level,
             "total_liquidations_24h": "$143.7 Milyon",
             "long_liq_pct": 57.5,
@@ -292,8 +292,12 @@ async def update_btc_metrics(exchange):
 
 async def analyze_symbol(exchange, symbol):
     try:
-        if system_state["daily_loss_locked"] or not system_state.get("bot_trading_active", True):
-            return None
+        # Radar her zaman çalışır. Bot kapalı veya günlük zarar kilidi aktif olsa bile
+        # pariteler analiz edilip Radar ekranında gösterilmeye devam eder.
+        trading_allowed = (
+            not system_state["daily_loss_locked"]
+            and system_state.get("bot_trading_active", True)
+        )
 
         base = symbol.split('/')[0].upper()
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
@@ -318,20 +322,20 @@ async def analyze_symbol(exchange, symbol):
         c_15m = df_15m.iloc[-1]
         c_1h = df_1h.iloc[-1]
 
-        swing_low_15m = float(df_15m['low'].iloc[-20:-3].min())
-        swing_high_15m = float(df_15m['high'].iloc[-20:-3].max())
-        recent_breakout_high = float(df_5m['high'].iloc[-8:-1].max())
-        recent_breakout_low = float(df_5m['low'].iloc[-8:-1].min())
+        swing_low_15m = df_15m['low'].iloc[-20:-3].min()
+        swing_high_15m = df_15m['high'].iloc[-20:-3].max()
+        recent_breakout_high = df_5m['high'].iloc[-8:-1].max()
+        recent_breakout_low = df_5m['low'].iloc[-8:-1].min()
 
         score = 0
         direction = None
         reasons = []
 
-        sweep_low = float(df_15m['low'].iloc[-4:].min()) < swing_low_15m
-        mss_bull = float(c_5m['close']) > recent_breakout_high and float(c_5m['close']) > float(df_5m['ema20'].iloc[-1]) and float(c_5m['close']) > float(c_5m['open'])
+        sweep_low = df_15m['low'].iloc[-4:].min() < swing_low_15m
+        mss_bull = c_5m['close'] > recent_breakout_high and c_5m['close'] > df_5m['ema20'].iloc[-1] and c_5m['close'] > c_5m['open']
 
-        sweep_high = float(df_15m['high'].iloc[-4:].max()) > swing_high_15m
-        mss_bear = float(c_5m['close']) < recent_breakout_low and float(c_5m['close']) < float(df_5m['ema20'].iloc[-1]) and float(c_5m['close']) < float(c_5m['open'])
+        sweep_high = df_15m['high'].iloc[-4:].max() > swing_high_15m
+        mss_bear = c_5m['close'] < recent_breakout_low and c_5m['close'] < df_5m['ema20'].iloc[-1] and c_5m['close'] < c_5m['open']
 
         if sweep_low and mss_bull:
             if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] <= -1.2):
@@ -345,17 +349,17 @@ async def analyze_symbol(exchange, symbol):
                 reasons.append("⚡ 15M Tepe Likiditesi Alındı + 5M MSS Kırılımı")
 
         if direction == "LONG":
-            if float(c_1h['close']) > float(c_1h['ema50']) and float(c_1h['close']) > float(c_1h['ema20']):
+            if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
                 score += 25
                 reasons.append("📈 1H Güçlü Ana Trend (Boğa) Onayı")
         elif direction == "SHORT":
-            if float(c_1h['close']) < float(c_1h['ema50']) and float(c_1h['close']) < float(c_1h['ema20']):
+            if c_1h['close'] < c_1h['ema50'] and c_1h['close'] < c_1h['ema20']:
                 score += 25
                 reasons.append("📉 1H Güçlü Ana Trend (Ayı) Onayı")
 
         if len(oi_data) >= 3 and direction:
-            oi_prev = float(oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0))
-            oi_curr = float(oi_data[-1].get('openInterestValue') or oi_data[-1].get('openInterest', 0))
+            oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
+            oi_curr = oi_data[-1].get('openInterestValue') or oi_data[-1].get('openInterest', 0)
             if oi_curr > oi_prev:
                 score += 15
                 reasons.append("📊 Açık Pozisyon (OI) Artışı (Kurumsal Giriş Onayı)")
@@ -365,27 +369,34 @@ async def analyze_symbol(exchange, symbol):
             score += 10
             reasons.append(f"🔥 Yüksek Hacim Onayı ({vol_ratio:.1f}x)")
 
-        if 42 <= float(c_5m['rsi']) <= 62:
+        if 42 <= c_5m['rsi'] <= 62:
             score += 10
-            reasons.append(f"🎯 Dengeli Momentum RSI ({float(c_5m['rsi']):.1f})")
+            reasons.append(f"🎯 Dengeli Momentum RSI ({c_5m['rsi']:.1f})")
 
-        safe_trend = str(direction) if direction else ("LONG" if float(c_5m['close']) > float(c_1h['ema50']) else "SHORT")
-        
+        # --- RADAR EKLEMESİ (GÜNCELLENDİ) ---
         radar_item = {
-            "symbol": str(symbol),
+            "symbol": symbol,
             "price": float(c_5m['close']),
-            "rsi": float(round(c_5m['rsi'], 1)) if pd.notnull(c_5m['rsi']) else 50.0,
-            "vol_ratio": float(round(vol_ratio, 2)),
-            "trend": safe_trend,
-            "score": int(score)
+            "rsi": round(float(c_5m['rsi']), 1) if pd.notnull(c_5m['rsi']) else 50.0,
+            "vol_ratio": round(vol_ratio, 2),
+            "trend": direction if direction else ("LONG" if c_5m['close'] > c_1h['ema50'] else "SHORT"),
+            "score": score
         }
         
-        # Kesin eşleşme ve güvenli güncelleme
-        system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
+        # Radar'da taranan tüm uygun pariteleri tut.
+        # Eski 60 parite sınırı kaldırıldı; 700+ taranan paritenin tamamı
+        # mümkün olduğunca arayüzde gösterilebilir.
+        system_state["radar_symbols"] = [
+            r for r in system_state["radar_symbols"] if r["symbol"] != symbol
+        ]
         system_state["radar_symbols"].append(radar_item)
-        if len(system_state["radar_symbols"]) > 60:
-            system_state["radar_symbols"].pop(0)
 
+        # İşlem tarafı Radar'dan bağımsızdır.
+        # Bot kapalıysa / günlük zarar kilitliyse sadece sinyal üretme.
+        if not trading_allowed:
+            return None
+
+        # İşlem onaylanmazsa buradan çık
         if not direction or score < 75:
             return None
 
@@ -459,30 +470,29 @@ async def analyze_symbol(exchange, symbol):
         pos_size, margin, max_loss = compute_position_metrics(entry, sl, effective_leverage, effective_risk)
 
         return {
-            "symbol": str(symbol),
-            "direction": str(direction),
-            "score": int(score),
-            "entry": float(entry),
-            "sl": float(sl),
-            "tp1": float(tp1),
-            "tp2": float(tp2),
-            "pos_size": float(pos_size),
-            "margin": float(margin),
-            "max_loss": float(max_loss),
-            "leverage": int(effective_leverage),
-            "margin_mode": str(system_state["margin_mode"]),
+            "symbol": symbol,
+            "direction": direction,
+            "score": score,
+            "entry": entry,
+            "sl": sl,
+            "tp1": tp1,
+            "tp2": tp2,
+            "pos_size": pos_size,
+            "margin": margin,
+            "max_loss": max_loss,
+            "leverage": effective_leverage,
+            "margin_mode": system_state["margin_mode"],
             "tp1_hit": False,
             "trailing_active": False,
-            "active_size": float(pos_size),
-            "current_price": float(entry),
+            "active_size": pos_size,
+            "current_price": entry,
             "unrealized_pnl": 0.0,
             "progress_pct": 0.0,
             "reasons": reasons,
             "open_time": get_now_str(),
             "open_timestamp": int(get_now_datetime().timestamp())
         }
-    except Exception as e:
-        add_log(f"Analiz Hatası ({symbol}): {str(e)[:50]}")
+    except Exception:
         return None
 
 async def keep_alive_loop():
@@ -524,6 +534,13 @@ async def market_scanner_loop():
                             crypto_symbols.append(s)
 
             system_state["scanned_count"] = len(crypto_symbols)
+
+            # Her tam taramada Radar, o an gerçekten taranan paritelerle senkronize olur.
+            # Böylece delist/volume filtresinden çıkan eski pariteler ekranda kalmaz.
+            scanned_set = set(crypto_symbols)
+            system_state["radar_symbols"] = [
+                r for r in system_state["radar_symbols"] if r.get("symbol") in scanned_set
+            ]
 
             batch_size = 10
             for i in range(0, len(crypto_symbols), batch_size):
@@ -578,27 +595,27 @@ async def market_scanner_loop():
             for pos in list(system_state["active_positions"]):
                 try:
                     ticker = await exchange.fetch_ticker(pos['symbol'])
-                    curr_price = float(ticker['last'])
+                    curr_price = ticker['last']
                     pos['current_price'] = curr_price
                     direction = pos['direction']
                     close_reason = None
 
                     pnl_raw = ((curr_price - pos['entry']) / pos['entry']) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'])
-                    pos['unrealized_pnl'] = float(round(pos['active_size'] * pnl_raw, 2))
+                    pos['unrealized_pnl'] = round(pos['active_size'] * pnl_raw, 2)
 
                     if pos.get("trailing_active"):
                         if direction == "LONG" and curr_price > pos['entry']:
                             new_sl = curr_price * 0.992
                             if new_sl > pos['sl']:
-                                pos['sl'] = float(new_sl)
+                                pos['sl'] = new_sl
                         elif direction == "SHORT" and curr_price < pos['entry']:
                             new_sl = curr_price * 1.008
                             if new_sl < pos['sl']:
-                                pos['sl'] = float(new_sl)
+                                pos['sl'] = new_sl
 
                     target_dist = abs(pos['tp2'] - pos['entry'])
                     favorable_move = (curr_price - pos['entry']) if direction == "LONG" else (pos['entry'] - curr_price)
-                    pos['progress_pct'] = float(max(0.0, min(100.0, round((favorable_move / (target_dist + 1e-9)) * 100, 1))))
+                    pos['progress_pct'] = max(0.0, min(100.0, round((favorable_move / (target_dist + 1e-9)) * 100, 1)))
 
                     if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
                         close_reason = "❌ Stop-Loss Tetiklendi"
@@ -610,10 +627,10 @@ async def market_scanner_loop():
                         elif not pos.get("tp1_hit"):
                             pos["tp1_hit"] = True
                             pos["sl"] = pos["entry"]
-                            partial_pnl = float(round((pos['pos_size'] * 0.5) * pnl_raw, 2))
-                            pos['active_size'] = float(pos['pos_size'] * 0.5)
+                            partial_pnl = round((pos['pos_size'] * 0.5) * pnl_raw, 2)
+                            pos['active_size'] = pos['pos_size'] * 0.5
                             apply_realized_pnl(partial_pnl)
-                            pos["margin"] = float(round(pos.get("margin", 0.0) * 0.5, 2))
+                            pos["margin"] = round(pos.get("margin", 0.0) * 0.5, 2)
                             now_ts = int(get_now_datetime().timestamp())
                             system_state["equity_curve"].append({"time": now_ts, "value": round(system_state["total_balance"], 2)})
                             add_log(f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi.")
@@ -629,25 +646,25 @@ async def market_scanner_loop():
 
                     if close_reason:
                         pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
-                        realized_pnl = float(round(pos['active_size'] * (pnl_pct / 100.0), 2))
+                        realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
                         apply_realized_pnl(realized_pnl)
 
                         now_dt = get_now_datetime()
-                        duration_mins = int(max(1, int((now_dt.timestamp() - pos.get('open_timestamp', now_dt.timestamp())) / 60)))
+                        duration_mins = max(1, int((now_dt.timestamp() - pos.get('open_timestamp', now_dt.timestamp())) / 60))
                         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
                         
                         history_item = {
-                            "symbol": str(pos['symbol']),
-                            "direction": str(pos['direction']),
-                            "entry": float(pos['entry']),
-                            "close_price": float(curr_price),
-                            "pnl_pct": float(round(pnl_pct, 2)),
-                            "realized_pnl": float(realized_pnl),
-                            "score": int(pos['score']),
+                            "symbol": pos['symbol'],
+                            "direction": pos['direction'],
+                            "entry": pos['entry'],
+                            "close_price": curr_price,
+                            "pnl_pct": round(pnl_pct, 2),
+                            "realized_pnl": realized_pnl,
+                            "score": pos['score'],
                             "duration_mins": duration_mins,
                             "open_reasons": pos['reasons'],
-                            "close_reason": str(close_reason),
-                            "close_time": str(now_dt.strftime("%H:%M:%S")),
+                            "close_reason": close_reason,
+                            "close_time": now_dt.strftime("%H:%M:%S"),
                             "close_timestamp": int(now_dt.timestamp())
                         }
                         system_state["trade_history"].insert(0, history_item)
@@ -1551,7 +1568,10 @@ async def get_dashboard(request: Request):
         <!-- SAYFA 7: RADAR -->
         <div id="page-radar" class="hidden space-y-3">
             <div class="card p-4 rounded-xl">
-                <h2 class="text-xs font-semibold text-emerald-400 uppercase mb-3">🔥 700+ Canlı Taranan Parite Radarı</h2>
+                <div class="flex items-center justify-between gap-2 mb-3">
+            <h2 class="text-xs font-semibold text-emerald-400 uppercase">🔥 Canlı Taranan Parite Radarı</h2>
+            <span id="radar-count" class="text-[10px] font-mono text-slate-400">0 parite</span>
+        </div>
                 <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
                     <table class="w-full text-left text-xs">
                         <thead class="text-slate-500 border-b border-slate-800 sticky top-0 bg-[#121824]">
@@ -1944,9 +1964,11 @@ async def get_dashboard(request: Request):
                 resizeCanvas();
             }
 
+            // --- BINANCE API DÜZELTMESİ EKLENDİ ---
             async function fetchCandlesDirect(symbol, interval = '5') {
                 let rawSym = symbol.split('/')[0] + 'USDT'; 
                 
+                // 1000x Coinlerin Binance İsim Formatları
                 const thCoins = ['PEPE', 'SHIB', 'FLOKI', 'BONK', 'LUNC', 'XEC', 'SATS', 'RATS', 'BTT', 'TURBO', 'MEME', 'DOGS'];
                 const baseSym = symbol.split('/')[0].toUpperCase();
                 if (thCoins.includes(baseSym)) {
@@ -2020,6 +2042,7 @@ async def get_dashboard(request: Request):
                             const p = posData.entry < 1 ? 6 : 2;
                             let htmlStr = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span>`;
                             
+                            // EĞER TP'LER AYNIYSA TEK ÇİZGİ
                             if (Math.abs(posData.tp1 - posData.tp2) / posData.entry < 0.001) {
                                 const tpLine = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP (TAM ÇIKIŞ)' });
                                 priceLines.push(tpLine);
@@ -2056,6 +2079,7 @@ async def get_dashboard(request: Request):
                     ? `<div class="bg-emerald-950/60 border border-emerald-800 p-1.5 rounded text-[11px] text-emerald-400 font-bold mb-2">⚡ TP1 Alındı (%50 Kâr Realize Edildi - Stop Giriş Boyuna Çekildi)</div>` 
                     : ``;
 
+                // TP'LER AYNIYSA GÖSTERİMİ DEĞİŞTİR
                 let tpDisplayHtml = "";
                 if (Math.abs(pos.tp1 - pos.tp2) / pos.entry < 0.001) {
                     tpDisplayHtml = `<div class="text-emerald-500 font-bold">TP (TAM ÇIKIŞ): <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>`;
@@ -2155,6 +2179,7 @@ async def get_dashboard(request: Request):
                     if (data.active_positions.length > lastKnownPosCount) playAlertSound();
                     lastKnownPosCount = data.active_positions.length;
 
+                    // LOGLARI GÜNCELLE (Hemen üstte yapıyoruz ki hiçbir hata bunu engellemesin)
                     const logBoxElem = document.getElementById('log-box');
                     if(logBoxElem) {
                         logBoxElem.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
@@ -2284,16 +2309,37 @@ async def get_dashboard(request: Request):
                     }
 
                     const radarTbody = document.getElementById('radar-table');
-                    if (radarTbody && data.radar_symbols) {
-                        radarTbody.innerHTML = [...data.radar_symbols].sort((a,b) => b.score - a.score).map(r => `
-                            <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="currentSymbol='${r.symbol}'; switchTab('terminal'); loadChartCandles('${r.symbol}', null, false);">
-                                <td class="py-2 font-bold text-white">${r.symbol}</td><td class="font-mono">$${r.price}</td>
-                                <td class="font-bold ${r.trend === 'LONG' ? 'text-emerald-400' : 'text-red-400'}">${r.trend}</td>
-                                <td class="font-mono">${r.rsi}</td><td class="font-mono text-amber-400">${r.vol_ratio}x</td>
-                                <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${r.score >= 75 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${r.score} Puan</span></td>
-                            </tr>`).join('');
+                    const radarCount = document.getElementById('radar-count');
+                    if (radarTbody) {
+                        const radarItems = Array.isArray(data.radar_symbols) ? data.radar_symbols : [];
+
+                        if (radarCount) {
+                            radarCount.innerText = `${radarItems.length} parite`;
+                        }
+
+                        if (radarItems.length === 0) {
+                            radarTbody.innerHTML = '<tr><td colspan="6" class="py-6 text-center text-slate-500 italic">Pariteler analiz ediliyor... İlk tarama tamamlandığında burada görünecek.</td></tr>';
+                        } else {
+                            radarTbody.innerHTML = [...radarItems]
+                                .sort((a,b) => Number(b.score || 0) - Number(a.score || 0))
+                                .map(r => {
+                                    const trend = r.trend || '-';
+                                    const trendClass = trend === 'LONG' ? 'text-emerald-400' : (trend === 'SHORT' ? 'text-red-400' : 'text-slate-400');
+                                    const score = Number(r.score || 0);
+                                    return `
+                                    <tr class="hover:bg-slate-800/40 cursor-pointer" onclick="currentSymbol='${r.symbol}'; switchTab('terminal'); loadChartCandles('${r.symbol}', null, false);">
+                                        <td class="py-2 font-bold text-white">${r.symbol}</td>
+                                        <td class="font-mono">$${Number(r.price || 0).toLocaleString(undefined, {maximumFractionDigits: 8})}</td>
+                                        <td class="font-bold ${trendClass}">${trend}</td>
+                                        <td class="font-mono">${Number(r.rsi || 0).toFixed(1)}</td>
+                                        <td class="font-mono text-amber-400">${Number(r.vol_ratio || 0).toFixed(2)}x</td>
+                                        <td><span class="px-2 py-0.5 rounded text-[10px] font-bold ${score >= 75 ? 'bg-emerald-500/20 text-emerald-400' : 'bg-slate-800 text-slate-400'}">${score} Puan</span></td>
+                                    </tr>`;
+                                }).join('');
+                        }
                     }
 
+                    // GRAFİKLERİ VE KASA EĞRİSİ ÇİZİMİNİ EN SONA VE TRY/CATCH İÇİNE ALIYORUZ
                     try {
                         if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) {
                             let eqMap = new Map();
@@ -2307,6 +2353,7 @@ async def get_dashboard(request: Request):
                                 .map(([t, v]) => ({time: t, value: v}))
                                 .sort((a,b) => a.time - b.time);
                                 
+                            // Olası çökme için son güvenlik (zamanların kesin artan sırada olduğundan emin ol)
                             let finalEq = [];
                             let lastTime = 0;
                             for (let i = 0; i < sortedEq.length; i++) {
