@@ -760,7 +760,7 @@ async def update_api(payload: ApiPayload):
 async def toggle_bot_trading():
     system_state["bot_trading_active"] = not system_state.get("bot_trading_active", True)
     status_str = "AÇIK (Yeni Sinyal Alınıyor)" if system_state["bot_trading_active"] else "KAPALI (Yeni Sinyal Durduruldu)"
-    add_log(f"🤖 BOT İŞLEM ALIMI: {status_str}")
+    add_log(f"🤖 Bot İŞLEM ALIMI: {status_str}")
     return {"status": "success", "active": system_state["bot_trading_active"]}
 
 @app.post("/api/manual/close_position")
@@ -1945,11 +1945,9 @@ async def get_dashboard(request: Request):
                 resizeCanvas();
             }
 
-            // --- BINANCE API DÜZELTMESİ EKLENDİ ---
             async function fetchCandlesDirect(symbol, interval = '5') {
                 let rawSym = symbol.split('/')[0] + 'USDT'; 
                 
-                // 1000x Coinlerin Binance İsim Formatları
                 const thCoins = ['PEPE', 'SHIB', 'FLOKI', 'BONK', 'LUNC', 'XEC', 'SATS', 'RATS', 'BTT', 'TURBO', 'MEME', 'DOGS'];
                 const baseSym = symbol.split('/')[0].toUpperCase();
                 if (thCoins.includes(baseSym)) {
@@ -2023,7 +2021,6 @@ async def get_dashboard(request: Request):
                             const p = posData.entry < 1 ? 6 : 2;
                             let htmlStr = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span>`;
                             
-                            // EĞER TP'LER AYNIYSA TEK ÇİZGİ
                             if (Math.abs(posData.tp1 - posData.tp2) / posData.entry < 0.001) {
                                 const tpLine = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP (TAM ÇIKIŞ)' });
                                 priceLines.push(tpLine);
@@ -2060,7 +2057,6 @@ async def get_dashboard(request: Request):
                     ? `<div class="bg-emerald-950/60 border border-emerald-800 p-1.5 rounded text-[11px] text-emerald-400 font-bold mb-2">⚡ TP1 Alındı (%50 Kâr Realize Edildi - Stop Giriş Boyuna Çekildi)</div>` 
                     : ``;
 
-                // TP'LER AYNIYSA GÖSTERİMİ DEĞİŞTİR
                 let tpDisplayHtml = "";
                 if (Math.abs(pos.tp1 - pos.tp2) / pos.entry < 0.001) {
                     tpDisplayHtml = `<div class="text-emerald-500 font-bold">TP (TAM ÇIKIŞ): <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>`;
@@ -2160,7 +2156,6 @@ async def get_dashboard(request: Request):
                     if (data.active_positions.length > lastKnownPosCount) playAlertSound();
                     lastKnownPosCount = data.active_positions.length;
 
-                    // LOGLARI GÜNCELLE
                     const logBoxElem = document.getElementById('log-box');
                     if(logBoxElem) {
                         logBoxElem.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
