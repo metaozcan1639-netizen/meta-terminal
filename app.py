@@ -31,10 +31,10 @@ system_state = {
     "total_balance": 1000.0,
     "peak_balance": 1000.0,
     "max_drawdown_pct": 0.0,
-    "risk_pct": 0.0,
-    "leverage": 0,
+    "risk_pct": 5.0,
+    "leverage": 50,
     "margin_mode": "ISOLATED",
-    "max_open_positions": -1,
+    "max_open_positions": 5,
     "max_total_margin_pct": 50.0,
     "daily_drawdown_limit_pct": 10.0,
     "daily_loss_locked": False,
@@ -76,8 +76,7 @@ system_state = {
         "auto_trade": False
     },
     "equity_curve": [{"time": int(get_now_datetime().timestamp()), "value": 1000.0}],
-    "logs": [],
-    "bot_trading_active": True
+    "logs": []
 }
 
 EXCLUDED_KEYWORDS = [
@@ -86,41 +85,6 @@ EXCLUDED_KEYWORDS = [
     'TBT', 'TLT', 'PDD', 'NIO', 'BILI', 'LI', 'XPEV', 'MSTR', 'MARA', 'RIOT', 'CLSK',
     'CASHCAT', 'WLFI', 'TRUMP', 'MELANIA', 'PEPE2', 'SHIB2'
 ]
-
-async def create_exchange_instance():
-    api_conf = system_state["api_settings"]
-    exch_id = api_conf["exchange"].lower()
-    
-    args = {
-        'enableRateLimit': True,
-        'options': {'defaultType': 'future' if exch_id == 'binance' else 'linear'},
-        'timeout': 10000
-    }
-    
-    if api_conf.get("api_key") and api_conf.get("api_secret"):
-        args['apiKey'] = api_conf["api_key"]
-        args['secret'] = api_conf["api_secret"]
-        
-    exchange_class = getattr(ccxt, exch_id)
-    exchange = exchange_class(args)
-    
-    if api_conf.get("mode") == "TESTNET":
-        exchange.set_sandbox_mode(True)
-        
-    return exchange
-
-async def execute_manual_real_order(symbol, direction, amount_raw):
-    if not system_state["api_settings"]["auto_trade"] or not system_state["api_settings"]["api_key"]:
-        return
-    try:
-        exchange = await create_exchange_instance()
-        close_side = 'sell' if direction == 'LONG' else 'buy'
-        safe_amount = float(exchange.amount_to_precision(symbol, amount_raw))
-        await exchange.create_order(symbol, 'market', close_side, safe_amount)
-        add_log(f"🕹️ MANUEL GERÇEK EMİR İLETİLDİ: {symbol} {close_side.upper()} {safe_amount}")
-        await exchange.close()
-    except Exception as e:
-        add_log(f"❌ MANUEL EMİR HATASI ({symbol}): {str(e)[:60]}")
 
 def translate_fng(classification_en):
     mapping = {
@@ -138,19 +102,6 @@ def add_log(msg: str):
     if len(system_state["logs"]) > 60:
         system_state["logs"].pop()
 
-def sync_wallet_accounting():
-    locked = round(sum(float(p.get("margin", 0.0)) for p in system_state["active_positions"]), 2)
-    unrealized = round(sum(float(p.get("unrealized_pnl", 0.0)) for p in system_state["active_positions"]), 2)
-    system_state["locked_margin"] = float(locked)
-    system_state["unrealized_pnl"] = float(unrealized)
-    system_state["free_balance"] = float(round(max(0.0, system_state["total_balance"] - locked), 2))
-
-def apply_realized_pnl(amount: float):
-    amount = float(round(amount, 2))
-    system_state["realized_pnl"] = float(round(system_state.get("realized_pnl", 0.0) + amount, 2))
-    system_state["total_balance"] = float(round(system_state["total_balance"] + amount, 2))
-    sync_wallet_accounting()
-
 def check_daily_drawdown():
     now_str = get_now_datetime().strftime("%Y-%m-%d")
     if system_state["last_day_reset"] != now_str:
@@ -165,9 +116,9 @@ def check_daily_drawdown():
     peak = system_state["peak_balance"]
     curr = system_state["total_balance"]
     if peak > 0:
-        dd = float(((peak - curr) / peak) * 100)
+        dd = ((peak - curr) / peak) * 100
         if dd > system_state["max_drawdown_pct"]:
-            system_state["max_drawdown_pct"] = float(round(dd, 2))
+            system_state["max_drawdown_pct"] = round(dd, 2)
 
     daily_loss = system_state["daily_start_balance"] - system_state["total_balance"]
     max_allowed_loss = system_state["daily_start_balance"] * (system_state["daily_drawdown_limit_pct"] / 100.0)
@@ -194,21 +145,21 @@ def calculate_indicators(df):
     df['vol_ma'] = df['volume'].rolling(window=20).mean()
     return df
 
-def compute_position_metrics(entry, sl, lev, risk_pct):
+def compute_position_metrics(entry, sl):
     balance = system_state["total_balance"]
-    actual_risk_pct = risk_pct / 100.0
-    leverage = lev
+    risk_pct = system_state["risk_pct"] / 100.0
+    leverage = system_state["leverage"]
 
-    risk_amount = balance * actual_risk_pct
+    risk_amount = balance * risk_pct
     price_risk_pct = abs(entry - sl) / entry
     
     if price_risk_pct == 0:
-        return 0.0, 0.0, 0.0
+        return 0, 0, 0
 
     position_notional = risk_amount / price_risk_pct
     margin_required = position_notional / leverage
 
-    return float(round(position_notional, 2)), float(round(margin_required, 2)), float(round(risk_amount, 2))
+    return round(position_notional, 2), round(margin_required, 2), round(risk_amount, 2)
 
 async def fetch_fear_greed():
     try:
@@ -220,7 +171,7 @@ async def fetch_fear_greed():
                     tr_class = translate_fng(item.get('value_classification', 'Neutral'))
                     system_state["fear_and_greed"] = {
                         "value": int(item['value']),
-                        "classification": str(tr_class)
+                        "classification": tr_class
                     }
     except Exception:
         pass
@@ -235,10 +186,10 @@ async def update_btc_metrics(exchange):
         
         last_1h = df_1h.iloc[-1]
         
-        c_now = float(df_15m['close'].iloc[-1])
-        c_prev = float(df_15m['open'].iloc[-1])
+        c_now = df_15m['close'].iloc[-1]
+        c_prev = df_15m['open'].iloc[-1]
         pct_15m = ((c_now - c_prev) / c_prev) * 100
-        system_state["btc_15m_change"] = float(round(pct_15m, 2))
+        system_state["btc_15m_change"] = round(pct_15m, 2)
 
         if pct_15m <= -1.2:
             system_state["btc_shock_lock"] = True
@@ -250,7 +201,7 @@ async def update_btc_metrics(exchange):
             system_state["btc_shock_lock"] = False
             system_state["btc_shock_reason"] = ""
 
-        if float(last_1h['close']) > float(last_1h['ema50']):
+        if last_1h['close'] > last_1h['ema50']:
             system_state["btc_regime"] = "🟢 BOĞA (YÜKSELİŞ)"
             bias = "BOĞA / LONG"
         else:
@@ -258,18 +209,18 @@ async def update_btc_metrics(exchange):
             bias = "AYI / SHORT"
 
         ticker = await exchange.fetch_ticker('BTC/USDT:USDT')
-        vol_quote = float(ticker.get('quoteVolume', 0))
+        vol_quote = ticker.get('quoteVolume', 0)
         vol_str = f"${vol_quote/1e9:.2f} Milyar" if vol_quote > 1e9 else f"${vol_quote/1e6:.1f} Milyon"
 
-        vol_ratio = (float(last_1h['atr']) / float(last_1h['close'])) * 100 if pd.notnull(last_1h['atr']) else 0.5
+        vol_ratio = (last_1h['atr'] / last_1h['close']) * 100 if pd.notnull(last_1h['atr']) else 0.5
         vol_level = "YÜKSEK" if vol_ratio > 1.2 else ("ORTA" if vol_ratio > 0.6 else "DÜŞÜK")
-        ls_ratio = 47.6 if float(last_1h['close']) < float(last_1h['ema20']) else 52.4
+        ls_ratio = 47.6 if last_1h['close'] < last_1h['ema20'] else 52.4
 
         system_state["sentiment_data"] = {
-            "btc_rsi": float(round(last_1h['rsi'], 1)) if pd.notnull(last_1h['rsi']) else 52.2,
+            "btc_rsi": round(float(last_1h['rsi']), 1) if pd.notnull(last_1h['rsi']) else 52.2,
             "btc_volume_24h": vol_str,
             "market_bias": bias,
-            "long_short_ratio": float(ls_ratio),
+            "long_short_ratio": ls_ratio,
             "market_volatility": vol_level,
             "total_liquidations_24h": "$143.7 Milyon",
             "long_liq_pct": 57.5,
@@ -288,6 +239,9 @@ async def update_btc_metrics(exchange):
 
 async def analyze_symbol(exchange, symbol):
     try:
+        if system_state["daily_loss_locked"]:
+            return None
+
         base = symbol.split('/')[0].upper()
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
@@ -315,43 +269,22 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
-        vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
-
+        # 1. KATMAN: Büyük Resim / Yön Filtresi (1H & 4H Trend Uyumu)
         trend_bull = (c_1h['close'] > c_1h['ema20'] and c_1h['ema20'] > c_1h['ema50']) and (c_4h['close'] > c_4h['ema50'])
         trend_bear = (c_1h['close'] < c_1h['ema20'] and c_1h['ema20'] < c_1h['ema50']) and (c_4h['close'] < c_4h['ema50'])
 
         if trend_bull:
             direction = "LONG"
             score += 35
+            reasons.append("📈 1H & 4H Güçlü Boğa Trend Dizilimi (EMA 20/50)")
         elif trend_bear:
             direction = "SHORT"
             score += 35
-
-        safe_trend = direction if direction else ("LONG" if float(c_5m['close']) > float(c_1h['ema50']) else "SHORT")
-
-        # Radar kaydı
-        radar_item = {
-            "symbol": str(symbol),
-            "price": float(c_5m['close']),
-            "rsi": float(round(c_5m['rsi'], 1)) if pd.notnull(c_5m['rsi']) else 50.0,
-            "vol_ratio": float(round(vol_ratio, 2)),
-            "trend": safe_trend,
-            "score": int(score)
-        }
-        
-        system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
-        system_state["radar_symbols"].append(radar_item)
-        if len(system_state["radar_symbols"]) > 100:
-            system_state["radar_symbols"].pop(0)
-
-        if not direction:
-            return None
-        
-        if direction == "LONG":
-            reasons.append("📈 1H & 4H Güçlü Boğa Trend Dizilimi (EMA 20/50)")
-        else:
             reasons.append("📉 1H & 4H Güçlü Ayı Trend Dizilimi (EMA 20/50)")
+        else:
+            return None
 
+        # 2. KATMAN: Akıllı Geri Çekilme (Pullback / Discount Alanı)
         dist_to_ema20 = abs(c_5m['close'] - c_5m['ema20']) / c_5m['close']
         is_pullback = dist_to_ema20 <= 0.012
 
@@ -359,135 +292,110 @@ async def analyze_symbol(exchange, symbol):
             score += 25
             reasons.append("🎯 Akıllı Geri Çekilme (EMA 20 Pullback Bölgesi)")
         else:
-            radar_item["score"] = score
-            return None 
+            return None
 
+        # 3. KATMAN: Hacim ve Momentum Patlaması (Tetikleyici)
+        vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
         strong_momentum = False
-        if direction == "LONG" and float(c_5m['close']) > float(c_5m['open']) and vol_ratio >= 1.5:
+
+        if direction == "LONG" and c_5m['close'] > c_5m['open'] and vol_ratio >= 1.5:
             strong_momentum = True
-        elif direction == "SHORT" and float(c_5m['close']) < float(c_5m['open']) and vol_ratio >= 1.5:
+        elif direction == "SHORT" and c_5m['close'] < c_5m['open'] and vol_ratio >= 1.5:
             strong_momentum = True
 
         if strong_momentum:
             score += 20
             reasons.append(f"🔥 Güçlü Momentum & Hacim Patlaması ({vol_ratio:.1f}x)")
         else:
-            radar_item["score"] = score
             return None
 
         if len(oi_data) >= 3:
-            oi_prev = float(oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0))
-            oi_curr = float(oi_data[-1].get('openInterestValue') or oi_data[-1].get('openInterest', 0))
+            oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
+            oi_curr = oi_data[-1].get('openInterestValue') or oi_data[-1].get('openInterest', 0)
             if oi_curr > oi_prev:
                 score += 10
                 reasons.append("📊 Açık Pozisyon (OI) Artışı Onayı")
 
-        if 40 <= float(c_5m['rsi']) <= 65:
+        if 40 <= c_5m['rsi'] <= 65:
             score += 10
-            reasons.append(f"🎯 Sağlıklı Momentum RSI ({float(c_5m['rsi']):.1f})")
+            reasons.append(f"🎯 Sağlıklı Momentum RSI ({c_5m['rsi']:.1f})")
 
-        radar_item["score"] = score
+        radar_item = {
+            "symbol": symbol,
+            "price": float(c_5m['close']),
+            "rsi": round(float(c_5m['rsi']), 1) if pd.notnull(c_5m['rsi']) else 50.0,
+            "vol_ratio": round(vol_ratio, 2),
+            "trend": direction,
+            "score": score
+        }
+        system_state["radar_symbols"] = [r for r in system_state["radar_symbols"] if r["symbol"] != symbol]
+        system_state["radar_symbols"].append(radar_item)
+        if len(system_state["radar_symbols"]) > 60:
+            system_state["radar_symbols"].pop(0)
 
         if score < 75:
-            return None
-
-        if system_state["daily_loss_locked"] or not system_state.get("bot_trading_active", True):
             return None
 
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
-        # Yapay Zeka Risk & Kaldıraç
-        effective_leverage = system_state["leverage"]
-        effective_risk = system_state["risk_pct"]
-        vol_pct = (atr / entry) * 100
-
-        if effective_leverage == 0:
-            if vol_pct > 2.0:
-                effective_leverage = 10
-            elif vol_pct > 1.0:
-                effective_leverage = 20
-            elif vol_pct > 0.5:
-                effective_leverage = 30
-            else:
-                effective_leverage = 50
-
-        if effective_risk == 0.0:
-            if score >= 90:
-                effective_risk = 2.0
-            elif score >= 80:
-                effective_risk = 1.5
-            else:
-                effective_risk = 1.0
-
-        try:
-            market_info = exchange.markets.get(symbol, {})
-            max_lev_allowed = market_info.get('limits', {}).get('leverage', {}).get('max', 50)
-            if max_lev_allowed and effective_leverage > max_lev_allowed:
-                effective_leverage = int(max_lev_allowed)
-        except Exception:
-            pass
-
-        # --- DİNAMİK TP BELİRLEME, ÖNE ÇEKME & 1.2R KATI FİLTRE ---
         if direction == "LONG":
             sl = float(df_5m['low'].iloc[-12:].min() - (2.2 * atr))
             if (entry - sl) / entry < 0.015:
                 sl = entry * 0.985
             risk_dist = entry - sl
 
-            # 1H ve 4H Tepelerin 0.5*ATR altına güvenli hedef konur
-            raw_tp1 = float(df_1h['high'].iloc[-30:-1].max()) - (0.5 * atr)
-            raw_tp2 = float(df_4h['high'].iloc[-15:-1].max()) - (0.5 * atr) if len(df_4h) >= 15 else raw_tp1 * 1.02
+            dyn_tp1 = float(df_1h['high'].iloc[-30:-1].max())
+            if (dyn_tp1 - entry) < (1.5 * risk_dist):
+                dyn_tp1 = entry + (1.5 * risk_dist)
 
-            # TP1 en az 1.2R, TP2 en az 2.0R kazanç sunmuyorsa işleme GİRME
-            if (raw_tp1 - entry) < (1.2 * risk_dist) or (raw_tp2 - entry) < (2.0 * risk_dist):
-                return None
+            dyn_tp2 = float(df_4h['high'].iloc[-15:-1].max()) if len(df_4h) >= 15 else dyn_tp1 * 1.02
+            if dyn_tp2 <= dyn_tp1 or (dyn_tp2 - entry) < (2.5 * risk_dist):
+                dyn_tp2 = entry + (3.0 * risk_dist)
 
-            tp1, tp2 = raw_tp1, raw_tp2
-
+            tp1, tp2 = dyn_tp1, dyn_tp2
         else:
             sl = float(df_5m['high'].iloc[-12:].max() + (2.2 * atr))
             if (sl - entry) / entry < 0.015:
                 sl = entry * 1.015
             risk_dist = sl - entry
 
-            # 1H ve 4H Diplere 0.5*ATR eklenerek biraz üstüne güvenli hedef konur
-            raw_tp1 = float(df_1h['low'].iloc[-30:-1].min()) + (0.5 * atr)
-            raw_tp2 = float(df_4h['low'].iloc[-15:-1].min()) + (0.5 * atr) if len(df_4h) >= 15 else raw_tp1 * 0.98
+            dyn_tp1 = float(df_1h['low'].iloc[-30:-1].min())
+            if (entry - dyn_tp1) < (1.5 * risk_dist):
+                dyn_tp1 = entry - (1.5 * risk_dist)
 
-            # TP1 en az 1.2R, TP2 en az 2.0R kazanç sunmuyorsa işleme GİRME
-            if (entry - raw_tp1) < (1.2 * risk_dist) or (entry - raw_tp2) < (2.0 * risk_dist):
-                return None
+            dyn_tp2 = float(df_4h['low'].iloc[-15:-1].min()) if len(df_4h) >= 15 else dyn_tp1 * 0.98
+            if dyn_tp2 >= dyn_tp1 or (entry - dyn_tp2) < (2.5 * risk_dist):
+                dyn_tp2 = entry - (3.0 * risk_dist)
 
-            tp1, tp2 = raw_tp1, raw_tp2
+            tp1, tp2 = dyn_tp1, dyn_tp2
 
-        pos_size, margin, max_loss = compute_position_metrics(entry, sl, effective_leverage, effective_risk)
+        pos_size, margin, max_loss = compute_position_metrics(entry, sl)
 
         return {
-            "symbol": str(symbol),
-            "direction": str(direction),
-            "score": int(score),
-            "entry": float(entry),
-            "sl": float(sl),
-            "tp1": float(tp1),
-            "tp2": float(tp2),
-            "pos_size": float(pos_size),
-            "margin": float(margin),
-            "max_loss": float(max_loss),
-            "leverage": int(effective_leverage),
-            "margin_mode": str(system_state["margin_mode"]),
+            "symbol": symbol,
+            "direction": direction,
+            "score": score,
+            "entry": entry,
+            "sl": sl,
+            "tp1": tp1,
+            "tp2": tp2,
+            "pos_size": pos_size,
+            "margin": margin,
+            "max_loss": max_loss,
+            "leverage": system_state["leverage"],
+            "margin_mode": system_state["margin_mode"],
             "tp1_hit": False,
             "trailing_active": False,
-            "active_size": float(pos_size),
-            "current_price": float(entry),
+            "active_size": pos_size,
+            "current_price": entry,
             "unrealized_pnl": 0.0,
             "progress_pct": 0.0,
             "reasons": reasons,
             "open_time": get_now_str(),
             "open_timestamp": int(get_now_datetime().timestamp())
         }
-    except Exception as e:
-        add_log(f"Analiz Hatası ({symbol}): {str(e)[:50]}")
+    except Exception:
         return None
 
 async def keep_alive_loop():
@@ -503,7 +411,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: 1.2R Minimum Hedef & Likidite Önü Çıkış Devrede...")
+    add_log("Quant Motoru: 1H & 4H Multi-Trend Filtresi ve Pullback Çekilme Modülü Devrede...")
 
     while True:
         exchange = None
@@ -515,7 +423,6 @@ async def market_scanner_loop():
             })
 
             check_daily_drawdown()
-            sync_wallet_accounting()
             await update_btc_metrics(exchange)
             await fetch_fear_greed()
 
@@ -545,51 +452,17 @@ async def market_scanner_loop():
                         exists = any(p['symbol'] == sig['symbol'] for p in system_state["active_positions"])
                         if not exists:
                             max_pos = system_state["max_open_positions"]
-                            if max_pos == -1:
-                                if system_state["btc_shock_lock"]:
-                                    max_pos = 0
-                                elif "AYI" in system_state["btc_regime"]:
-                                    max_pos = 3
-                                elif "BOĞA" in system_state["btc_regime"]:
-                                    max_pos = 8
-                                else:
-                                    max_pos = 5
-
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
-                                continue
-                            if max_pos == 0:
                                 continue
 
                             current_total_margin = sum(p['margin'] for p in system_state["active_positions"])
                             allowed_margin = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
-                            
                             if (current_total_margin + sig['margin']) > allowed_margin:
-                                add_log(f"⚠️ MARJİN LİMİTİ: {sig['symbol']} (${sig['margin']}) reddedildi.")
-                                continue
-                            
-                            if sig['margin'] > system_state["free_balance"]:
-                                add_log(f"⚠️ YETERSİZ KASA: {sig['symbol']} (${sig['margin']}) reddedildi.")
                                 continue
 
                             system_state["active_positions"].append(sig)
-                            sync_wallet_accounting()
                             mode_label = "İzole" if sig['margin_mode'] == "ISOLATED" else "Cross"
                             add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['score']} Puan | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}")
-
-                            if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
-                                try:
-                                    try:
-                                        await exchange.set_leverage(sig['leverage'], sig['symbol'])
-                                    except Exception as e:
-                                        add_log(f"⚠️ Kaldıraç uyarısı: {str(e)[:40]}")
-                                    
-                                    safe_amount = float(exchange.amount_to_precision(sig['symbol'], sig['pos_size']))
-                                    side = 'buy' if sig['direction'] == 'LONG' else 'sell'
-                                    
-                                    await exchange.create_order(sig['symbol'], 'market', side, safe_amount)
-                                    add_log(f"🚀 GERÇEK EMİR İLETİLDİ: {sig['symbol']} {side.upper()} {safe_amount} Adet")
-                                except Exception as e:
-                                    add_log(f"❌ GERÇEK EMİR HATASI ({sig['symbol']}): {str(e)[:60]}")
 
                 system_state["last_scan_time"] = get_now_str()
                 await asyncio.sleep(0.1)
@@ -597,93 +470,70 @@ async def market_scanner_loop():
             for pos in list(system_state["active_positions"]):
                 try:
                     ticker = await exchange.fetch_ticker(pos['symbol'])
-                    curr_price = float(ticker['last'])
+                    curr_price = ticker['last']
                     pos['current_price'] = curr_price
                     direction = pos['direction']
                     close_reason = None
 
                     pnl_raw = ((curr_price - pos['entry']) / pos['entry']) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'])
-                    pos['unrealized_pnl'] = float(round(pos['active_size'] * pnl_raw, 2))
+                    pos['unrealized_pnl'] = round(pos['active_size'] * pnl_raw, 2)
 
                     if pos.get("trailing_active"):
                         if direction == "LONG" and curr_price > pos['entry']:
                             new_sl = curr_price * 0.992
                             if new_sl > pos['sl']:
-                                pos['sl'] = float(new_sl)
+                                pos['sl'] = new_sl
                         elif direction == "SHORT" and curr_price < pos['entry']:
                             new_sl = curr_price * 1.008
                             if new_sl < pos['sl']:
-                                pos['sl'] = float(new_sl)
+                                pos['sl'] = new_sl
 
                     target_dist = abs(pos['tp2'] - pos['entry'])
                     favorable_move = (curr_price - pos['entry']) if direction == "LONG" else (pos['entry'] - curr_price)
-                    pos['progress_pct'] = float(max(0.0, min(100.0, round((favorable_move / (target_dist + 1e-9)) * 100, 1))))
+                    pos['progress_pct'] = max(0.0, min(100.0, round((favorable_move / (target_dist + 1e-9)) * 100, 1)))
 
                     if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
                         close_reason = "❌ Stop-Loss Tetiklendi"
                     elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
                         close_reason = "🎯 TP2 Likidite Havuzuna Ulaşıldı"
                     elif (direction == "LONG" and curr_price >= pos['tp1']) or (direction == "SHORT" and curr_price <= pos['tp1']):
-                        if abs(pos['tp1'] - pos['tp2']) / pos['entry'] < 0.001:
-                            close_reason = "🎯 Tek Hedef (%100) Likidite Havuzuna Ulaşıldı"
-                        elif not pos.get("tp1_hit"):
+                        if not pos.get("tp1_hit"):
                             pos["tp1_hit"] = True
                             pos["sl"] = pos["entry"]
-                            partial_pnl = float(round((pos['pos_size'] * 0.5) * pnl_raw, 2))
-                            pos['active_size'] = float(pos['pos_size'] * 0.5)
-                            apply_realized_pnl(partial_pnl)
-                            pos["margin"] = float(round(pos.get("margin", 0.0) * 0.5, 2))
+                            partial_pnl = round((pos['pos_size'] * 0.5) * pnl_raw, 2)
+                            pos['active_size'] = pos['pos_size'] * 0.5
+                            system_state["total_balance"] += partial_pnl
                             now_ts = int(get_now_datetime().timestamp())
                             system_state["equity_curve"].append({"time": now_ts, "value": round(system_state["total_balance"], 2)})
                             add_log(f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi.")
 
-                            if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
-                                try:
-                                    close_side = 'sell' if pos['direction'] == 'LONG' else 'buy'
-                                    safe_amount = float(exchange.amount_to_precision(pos['symbol'], pos['active_size']))
-                                    await exchange.create_order(pos['symbol'], 'market', close_side, safe_amount)
-                                    add_log(f"⚡ GERÇEK TP1 İLETİLDİ: {pos['symbol']} %50 Kapatıldı")
-                                except Exception as e:
-                                    add_log(f"❌ GERÇEK TP1 HATASI: {str(e)[:60]}")
-
                     if close_reason:
                         pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
-                        realized_pnl = float(round(pos['active_size'] * (pnl_pct / 100.0), 2))
-                        apply_realized_pnl(realized_pnl)
+                        realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
+                        system_state["total_balance"] += realized_pnl
 
                         now_dt = get_now_datetime()
-                        duration_mins = int(max(1, int((now_dt.timestamp() - pos.get('open_timestamp', now_dt.timestamp())) / 60)))
+                        duration_mins = max(1, int((now_dt.timestamp() - pos.get('open_timestamp', now_dt.timestamp())) / 60))
                         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
                         
                         history_item = {
-                            "symbol": str(pos['symbol']),
-                            "direction": str(pos['direction']),
-                            "entry": float(pos['entry']),
-                            "close_price": float(curr_price),
-                            "pnl_pct": float(round(pnl_pct, 2)),
-                            "realized_pnl": float(realized_pnl),
-                            "score": int(pos['score']),
+                            "symbol": pos['symbol'],
+                            "direction": pos['direction'],
+                            "entry": pos['entry'],
+                            "close_price": curr_price,
+                            "pnl_pct": round(pnl_pct, 2),
+                            "realized_pnl": realized_pnl,
+                            "score": pos['score'],
                             "duration_mins": duration_mins,
                             "open_reasons": pos['reasons'],
-                            "close_reason": str(close_reason),
-                            "close_time": str(now_dt.strftime("%H:%M:%S")),
+                            "close_reason": close_reason,
+                            "close_time": now_dt.strftime("%H:%M:%S"),
                             "close_timestamp": int(now_dt.timestamp())
                         }
                         system_state["trade_history"].insert(0, history_item)
                         system_state["active_positions"].remove(pos)
-                        sync_wallet_accounting()
                         add_log(f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}")
                         check_daily_drawdown()
-
-                        if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
-                            try:
-                                close_side = 'sell' if pos['direction'] == 'LONG' else 'buy'
-                                safe_amount = float(exchange.amount_to_precision(pos['symbol'], pos['active_size']))
-                                await exchange.create_order(pos['symbol'], 'market', close_side, safe_amount)
-                                add_log(f"✅ GERÇEK ÇIKIŞ İLETİLDİ: {pos['symbol']} Tamamen Kapatıldı")
-                            except Exception as e:
-                                add_log(f"❌ GERÇEK ÇIKIŞ HATASI ({pos['symbol']}): {str(e)[:60]}")
-
                 except Exception:
                     pass
 
@@ -745,26 +595,16 @@ class DateRangePayload(BaseModel):
 
 @app.post("/api/update_settings")
 async def update_settings(payload: SettingsPayload):
-    if system_state["total_balance"] != payload.total_balance:
-        system_state["initial_balance"] = payload.total_balance
-        system_state["daily_start_balance"] = payload.total_balance
-        system_state["peak_balance"] = payload.total_balance
-        system_state["equity_curve"] = [{"time": int(get_now_datetime().timestamp()), "value": payload.total_balance}]
-        
     system_state["total_balance"] = payload.total_balance
     system_state["risk_pct"] = payload.risk_pct
     system_state["leverage"] = payload.leverage
     system_state["margin_mode"] = payload.margin_mode
     system_state["max_open_positions"] = payload.max_open_positions
     system_state["max_total_margin_pct"] = payload.max_total_margin_pct
-    sync_wallet_accounting()
     
-    pos_limit_str = "Sınırsız" if payload.max_open_positions == 0 else ("Yapay Zeka" if payload.max_open_positions == -1 else f"{payload.max_open_positions} Adet")
+    pos_limit_str = "Sınırsız" if payload.max_open_positions == 0 else f"{payload.max_open_positions} Adet"
     mode_str = "İzole" if payload.margin_mode == "ISOLATED" else "Cross"
-    risk_str = "Yapay Zeka" if payload.risk_pct == 0.0 else f"%{payload.risk_pct}"
-    lev_str = "Yapay Zeka" if payload.leverage == 0 else f"{payload.leverage}x"
-    
-    add_log(f"⚙️ AYARLAR GÜNCELLENDİ: Kasa: ${payload.total_balance} | Mod: {mode_str} | Risk: {risk_str} | Kaldıraç: {lev_str} | Max Poz: {pos_limit_str} | Max Marjin: %{payload.max_total_margin_pct}")
+    add_log(f"⚙️ AYARLAR GÜNCELLENDİ: Kasa: ${payload.total_balance} | Mod: {mode_str} | Risk: %{payload.risk_pct} | Kaldıraç: {payload.leverage}x | Max Poz: {pos_limit_str} | Max Marjin: %{payload.max_total_margin_pct}")
     return {"status": "success"}
 
 @app.post("/api/update_api")
@@ -774,13 +614,6 @@ async def update_api(payload: ApiPayload):
     add_log(f"🔑 API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | Otomatik Emir: {status_str}")
     return {"status": "success"}
 
-@app.post("/api/toggle_bot_trading")
-async def toggle_bot_trading():
-    system_state["bot_trading_active"] = not system_state.get("bot_trading_active", True)
-    status_str = "AÇIK (Yeni Sinyal Alınıyor)" if system_state["bot_trading_active"] else "KAPALI (Yeni Sinyal Durduruldu)"
-    add_log(f"🤖 BOT İŞLEM ALIMI: {status_str}")
-    return {"status": "success", "active": system_state["bot_trading_active"]}
-
 @app.post("/api/manual/close_position")
 async def manual_close_position(payload: ClosePosPayload):
     target = next((p for p in system_state["active_positions"] if p['symbol'] == payload.symbol), None)
@@ -789,7 +622,7 @@ async def manual_close_position(payload: ClosePosPayload):
         direction = target['direction']
         pnl_pct = ((curr_price - target['entry']) / target['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
         realized_pnl = round(target['active_size'] * (pnl_pct / 100.0), 2)
-        apply_realized_pnl(realized_pnl)
+        system_state["total_balance"] += realized_pnl
 
         now_dt = get_now_datetime()
         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
@@ -810,10 +643,7 @@ async def manual_close_position(payload: ClosePosPayload):
         }
         system_state["trade_history"].insert(0, history_item)
         system_state["active_positions"].remove(target)
-        sync_wallet_accounting()
         add_log(f"✋ MANUEL KAPATMA: {target['symbol']} | PnL: ${realized_pnl}")
-        
-        asyncio.create_task(execute_manual_real_order(target['symbol'], target['direction'], target['active_size']))
         return {"status": "success"}
     return {"status": "error"}
 
@@ -827,21 +657,16 @@ async def manual_partial_close(payload: PartialClosePayload):
         
         part_size = target['active_size'] * payload.ratio
         realized_pnl = round(part_size * (pnl_pct / 100.0), 2)
-        apply_realized_pnl(realized_pnl)
-        margin_release = round(target.get("margin", 0.0) * payload.ratio, 2)
+        system_state["total_balance"] += realized_pnl
         target['active_size'] -= part_size
         target['pos_size'] -= part_size
-        target['margin'] = round(max(0.0, target.get("margin", 0.0) - margin_release), 2)
 
         if target['active_size'] <= 0:
             system_state["active_positions"].remove(target)
-        sync_wallet_accounting()
 
         now_dt = get_now_datetime()
         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
         add_log(f"✂️ KADEMELİ KAPATMA (%{int(payload.ratio*100)}): {target['symbol']} | Realize PnL: +${realized_pnl}")
-        
-        asyncio.create_task(execute_manual_real_order(target['symbol'], target['direction'], part_size))
         return {"status": "success"}
     return {"status": "error"}
 
@@ -850,9 +675,9 @@ async def manual_close_all():
     for pos in list(system_state["active_positions"]):
         curr_price = pos.get('current_price', pos['entry'])
         direction = pos['direction']
-        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
+        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
-        apply_realized_pnl(realized_pnl)
+        system_state["total_balance"] += realized_pnl
 
         now_dt = get_now_datetime()
         history_item = {
@@ -871,9 +696,6 @@ async def manual_close_all():
         }
         system_state["trade_history"].insert(0, history_item)
         system_state["active_positions"].remove(pos)
-        asyncio.create_task(execute_manual_real_order(pos['symbol'], pos['direction'], pos['active_size']))
-        
-    sync_wallet_accounting()
     add_log("🚨 TÜM POZİSYONLAR KAPATILDI!")
     return {"status": "success"}
 
@@ -962,7 +784,6 @@ async def download_report(filename: str):
 
 @app.get("/api/state")
 async def get_state():
-    sync_wallet_accounting()
     return system_state
 
 @app.get("/", response_class=HTMLResponse)
@@ -1020,14 +841,7 @@ async def get_dashboard(request: Request):
                 <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ API</button>
             </div>
 
-            <div class="flex items-center space-x-3 text-xs text-slate-400">
-                <button onclick="toggleBotTrading()" id="bot-toggle-btn" class="px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition">🤖 Bot: AÇIK</button>
-                <div class="border-l border-slate-700 h-4 mx-1"></div>
-                <div class="flex items-center space-x-1">
-                    <span class="uppercase tracking-wider">Güncel Kasa:</span>
-                    <span id="top-total-balance" class="text-emerald-400 font-extrabold text-sm font-mono">$1000.00</span>
-                </div>
-                <div class="border-l border-slate-700 h-4 mx-1"></div>
+            <div class="flex space-x-3 text-xs text-slate-400">
                 <div>Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
                 <div>Son: <span id="last-scan" class="text-white font-bold">-</span></div>
             </div>
@@ -1049,11 +863,6 @@ async def get_dashboard(request: Request):
                     </div>
 
                     <div class="flex items-center space-x-3 pt-0.5">
-                        <div>
-                            <div class="text-[9px] text-slate-400 uppercase tracking-wider">Toplam Kasa</div>
-                            <div id="stat-total-balance" class="text-sm font-extrabold font-mono text-white">$1000.00</div>
-                        </div>
-                        <div class="border-r border-slate-800 h-6"></div>
                         <div>
                             <div class="text-[9px] text-slate-400 uppercase tracking-wider" id="pnl-label">Bugün Net PnL</div>
                             <div id="stat-pnl" class="text-sm font-extrabold font-mono text-emerald-400">$0.00</div>
@@ -1091,33 +900,30 @@ async def get_dashboard(request: Request):
                     <div>
                         <label class="text-slate-400 block text-[9px]">RİSK (%)</label>
                         <select id="input-risk" class="bg-slate-800 text-white font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
-                            <option value="0.0" class="text-fuchsia-400 font-bold" selected>Yapay Zeka (Oto)</option>
                             <option value="0.5">%0.5</option>
                             <option value="1.0">%1.0</option>
                             <option value="2.0">%2.0</option>
                             <option value="3.0">%3.0</option>
-                            <option value="5.0">%5.0</option>
+                            <option value="5.0" selected>%5.0</option>
                         </select>
                     </div>
                     <div>
                         <label class="text-slate-400 block text-[9px]">KALDIRAÇ</label>
                         <select id="input-leverage" class="bg-slate-800 text-emerald-400 font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
-                            <option value="0" class="text-fuchsia-400 font-bold" selected>Yapay Zeka (Oto)</option>
                             <option value="5">5x</option>
                             <option value="10">10x</option>
                             <option value="20">20x</option>
-                            <option value="50">50x</option>
+                            <option value="50" selected>50x</option>
                             <option value="75">75x</option>
                         </select>
                     </div>
                     <div>
                         <label class="text-slate-400 block text-[9px]">MAX POZİSYON</label>
                         <select id="input-max-pos" class="bg-slate-800 text-amber-400 font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
-                            <option value="-1" class="text-fuchsia-400 font-bold" selected>Yapay Zeka (Oto)</option>
                             <option value="1">1 Adet</option>
                             <option value="2">2 Adet</option>
                             <option value="3">3 Adet</option>
-                            <option value="5">5 Adet</option>
+                            <option value="5" selected>5 Adet</option>
                             <option value="10">10 Adet</option>
                             <option value="0">Sınırsız</option>
                         </select>
@@ -1750,23 +1556,6 @@ async def get_dashboard(request: Request):
                 }
             }
 
-            async function toggleBotTrading() {
-                try {
-                    const res = await fetch('/api/toggle_bot_trading', { method: 'POST' });
-                    const data = await res.json();
-                    const btn = document.getElementById('bot-toggle-btn');
-                    if (btn) {
-                        if (data.active) {
-                            btn.className = "px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition";
-                            btn.innerText = "🤖 Bot: AÇIK";
-                        } else {
-                            btn.className = "px-2.5 py-1 rounded-lg font-bold bg-rose-600 text-white hover:bg-rose-500 transition";
-                            btn.innerText = "🤖 Bot: KAPALI";
-                        }
-                    }
-                } catch(e) {}
-            }
-
             function setJournalFilter(dir) {
                 journalDirectionFilter = dir;
                 ['ALL', 'LONG', 'SHORT'].forEach(d => {
@@ -1834,7 +1623,7 @@ async def get_dashboard(request: Request):
                         const isSelected = selectedJournalItem && selectedJournalItem.symbol === h.symbol && selectedJournalItem.close_timestamp === h.close_timestamp;
                         let badgeClass = "bg-sky-500/20 text-sky-400 border-sky-500/40";
                         if (h.close_reason.includes("Stop-Loss")) badgeClass = "bg-rose-500/20 text-rose-400 border-rose-500/40";
-                        else if (h.close_reason.includes("TP2") || h.close_reason.includes("%100")) badgeClass = "bg-emerald-500/20 text-emerald-400 border-emerald-500/40";
+                        else if (h.close_reason.includes("TP2")) badgeClass = "bg-emerald-500/20 text-emerald-400 border-emerald-500/40";
 
                         return `
                             <tr class="hover:bg-slate-800/60 cursor-pointer ${isSelected ? 'bg-slate-800/80 border-l-2 border-emerald-500' : ''}" onclick="selectJournalItem(${idx})">
@@ -1967,30 +1756,237 @@ async def get_dashboard(request: Request):
                 resizeCanvas();
             }
 
+            function parseBybitSymbol(symbol) {
+                return symbol.replace('/USDT:USDT', 'USDT').replace('/USDT', 'USDT').replace(':', '');
+            }
+
+            function changeTimeframe(tf) {
+                currentTimeframe = tf;
+                document.querySelectorAll('.tf-btn').forEach(b => b.classList.remove('active'));
+                const btn = document.getElementById(`tf-${tf}`);
+                if (btn) btn.classList.add('active');
+                loadChartCandles(currentSymbol, selectedPos, false);
+            }
+
+            function changePnlFilter(filter) {
+                currentPnlFilter = filter;
+                document.querySelectorAll('.pnl-tf-btn').forEach(b => b.classList.remove('active'));
+                const btn = document.getElementById(`pnl-tf-${filter}`);
+                if (btn) btn.classList.add('active');
+                recalculatePnlMetrics();
+            }
+
+            function changeStatsFilter(filter) {
+                currentStatsFilter = filter;
+                document.querySelectorAll('.stats-tf-btn').forEach(b => b.classList.remove('active'));
+                const btn = document.getElementById(`stats-tf-${filter}`);
+                if (btn) btn.classList.add('active');
+                recalculateAdvancedStats();
+            }
+
+            function getTurkeyTimeBoundaries() {
+                const now = new Date();
+                const trOffset = 3 * 60;
+                const localOffset = now.getTimezoneOffset();
+                const trNow = new Date(now.getTime() + (trOffset + localOffset) * 60 * 1000);
+
+                const todayStart = new Date(trNow.getFullYear(), trNow.getMonth(), trNow.getDate(), 0, 0, 0);
+                const todayStartTs = Math.floor((todayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+                const yesterdayStartTs = Math.floor((yesterdayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                const dayOfWeek = trNow.getDay() === 0 ? 6 : trNow.getDay() - 1;
+                const weekStart = new Date(todayStart.getTime() - dayOfWeek * 24 * 60 * 60 * 1000);
+                const weekStartTs = Math.floor((weekStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                const monthStart = new Date(trNow.getFullYear(), trNow.getMonth(), 1, 0, 0, 0);
+                const monthStartTs = Math.floor((monthStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                return { todayStartTs, yesterdayStartTs, yesterdayEndTs: todayStartTs, weekStartTs, monthStartTs };
+            }
+
+            function loadArchivePreview() {
+                try {
+                    const boundaries = getTurkeyTimeBoundaries();
+                    let todayTrades = tradeHistoryCache.filter(h => (h.close_timestamp || 0) >= boundaries.todayStartTs);
+                    let count = todayTrades.length;
+                    let wins = todayTrades.filter(h => h.realized_pnl > 0).length;
+                    let winRate = count > 0 ? ((wins / count) * 100).toFixed(1) : "0.0";
+                    let totalPnl = todayTrades.reduce((acc, h) => acc + h.realized_pnl, 0);
+
+                    document.getElementById('archive-prev-trades').innerText = count;
+                    document.getElementById('archive-prev-winrate').innerText = `%${winRate}`;
+                    
+                    const pnlEl = document.getElementById('archive-prev-pnl');
+                    pnlEl.innerText = `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`;
+                    pnlEl.className = `text-sm font-extrabold font-mono mt-0.5 ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+                } catch(e) {}
+            }
+
+            async function downloadCustomCsv() {
+                const start = document.getElementById('custom-start-date').value;
+                const end = document.getElementById('custom-end-date').value;
+                if (!start || !end) { alert("Lütfen başlangıç ve bitiş tarihlerini seçin!"); return; }
+
+                try {
+                    const res = await fetch('/api/export/custom_csv', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ start_date: start, end_date: end })
+                    });
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `trades_${start}_to_${end}.csv`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                } catch(e) { alert("Hata oluştu."); }
+            }
+
+            function recalculatePnlMetrics() {
+                try {
+                    const boundaries = getTurkeyTimeBoundaries();
+                    let filtered = [];
+
+                    tradeHistoryCache.forEach(h => {
+                        const ts = h.close_timestamp || 0;
+                        if (currentPnlFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'yesterday' && ts >= boundaries.yesterdayStartTs && ts < boundaries.yesterdayEndTs) filtered.push(h);
+                        else if (currentPnlFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'all') filtered.push(h);
+                    });
+
+                    let periodPnl = 0, winCount = 0;
+                    filtered.forEach(h => {
+                        periodPnl += h.realized_pnl;
+                        if (h.realized_pnl > 0) winCount++;
+                    });
+
+                    periodPnl = Math.round(periodPnl * 100) / 100;
+                    const winRate = filtered.length > 0 ? ((winCount / filtered.length) * 100).toFixed(1) : "0.0";
+
+                    const pnlElem = document.getElementById('stat-pnl');
+                    if (pnlElem) {
+                        pnlElem.innerText = `${periodPnl >= 0 ? '+' : ''}$${periodPnl.toFixed(2)}`;
+                        pnlElem.className = `text-sm font-extrabold font-mono ${periodPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+                    }
+                    document.getElementById('stat-winrate').innerText = `%${winRate}`;
+                    document.getElementById('stat-trades').innerText = filtered.length;
+                } catch(e) {}
+            }
+
+            function recalculateAdvancedStats() {
+                try {
+                    const boundaries = getTurkeyTimeBoundaries();
+                    let filtered = [];
+
+                    tradeHistoryCache.forEach(h => {
+                        const ts = h.close_timestamp || 0;
+                        if (currentStatsFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
+                        else if (currentStatsFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
+                        else if (currentStatsFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
+                        else if (currentStatsFilter === 'all') filtered.push(h);
+                    });
+
+                    let totalWin = 0, totalLoss = 0, winOps = 0, lossOps = 0, longTotal = 0, shortTotal = 0, totalDuration = 0;
+                    let symbolPnlMap = {}, pnlSeries = [], currentWinStreak = 0, maxWinStreak = 0, currentLossStreak = 0, maxLossStreak = 0;
+
+                    const sortedFiltered = [...filtered].sort((a,b) => (a.close_timestamp || 0) - (b.close_timestamp || 0));
+
+                    sortedFiltered.forEach(h => {
+                        totalDuration += (h.duration_mins || 1);
+                        pnlSeries.push(h.realized_pnl);
+
+                        if (h.realized_pnl > 0) {
+                            totalWin += h.realized_pnl; winOps++; currentWinStreak++; currentLossStreak = 0;
+                            if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak;
+                        } else {
+                            totalLoss += Math.abs(h.realized_pnl); lossOps++; currentLossStreak++; currentWinStreak = 0;
+                            if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak;
+                        }
+
+                        if (h.direction === 'LONG') longTotal++; else shortTotal++;
+                        symbolPnlMap[h.symbol] = (symbolPnlMap[h.symbol] || 0) + h.realized_pnl;
+                    });
+
+                    const totalOps = filtered.length;
+                    const winRateVal = totalOps > 0 ? (winOps / totalOps) : 0;
+                    const lossRateVal = totalOps > 0 ? (lossOps / totalOps) : 0;
+                    const avgWinVal = winOps > 0 ? (totalWin / winOps) : 0;
+                    const avgLossVal = lossOps > 0 ? (totalLoss / lossOps) : 0;
+
+                    const expectancy = (winRateVal * avgWinVal) - (lossRateVal * avgLossVal);
+                    const pf = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : (totalWin > 0 ? "∞" : "0.00");
+
+                    let sharpe = "0.00", sortino = "0.00";
+                    if (pnlSeries.length > 1) {
+                        const meanPnl = pnlSeries.reduce((a,b)=>a+b,0) / pnlSeries.length;
+                        const variance = pnlSeries.reduce((a,b)=>a + Math.pow(b - meanPnl, 2), 0) / pnlSeries.length;
+                        const stdDev = Math.sqrt(variance) || 1;
+                        sharpe = (meanPnl / stdDev * Math.sqrt(365)).toFixed(2);
+                        const negativeReturns = pnlSeries.filter(p => p < 0);
+                        const downsideVar = negativeReturns.length > 0 ? negativeReturns.reduce((a,b)=>a + Math.pow(b, 2), 0) / negativeReturns.length : 1;
+                        sortino = (meanPnl / (Math.sqrt(downsideVar) || 1) * Math.sqrt(365)).toFixed(2);
+                    }
+
+                    document.getElementById('stat-pf').innerText = pf;
+                    const expEl = document.getElementById('stat-expectancy');
+                    expEl.innerText = `${expectancy >= 0 ? '+' : ''}$${expectancy.toFixed(2)}`;
+                    expEl.className = `text-xl font-bold font-mono ${expectancy >= 0 ? 'text-sky-400' : 'text-red-400'}`;
+
+                    document.getElementById('stat-sharpe').innerText = `${sharpe} / ${sortino}`;
+                    document.getElementById('stat-avg-win').innerText = `+$${avgWinVal.toFixed(2)}`;
+                    document.getElementById('stat-avg-loss').innerText = `-$${avgLossVal.toFixed(2)}`;
+                    document.getElementById('stat-max-win-streak').innerText = maxWinStreak;
+                    document.getElementById('stat-max-loss-streak').innerText = maxLossStreak;
+                    document.getElementById('stat-avg-duration').innerText = `${totalOps > 0 ? Math.round(totalDuration / totalOps) : 0} Dakika`;
+
+                    const lPct = (longTotal + shortTotal) > 0 ? Math.round((longTotal / (longTotal + shortTotal)) * 100) : 50;
+                    document.getElementById('stat-ls-ratio').innerText = `L: %${lPct} | S: %${100 - lPct}`;
+                    document.getElementById('stat-ls-bar').style.width = `${lPct}%`;
+
+                    const sortedSymbols = Object.keys(symbolPnlMap).sort((a,b) => symbolPnlMap[b] - symbolPnlMap[a]);
+                    const topTbody = document.getElementById('top-symbols-table');
+                    if (topTbody) {
+                        topTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] > 0).slice(0, 5).map(sym => `
+                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-emerald-400">+$${symbolPnlMap[sym].toFixed(2)}</td></tr>
+                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
+                    }
+
+                    const worstTbody = document.getElementById('worst-symbols-table');
+                    if (worstTbody) {
+                        worstTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] < 0).reverse().slice(0, 5).map(sym => `
+                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-rose-400">-$${Math.abs(symbolPnlMap[sym]).toFixed(2)}</td></tr>
+                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
+                    }
+                } catch(e) {}
+            }
+
+            async function loadReportsList() {
+                try {
+                    const res = await fetch('/api/reports/list');
+                    const files = await res.json();
+                    const tbody = document.getElementById('reports-table');
+                    if (tbody) {
+                        tbody.innerHTML = files.map(f => `<tr><td class="py-2 font-mono text-slate-300">📄 ${f}</td><td class="text-right"><a href="/api/reports/download/${f}" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-2 py-1 rounded text-[10px]">İndir</a></td></tr>`).join('') || '<tr><td colspan="2" class="py-2 text-slate-500 italic">Arşiv yok...</td></tr>';
+                    }
+                } catch(e) {}
+            }
+
             async function fetchCandlesDirect(symbol, interval = '5') {
-                let rawSym = symbol.split('/')[0] + 'USDT'; 
-                
-                const thCoins = ['PEPE', 'SHIB', 'FLOKI', 'BONK', 'LUNC', 'XEC', 'SATS', 'RATS', 'BTT', 'TURBO', 'MEME', 'DOGS'];
-                const baseSym = symbol.split('/')[0].toUpperCase();
-                if (thCoins.includes(baseSym)) {
-                    rawSym = '1000' + baseSym + 'USDT';
-                }
-
-                const tfMap = { '1': '1m', '5': '5m', '15': '15m', '60': '1h', '240': '4h', 'D': '1d' };
-                const binanceInterval = tfMap[interval] || '5m';
-
-                const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${rawSym}&interval=${binanceInterval}&limit=1000`;
+                const rawSym = parseBybitSymbol(symbol);
+                const url = `https://api.bybit.com/v5/market/kline?category=linear&symbol=${rawSym}&interval=${interval}&limit=1000`;
                 try {
                     const res = await fetch(url);
-                    const data = await res.json();
-                    if (Array.isArray(data)) {
-                        return data.map(c => ({
-                            time: Math.floor(c[0] / 1000), 
-                            open: parseFloat(c[1]), 
-                            high: parseFloat(c[2]), 
-                            low: parseFloat(c[3]), 
-                            close: parseFloat(c[4])
-                        }));
+                    const json = await res.json();
+                    if (json.result && json.result.list) {
+                        return json.result.list.map(c => ({
+                            time: Math.floor(parseInt(c[0]) / 1000), open: parseFloat(c[1]), high: parseFloat(c[2]), low: parseFloat(c[3]), close: parseFloat(c[4])
+                        })).sort((a, b) => a.time - b.time);
                     }
                 } catch(e) {}
                 return [];
@@ -2037,24 +2033,12 @@ async def get_dashboard(request: Request):
                         if (posData && candleSeries) {
                             const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
                             const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP' });
+                            const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
+                            const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
                             
-                            priceLines.push(entryLine, slLine);
-                            
+                            priceLines.push(entryLine, slLine, tp1Line, tp2Line);
                             const p = posData.entry < 1 ? 6 : 2;
-                            let htmlStr = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span>`;
-                            
-                            if (Math.abs(posData.tp1 - posData.tp2) / posData.entry < 0.001) {
-                                const tpLine = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP (TAM ÇIKIŞ)' });
-                                priceLines.push(tpLine);
-                                htmlStr += ` | <span class="text-emerald-500 font-mono font-bold">TP: ${posData.tp1.toFixed(p)}</span>`;
-                            } else {
-                                const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
-                                const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
-                                priceLines.push(tp1Line, tp2Line);
-                                htmlStr += ` | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
-                            }
-                            
-                            document.getElementById('chart-levels').innerHTML = htmlStr;
+                            document.getElementById('chart-levels').innerHTML = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span> | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
                         } else {
                             document.getElementById('chart-levels').innerHTML = '';
                         }
@@ -2079,16 +2063,6 @@ async def get_dashboard(request: Request):
                     ? `<div class="bg-emerald-950/60 border border-emerald-800 p-1.5 rounded text-[11px] text-emerald-400 font-bold mb-2">⚡ TP1 Alındı (%50 Kâr Realize Edildi - Stop Giriş Boyuna Çekildi)</div>` 
                     : ``;
 
-                let tpDisplayHtml = "";
-                if (Math.abs(pos.tp1 - pos.tp2) / pos.entry < 0.001) {
-                    tpDisplayHtml = `<div class="text-emerald-500 font-bold">TP (TAM ÇIKIŞ): <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>`;
-                } else {
-                    tpDisplayHtml = `
-                        <div class="text-emerald-800 font-bold">TP2: <span class="text-emerald-400">${pos.tp2.toFixed(p)}</span></div>
-                        <div class="text-emerald-600 font-bold">TP1: <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>
-                    `;
-                }
-
                 document.getElementById('active-rationale').innerHTML = `
                     <div class="flex justify-between items-center mb-2"><span class="font-bold text-base text-white">${pos.symbol}</span><span class="px-2 py-0.5 rounded text-xs font-bold ${pos.direction === 'LONG' ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/20 text-red-400'}">${pos.direction}</span></div>
                     ${tp1StatusHtml}
@@ -2096,7 +2070,8 @@ async def get_dashboard(request: Request):
                     <div class="mt-2 p-2 bg-black/40 rounded border border-slate-800 text-[11px] space-y-1 font-mono">
                         <div class="text-slate-400">Giriş Saati: <span class="text-white font-bold font-sans">${pos.open_time}</span></div>
                         <div class="text-slate-400">Mod: <span class="text-white font-bold font-sans">${pos.leverage}x ${modeLabel} ($${pos.margin})</span></div>
-                        ${tpDisplayHtml}
+                        <div class="text-emerald-800 font-bold">TP2: <span class="text-emerald-400">${pos.tp2.toFixed(p)}</span></div>
+                        <div class="text-emerald-600 font-bold">TP1: <span class="text-emerald-400">${pos.tp1.toFixed(p)}</span></div>
                         <div class="text-sky-400 font-bold">Giriş: <span>${pos.entry}</span></div>
                         <div class="text-red-400 font-bold">SL: <span>${pos.sl.toFixed(p)}</span></div>
                     </div>`;
@@ -2178,19 +2153,8 @@ async def get_dashboard(request: Request):
                     if (data.active_positions.length > lastKnownPosCount) playAlertSound();
                     lastKnownPosCount = data.active_positions.length;
 
-                    const logBoxElem = document.getElementById('log-box');
-                    if(logBoxElem) {
-                        logBoxElem.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
-                    }
-
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
-
-                    const topBalanceEl = document.getElementById('top-total-balance');
-                    if(topBalanceEl) {
-                        topBalanceEl.innerText = `$${data.total_balance.toFixed(2)}`;
-                        topBalanceEl.className = `text-emerald-400 font-extrabold text-sm font-mono ${data.total_balance >= data.initial_balance ? 'text-emerald-400' : 'text-rose-400'}`;
-                    }
 
                     if (data.sentiment_data) {
                         document.getElementById('sent-btc-15m').innerText = `${data.btc_15m_change >= 0 ? '+' : ''}%${data.btc_15m_change}`;
@@ -2250,18 +2214,6 @@ async def get_dashboard(request: Request):
                         manPnlEl.className = `text-sm font-bold font-mono ${totalUnrealizedPnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}`;
                     }
 
-                    const totalBalanceElem = document.getElementById('stat-total-balance');
-                    if (totalBalanceElem) {
-                        totalBalanceElem.innerText = `$${data.total_balance.toFixed(2)}`;
-                        if (data.total_balance > data.initial_balance) {
-                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-emerald-400";
-                        } else if (data.total_balance < data.initial_balance) {
-                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-rose-400";
-                        } else {
-                            totalBalanceElem.className = "text-sm font-extrabold font-mono text-white";
-                        }
-                    }
-
                     tradeHistoryCache = data.trade_history;
                     recalculatePnlMetrics();
                     recalculateAdvancedStats();
@@ -2276,35 +2228,8 @@ async def get_dashboard(request: Request):
                         }
                     }
 
-                    try {
-                        if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) {
-                            let eqMap = new Map();
-                            data.equity_curve.forEach(d => {
-                                if(d && !isNaN(d.time)) {
-                                    eqMap.set(Number(d.time), Number(d.value));
-                                }
-                            });
-                            
-                            let sortedEq = Array.from(eqMap.entries())
-                                .map(([t, v]) => ({time: t, value: v}))
-                                .sort((a,b) => a.time - b.time);
-                                
-                            let finalEq = [];
-                            let lastTime = 0;
-                            for (let i = 0; i < sortedEq.length; i++) {
-                                if (sortedEq[i].time > lastTime) {
-                                    finalEq.push(sortedEq[i]);
-                                    lastTime = sortedEq[i].time;
-                                }
-                            }
-                            
-                            if (finalEq.length > 0) {
-                                equitySeries.setData(finalEq);
-                            }
-                        }
-                    } catch(err) {
-                        console.error("Equity Curve Çizim Hatası: ", err);
-                    }
+                    if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) equitySeries.setData(data.equity_curve);
+                    document.getElementById('log-box').innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
 
                     lastPositions = data.active_positions;
                     const activeTbody = document.getElementById('active-pos-table');
@@ -2355,9 +2280,7 @@ async def get_dashboard(request: Request):
 
                     if (currentSymbol) loadChartCandles(currentSymbol, selectedPos, true);
                     if (!selectedPos && data.active_positions.length > 0) selectPosition(data.active_positions[0]);
-                } catch (e) {
-                    console.error("Dashboard Güncelleme Hatası: ", e);
-                }
+                } catch (e) {}
             }
 
             initCharts();
