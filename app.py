@@ -31,10 +31,10 @@ system_state = {
     "total_balance": 1000.0,
     "peak_balance": 1000.0,
     "max_drawdown_pct": 0.0,
-    "risk_pct": 0.0,         # YAPAY ZEKA BAŞLANGIÇ
-    "leverage": 0,           # YAPAY ZEKA BAŞLANGIÇ
+    "risk_pct": 0.0,
+    "leverage": 0,
     "margin_mode": "ISOLATED",
-    "max_open_positions": -1, # YAPAY ZEKA BAŞLANGIÇ
+    "max_open_positions": -1,
     "max_total_margin_pct": 50.0,
     "daily_drawdown_limit_pct": 10.0,
     "daily_loss_locked": False,
@@ -194,7 +194,6 @@ def calculate_indicators(df):
     df['vol_ma'] = df['volume'].rolling(window=20).mean()
     return df
 
-# DEĞİŞTİRİLDİ: Fonksiyon 4 argüman alacak şekilde güncellendi
 def compute_position_metrics(entry, sl, lev, risk_pct):
     balance = system_state["total_balance"]
     actual_risk_pct = risk_pct / 100.0
@@ -318,7 +317,6 @@ async def analyze_symbol(exchange, symbol):
 
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
 
-        # --- YÖN BELİRLEME ---
         trend_bull = (c_1h['close'] > c_1h['ema20'] and c_1h['ema20'] > c_1h['ema50']) and (c_4h['close'] > c_4h['ema50'])
         trend_bear = (c_1h['close'] < c_1h['ema20'] and c_1h['ema20'] < c_1h['ema50']) and (c_4h['close'] < c_4h['ema50'])
 
@@ -331,6 +329,7 @@ async def analyze_symbol(exchange, symbol):
 
         safe_trend = direction if direction else ("LONG" if float(c_5m['close']) > float(c_1h['ema50']) else "SHORT")
 
+        # Radar kaydı
         radar_item = {
             "symbol": str(symbol),
             "price": float(c_5m['close']),
@@ -345,7 +344,6 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 100:
             system_state["radar_symbols"].pop(0)
 
-        # --- FİLTRELEME ---
         if not direction:
             return None
         
@@ -399,14 +397,14 @@ async def analyze_symbol(exchange, symbol):
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
-        # --- YAPAY ZEKA: KALDIRAÇ VE RİSK YÖNETİMİ ---
+        # Yapay Zeka Risk & Kaldıraç
         effective_leverage = system_state["leverage"]
         effective_risk = system_state["risk_pct"]
         vol_pct = (atr / entry) * 100
 
         if effective_leverage == 0:
             if vol_pct > 2.0:
-                effective_leverage = 10   # DENGELENDİ: Aşırı düşük marjin kitlenmesini engeller
+                effective_leverage = 10
             elif vol_pct > 1.0:
                 effective_leverage = 20
             elif vol_pct > 0.5:
@@ -416,11 +414,11 @@ async def analyze_symbol(exchange, symbol):
 
         if effective_risk == 0.0:
             if score >= 90:
-                effective_risk = 2.0  # Mükemmel
+                effective_risk = 2.0
             elif score >= 80:
-                effective_risk = 1.5  # Çok İyi
+                effective_risk = 1.5
             else:
-                effective_risk = 1.0  # Standart
+                effective_risk = 1.0
 
         try:
             market_info = exchange.markets.get(symbol, {})
@@ -430,16 +428,19 @@ async def analyze_symbol(exchange, symbol):
         except Exception:
             pass
 
+        # --- DİNAMİK TP BELİRLEME, ÖNE ÇEKME & 1.2R KATI FİLTRE ---
         if direction == "LONG":
             sl = float(df_5m['low'].iloc[-12:].min() - (2.2 * atr))
             if (entry - sl) / entry < 0.015:
                 sl = entry * 0.985
             risk_dist = entry - sl
 
+            # 1H ve 4H Tepelerin 0.5*ATR altına güvenli hedef konur
             raw_tp1 = float(df_1h['high'].iloc[-30:-1].max()) - (0.5 * atr)
             raw_tp2 = float(df_4h['high'].iloc[-15:-1].max()) - (0.5 * atr) if len(df_4h) >= 15 else raw_tp1 * 1.02
 
-            if (raw_tp1 - entry) < (1.5 * risk_dist) or (raw_tp2 - entry) < (2.5 * risk_dist):
+            # TP1 en az 1.2R, TP2 en az 2.0R kazanç sunmuyorsa işleme GİRME
+            if (raw_tp1 - entry) < (1.2 * risk_dist) or (raw_tp2 - entry) < (2.0 * risk_dist):
                 return None
 
             tp1, tp2 = raw_tp1, raw_tp2
@@ -450,10 +451,12 @@ async def analyze_symbol(exchange, symbol):
                 sl = entry * 1.015
             risk_dist = sl - entry
 
+            # 1H ve 4H Diplere 0.5*ATR eklenerek biraz üstüne güvenli hedef konur
             raw_tp1 = float(df_1h['low'].iloc[-30:-1].min()) + (0.5 * atr)
             raw_tp2 = float(df_4h['low'].iloc[-15:-1].min()) + (0.5 * atr) if len(df_4h) >= 15 else raw_tp1 * 0.98
 
-            if (entry - raw_tp1) < (1.5 * risk_dist) or (entry - raw_tp2) < (2.5 * risk_dist):
+            # TP1 en az 1.2R, TP2 en az 2.0R kazanç sunmuyorsa işleme GİRME
+            if (entry - raw_tp1) < (1.2 * risk_dist) or (entry - raw_tp2) < (2.0 * risk_dist):
                 return None
 
             tp1, tp2 = raw_tp1, raw_tp2
@@ -500,7 +503,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: Yapay Zeka Oto-Yönetim & Likidite Önü Çıkış Devrede...")
+    add_log("Quant Motoru: 1.2R Minimum Hedef & Likidite Önü Çıkış Devrede...")
 
     while True:
         exchange = None
@@ -541,33 +544,31 @@ async def market_scanner_loop():
                     if sig and isinstance(sig, dict):
                         exists = any(p['symbol'] == sig['symbol'] for p in system_state["active_positions"])
                         if not exists:
-                            # --- YAPAY ZEKA: MAX POZİSYON KONTROLÜ ---
                             max_pos = system_state["max_open_positions"]
                             if max_pos == -1:
                                 if system_state["btc_shock_lock"]:
-                                    max_pos = 0 # Şok anında kilit
+                                    max_pos = 0
                                 elif "AYI" in system_state["btc_regime"]:
-                                    max_pos = 3 # Defans
+                                    max_pos = 3
                                 elif "BOĞA" in system_state["btc_regime"]:
-                                    max_pos = 8 # Agresif
+                                    max_pos = 8
                                 else:
-                                    max_pos = 5 # Yatay
+                                    max_pos = 5
 
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
                             if max_pos == 0:
                                 continue
 
-                            # --- MARJİN KONTROLÜ VE LOGLAMA ---
                             current_total_margin = sum(p['margin'] for p in system_state["active_positions"])
                             allowed_margin = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
                             
                             if (current_total_margin + sig['margin']) > allowed_margin:
-                                add_log(f"⚠️ MARJİN LİMİTİ: {sig['symbol']} (${sig['margin']}) reddedildi. İzin verilen boşluk: ${allowed_margin - current_total_margin:.2f}")
+                                add_log(f"⚠️ MARJİN LİMİTİ: {sig['symbol']} (${sig['margin']}) reddedildi.")
                                 continue
                             
                             if sig['margin'] > system_state["free_balance"]:
-                                add_log(f"⚠️ YETERSİZ KASA: {sig['symbol']} (${sig['margin']}) reddedildi. Serbest Bakiye: ${system_state['free_balance']:.2f}")
+                                add_log(f"⚠️ YETERSİZ KASA: {sig['symbol']} (${sig['margin']}) reddedildi.")
                                 continue
 
                             system_state["active_positions"].append(sig)
@@ -1048,6 +1049,11 @@ async def get_dashboard(request: Request):
                     </div>
 
                     <div class="flex items-center space-x-3 pt-0.5">
+                        <div>
+                            <div class="text-[9px] text-slate-400 uppercase tracking-wider">Toplam Kasa</div>
+                            <div id="stat-total-balance" class="text-sm font-extrabold font-mono text-white">$1000.00</div>
+                        </div>
+                        <div class="border-r border-slate-800 h-6"></div>
                         <div>
                             <div class="text-[9px] text-slate-400 uppercase tracking-wider" id="pnl-label">Bugün Net PnL</div>
                             <div id="stat-pnl" class="text-sm font-extrabold font-mono text-emerald-400">$0.00</div>
@@ -2037,7 +2043,6 @@ async def get_dashboard(request: Request):
                             const p = posData.entry < 1 ? 6 : 2;
                             let htmlStr = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span>`;
                             
-                            // EĞER TP'LER AYNIYSA TEK ÇİZGİ
                             if (Math.abs(posData.tp1 - posData.tp2) / posData.entry < 0.001) {
                                 const tpLine = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP (TAM ÇIKIŞ)' });
                                 priceLines.push(tpLine);
@@ -2181,7 +2186,6 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
-                    // Üst Kasa Güncellemesi
                     const topBalanceEl = document.getElementById('top-total-balance');
                     if(topBalanceEl) {
                         topBalanceEl.innerText = `$${data.total_balance.toFixed(2)}`;
