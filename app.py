@@ -92,7 +92,6 @@ EXCLUDED_KEYWORDS = [
 ]
 
 async def create_exchange_instance():
-    """Arayüzdeki ayarlara göre Dinamik Borsa Bağlantısı Kurar."""
     api_conf = system_state["api_settings"]
     exch_id = api_conf["exchange"].lower()
     
@@ -115,7 +114,6 @@ async def create_exchange_instance():
     return exchange
 
 async def execute_manual_real_order(symbol, direction, amount_raw):
-    """Manuel müdahalelerde gerçek borsaya çıkış emri gönderir."""
     if not system_state["api_settings"]["auto_trade"] or not system_state["api_settings"]["api_key"]:
         return
     try:
@@ -200,7 +198,6 @@ def calculate_indicators(df):
     df['vol_ma'] = df['volume'].rolling(window=20).mean()
     return df
 
-# YAPAY ZEKA DİNAMİK RİSK YÖNETİMİ GÜNCELLEMESİ
 def compute_position_metrics(entry, sl, lev, risk_pct):
     balance = system_state["total_balance"]
     actual_risk_pct = risk_pct / 100.0
@@ -372,8 +369,8 @@ async def analyze_symbol(exchange, symbol):
             score += 10
             reasons.append(f"🎯 Dengeli Momentum RSI ({float(c_5m['rsi']):.1f})")
 
-        # RADAR İÇİN GÜVENLİ TİP DÖNÜŞÜMLERİ (Arayüzü Kilitlemeyi Engeller)
-        safe_trend = str(direction) if direction else ("LONG" if float(c_5m['close']) > float(c_5m['ema50']) else "SHORT")
+        # RADAR İÇİN GÜVENLİ TİP DÖNÜŞÜMLERİ
+        safe_trend = str(direction) if direction else ("LONG" if float(c_5m['close']) > float(c_1h['ema50']) else "SHORT")
         
         radar_item = {
             "symbol": str(symbol),
@@ -389,7 +386,6 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
-        # İşlem onaylanmazsa buradan çık
         if not direction or score < 75:
             return None
 
@@ -401,25 +397,22 @@ async def analyze_symbol(exchange, symbol):
 
         vol_pct = (atr / entry) * 100
 
-        # Eğer Otomatik Kaldıraç seçildiyse (0)
         if effective_leverage == 0:
             if vol_pct > 0.8:
-                effective_leverage = 10 # Yüksek volatilite -> Düşük Kaldıraç
+                effective_leverage = 10
             elif vol_pct > 0.4:
-                effective_leverage = 20 # Orta volatilite
+                effective_leverage = 20
             else:
-                effective_leverage = 50 # Düşük volatilite -> Yüksek Kaldıraç
+                effective_leverage = 50
 
-        # Eğer Otomatik Risk seçildiyse (0.0)
         if effective_risk == 0.0:
             if score >= 90:
-                effective_risk = 5.0  # Çok güçlü sinyal
+                effective_risk = 5.0
             elif score >= 80:
-                effective_risk = 3.0  # Güçlü sinyal
+                effective_risk = 3.0
             else:
-                effective_risk = 1.0  # Zayıf sinyal
+                effective_risk = 1.0
 
-        # Binance Kaldıraç Sınırı Koruması
         try:
             market_info = exchange.markets.get(symbol, {})
             max_lev_allowed = market_info.get('limits', {}).get('leverage', {}).get('max', 50)
@@ -545,12 +538,11 @@ async def market_scanner_loop():
                         if not exists:
                             max_pos = system_state["max_open_positions"]
                             
-                            # --- YAPAY ZEKA DİNAMİK MAX POZİSYON ---
                             if max_pos == -1:
                                 if system_state["btc_shock_lock"] or "AYI" in system_state["btc_regime"]:
-                                    max_pos = 5 # Defansif Mod
+                                    max_pos = 5
                                 else:
-                                    max_pos = 15 # Agresif Mod
+                                    max_pos = 15
 
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
@@ -614,7 +606,6 @@ async def market_scanner_loop():
                     elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
                         close_reason = "🎯 TP2 Likidite Havuzuna Ulaşıldı"
                     elif (direction == "LONG" and curr_price >= pos['tp1']) or (direction == "SHORT" and curr_price <= pos['tp1']):
-                        # --- TP1 VE TP2 AYNIYSA %100 KAPAT (DİNAMİK TP BİRLEŞTİRME) ---
                         if abs(pos['tp1'] - pos['tp2']) / pos['entry'] < 0.001:
                             close_reason = "🎯 Tek Hedef (%100) Likidite Havuzuna Ulaşıldı"
                         elif not pos.get("tp1_hit"):
@@ -2169,7 +2160,7 @@ async def get_dashboard(request: Request):
                     if (data.active_positions.length > lastKnownPosCount) playAlertSound();
                     lastKnownPosCount = data.active_positions.length;
 
-                    // LOGLARI GÜNCELLE (Hemen üstte yapıyoruz ki hiçbir hata bunu engellemesin)
+                    // LOGLARI GÜNCELLE
                     const logBoxElem = document.getElementById('log-box');
                     if(logBoxElem) {
                         logBoxElem.innerHTML = data.logs.map(l => `<div>${l}</div>`).join('');
@@ -2309,7 +2300,6 @@ async def get_dashboard(request: Request):
                             </tr>`).join('');
                     }
 
-                    // GRAFİKLERİ VE KASA EĞRİSİ ÇİZİMİNİ EN SONA VE TRY/CATCH İÇİNE ALIYORUZ
                     try {
                         if (data.equity_curve && data.equity_curve.length > 0 && equitySeries) {
                             let eqMap = new Map();
@@ -2323,7 +2313,6 @@ async def get_dashboard(request: Request):
                                 .map(([t, v]) => ({time: t, value: v}))
                                 .sort((a,b) => a.time - b.time);
                                 
-                            // Olası çökme için son güvenlik (zamanların kesin artan sırada olduğundan emin ol)
                             let finalEq = [];
                             let lastTime = 0;
                             for (let i = 0; i < sortedEq.length; i++) {
