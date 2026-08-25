@@ -200,12 +200,13 @@ def calculate_indicators(df):
     df['vol_ma'] = df['volume'].rolling(window=20).mean()
     return df
 
-def compute_position_metrics(entry, sl, lev):
+# YAPAY ZEKA DİNAMİK RİSK YÖNETİMİ GÜNCELLEMESİ
+def compute_position_metrics(entry, sl, lev, risk_pct):
     balance = system_state["total_balance"]
-    risk_pct = system_state["risk_pct"] / 100.0
+    actual_risk_pct = risk_pct / 100.0
     leverage = lev
 
-    risk_amount = balance * risk_pct
+    risk_amount = balance * actual_risk_pct
     price_risk_pct = abs(entry - sl) / entry
     
     if price_risk_pct == 0:
@@ -394,8 +395,31 @@ async def analyze_symbol(exchange, symbol):
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
-        # Binance Kaldıraç Sınırı Koruması
+        # --- YAPAY ZEKA DİNAMİK RİSK & KALDIRAÇ YÖNETİMİ ---
         effective_leverage = system_state["leverage"]
+        effective_risk = system_state["risk_pct"]
+
+        vol_pct = (atr / entry) * 100
+
+        # Eğer Otomatik Kaldıraç seçildiyse (0)
+        if effective_leverage == 0:
+            if vol_pct > 0.8:
+                effective_leverage = 10 # Yüksek volatilite -> Düşük Kaldıraç
+            elif vol_pct > 0.4:
+                effective_leverage = 20 # Orta volatilite
+            else:
+                effective_leverage = 50 # Düşük volatilite -> Yüksek Kaldıraç
+
+        # Eğer Otomatik Risk seçildiyse (0.0)
+        if effective_risk == 0.0:
+            if score >= 90:
+                effective_risk = 5.0  # Çok güçlü sinyal
+            elif score >= 80:
+                effective_risk = 3.0  # Güçlü sinyal
+            else:
+                effective_risk = 1.0  # Zayıf sinyal
+
+        # Binance Kaldıraç Sınırı Koruması
         try:
             market_info = exchange.markets.get(symbol, {})
             max_lev_allowed = market_info.get('limits', {}).get('leverage', {}).get('max', 50)
@@ -436,7 +460,7 @@ async def analyze_symbol(exchange, symbol):
 
             tp1, tp2 = dyn_tp1, dyn_tp2
 
-        pos_size, margin, max_loss = compute_position_metrics(entry, sl, effective_leverage)
+        pos_size, margin, max_loss = compute_position_metrics(entry, sl, effective_leverage, effective_risk)
 
         return {
             "symbol": symbol,
@@ -515,6 +539,14 @@ async def market_scanner_loop():
                         exists = any(p['symbol'] == sig['symbol'] for p in system_state["active_positions"])
                         if not exists:
                             max_pos = system_state["max_open_positions"]
+                            
+                            # --- YAPAY ZEKA DİNAMİK MAX POZİSYON ---
+                            if max_pos == -1:
+                                if system_state["btc_shock_lock"] or "AYI" in system_state["btc_regime"]:
+                                    max_pos = 5 # Defansif Mod
+                                else:
+                                    max_pos = 15 # Agresif Mod
+
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
 
@@ -696,6 +728,13 @@ class DateRangePayload(BaseModel):
 
 @app.post("/api/update_settings")
 async def update_settings(payload: SettingsPayload):
+    # KASA DEĞİŞTİYSE EĞRİYİ YENİ KASADAN BAŞLAT
+    if system_state["total_balance"] != payload.total_balance:
+        system_state["initial_balance"] = payload.total_balance
+        system_state["daily_start_balance"] = payload.total_balance
+        system_state["peak_balance"] = payload.total_balance
+        system_state["equity_curve"] = [{"time": int(get_now_datetime().timestamp()), "value": payload.total_balance}]
+        
     system_state["total_balance"] = payload.total_balance
     system_state["risk_pct"] = payload.risk_pct
     system_state["leverage"] = payload.leverage
@@ -704,9 +743,12 @@ async def update_settings(payload: SettingsPayload):
     system_state["max_total_margin_pct"] = payload.max_total_margin_pct
     sync_wallet_accounting()
     
-    pos_limit_str = "Sınırsız" if payload.max_open_positions == 0 else f"{payload.max_open_positions} Adet"
+    pos_limit_str = "Sınırsız" if payload.max_open_positions == 0 else ("Yapay Zeka" if payload.max_open_positions == -1 else f"{payload.max_open_positions} Adet")
     mode_str = "İzole" if payload.margin_mode == "ISOLATED" else "Cross"
-    add_log(f"⚙️ AYARLAR GÜNCELLENDİ: Kasa: ${payload.total_balance} | Mod: {mode_str} | Risk: %{payload.risk_pct} | Kaldıraç: {payload.leverage}x | Max Poz: {pos_limit_str} | Max Marjin: %{payload.max_total_margin_pct}")
+    risk_str = "Yapay Zeka" if payload.risk_pct == 0.0 else f"%{payload.risk_pct}"
+    lev_str = "Yapay Zeka" if payload.leverage == 0 else f"{payload.leverage}x"
+    
+    add_log(f"⚙️ AYARLAR GÜNCELLENDİ: Kasa: ${payload.total_balance} | Mod: {mode_str} | Risk: {risk_str} | Kaldıraç: {lev_str} | Max Poz: {pos_limit_str} | Max Marjin: %{payload.max_total_margin_pct}")
     return {"status": "success"}
 
 @app.post("/api/update_api")
@@ -1029,6 +1071,7 @@ async def get_dashboard(request: Request):
                     <div>
                         <label class="text-slate-400 block text-[9px]">RİSK (%)</label>
                         <select id="input-risk" class="bg-slate-800 text-white font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
+                            <option value="0.0" class="text-fuchsia-400">Otomatik (Yapay Zeka)</option>
                             <option value="0.5">%0.5</option>
                             <option value="1.0">%1.0</option>
                             <option value="2.0">%2.0</option>
@@ -1039,6 +1082,7 @@ async def get_dashboard(request: Request):
                     <div>
                         <label class="text-slate-400 block text-[9px]">KALDIRAÇ</label>
                         <select id="input-leverage" class="bg-slate-800 text-emerald-400 font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
+                            <option value="0" class="text-fuchsia-400">Otomatik (Yapay Zeka)</option>
                             <option value="5">5x</option>
                             <option value="10">10x</option>
                             <option value="20">20x</option>
@@ -1049,6 +1093,7 @@ async def get_dashboard(request: Request):
                     <div>
                         <label class="text-slate-400 block text-[9px]">MAX POZİSYON</label>
                         <select id="input-max-pos" class="bg-slate-800 text-amber-400 font-bold px-1 py-0.5 rounded outline-none border border-slate-700">
+                            <option value="-1" class="text-fuchsia-400">Otomatik (Yapay Zeka)</option>
                             <option value="1">1 Adet</option>
                             <option value="2">2 Adet</option>
                             <option value="3">3 Adet</option>
