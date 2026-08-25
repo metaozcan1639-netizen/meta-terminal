@@ -78,7 +78,7 @@ system_state = {
     "equity_curve": [{"time": int(get_now_datetime().timestamp()), "value": 1000.0}],
     "logs": [],
     "bot_trading_active": True,
-    "ai_mode_active": True  # YENİ EKLENDİ: Otonom Yapay Zeka Ana Şalteri
+    "ai_mode_active": True
 }
 
 EXCLUDED_KEYWORDS = [
@@ -318,7 +318,6 @@ async def analyze_symbol(exchange, symbol):
 
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
 
-        # --- YÖN BELİRLEME (Radar İçin Önden Belirleniyor) ---
         trend_bull = (c_1h['close'] > c_1h['ema20'] and c_1h['ema20'] > c_1h['ema50']) and (c_4h['close'] > c_4h['ema50'])
         trend_bear = (c_1h['close'] < c_1h['ema20'] and c_1h['ema20'] < c_1h['ema50']) and (c_4h['close'] < c_4h['ema50'])
 
@@ -331,7 +330,6 @@ async def analyze_symbol(exchange, symbol):
 
         safe_trend = direction if direction else ("LONG" if float(c_5m['close']) > float(c_1h['ema50']) else "SHORT")
 
-        # RADARA KAYIT (Filtrelere Çarpmadan Önce)
         radar_item = {
             "symbol": str(symbol),
             "price": float(c_5m['close']),
@@ -346,7 +344,6 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 100:
             system_state["radar_symbols"].pop(0)
 
-        # --- FİLTRELEME BAŞLIYOR ---
         if not direction:
             return None
         
@@ -394,18 +391,14 @@ async def analyze_symbol(exchange, symbol):
         if score < 75:
             return None
 
-        # Şok Anı veya Limit Dolumu (Radarda var, işlemde yok)
         if system_state["daily_loss_locked"] or not system_state.get("bot_trading_active", True):
             return None
 
         entry = float(c_5m['close'])
         atr = float(c_5m['atr']) if pd.notnull(c_5m['atr']) else entry * 0.008
 
-        # --- YAPAY ZEKA: KALDIRAÇ VE RİSK YÖNETİMİ ---
         if system_state.get("ai_mode_active", True):
             vol_pct = (atr / entry) * 100
-            
-            # Volatiliteye Göre Kaldıraç
             if vol_pct > 2.0:
                 effective_leverage = 10
             elif vol_pct > 1.0:
@@ -415,7 +408,6 @@ async def analyze_symbol(exchange, symbol):
             else:
                 effective_leverage = 50
 
-            # Puana Göre Risk
             if score >= 90:
                 effective_risk = 2.0
             elif score >= 80:
@@ -423,7 +415,6 @@ async def analyze_symbol(exchange, symbol):
             else:
                 effective_risk = 1.0
                 
-            # Kasa Koruma Freni (Günlük limitin yarısı eridiyse riski düşür)
             peak = system_state.get("peak_balance", 1000)
             curr = system_state.get("total_balance", 1000)
             daily_limit = system_state.get("daily_drawdown_limit_pct", 10)
@@ -445,7 +436,6 @@ async def analyze_symbol(exchange, symbol):
         except Exception:
             pass
 
-        # --- 0.5 ATR GÜVENLİK PAYI VE 1.2R KATI FİLTRE ---
         if direction == "LONG":
             sl = float(df_5m['low'].iloc[-12:].min() - (2.2 * atr))
             if (entry - sl) / entry < 0.015:
@@ -558,7 +548,6 @@ async def market_scanner_loop():
                     if sig and isinstance(sig, dict):
                         exists = any(p['symbol'] == sig['symbol'] for p in system_state["active_positions"])
                         if not exists:
-                            # --- YZ veya MANUEL MAX POZİSYON KONTROLÜ ---
                             if system_state.get("ai_mode_active", True):
                                 if system_state["btc_shock_lock"]:
                                     max_pos = 0
@@ -576,7 +565,6 @@ async def market_scanner_loop():
                             if max_pos > 0 and len(system_state["active_positions"]) >= max_pos:
                                 continue
 
-                            # --- MARJİN KONTROLÜ VE YZ ŞEFFAF LOGLAMA ---
                             current_total_margin = sum(p['margin'] for p in system_state["active_positions"])
                             allowed_margin = system_state["total_balance"] * (system_state["max_total_margin_pct"] / 100.0)
                             
@@ -1993,6 +1981,199 @@ async def get_dashboard(request: Request):
                 resizeCanvas();
             }
 
+            function getTurkeyTimeBoundaries() {
+                const now = new Date();
+                const trOffset = 3 * 60;
+                const localOffset = now.getTimezoneOffset();
+                const trNow = new Date(now.getTime() + (trOffset + localOffset) * 60 * 1000);
+
+                const todayStart = new Date(trNow.getFullYear(), trNow.getMonth(), trNow.getDate(), 0, 0, 0);
+                const todayStartTs = Math.floor((todayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                const yesterdayStart = new Date(todayStart.getTime() - 24 * 60 * 60 * 1000);
+                const yesterdayStartTs = Math.floor((yesterdayStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                const dayOfWeek = trNow.getDay() === 0 ? 6 : trNow.getDay() - 1;
+                const weekStart = new Date(todayStart.getTime() - dayOfWeek * 24 * 60 * 60 * 1000);
+                const weekStartTs = Math.floor((weekStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                const monthStart = new Date(trNow.getFullYear(), trNow.getMonth(), 1, 0, 0, 0);
+                const monthStartTs = Math.floor((monthStart.getTime() - (trOffset + localOffset) * 60 * 1000) / 1000);
+
+                return { todayStartTs, yesterdayStartTs, yesterdayEndTs: todayStartTs, weekStartTs, monthStartTs };
+            }
+
+            function loadArchivePreview() {
+                try {
+                    const boundaries = getTurkeyTimeBoundaries();
+                    let todayTrades = tradeHistoryCache.filter(h => (h.close_timestamp || 0) >= boundaries.todayStartTs);
+                    let count = todayTrades.length;
+                    let wins = todayTrades.filter(h => h.realized_pnl > 0).length;
+                    let winRate = count > 0 ? ((wins / count) * 100).toFixed(1) : "0.0";
+                    let totalPnl = todayTrades.reduce((acc, h) => acc + h.realized_pnl, 0);
+
+                    document.getElementById('archive-prev-trades').innerText = count;
+                    document.getElementById('archive-prev-winrate').innerText = `%${winRate}`;
+                    
+                    const pnlEl = document.getElementById('archive-prev-pnl');
+                    pnlEl.innerText = `${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}`;
+                    pnlEl.className = `text-sm font-extrabold font-mono mt-0.5 ${totalPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+                } catch(e) {}
+            }
+
+            async function downloadCustomCsv() {
+                const start = document.getElementById('custom-start-date').value;
+                const end = document.getElementById('custom-end-date').value;
+                if (!start || !end) { alert("Lütfen başlangıç ve bitiş tarihlerini seçin!"); return; }
+
+                try {
+                    const res = await fetch('/api/export/custom_csv', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ start_date: start, end_date: end })
+                    });
+                    const blob = await res.blob();
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `trades_${start}_to_${end}.csv`;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                } catch(e) { alert("Hata oluştu."); }
+            }
+
+            function recalculatePnlMetrics() {
+                try {
+                    const boundaries = getTurkeyTimeBoundaries();
+                    let filtered = [];
+
+                    tradeHistoryCache.forEach(h => {
+                        const ts = h.close_timestamp || 0;
+                        if (currentPnlFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'yesterday' && ts >= boundaries.yesterdayStartTs && ts < boundaries.yesterdayEndTs) filtered.push(h);
+                        else if (currentPnlFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
+                        else if (currentPnlFilter === 'all') filtered.push(h);
+                    });
+
+                    let periodPnl = 0, winCount = 0;
+                    filtered.forEach(h => {
+                        periodPnl += h.realized_pnl;
+                        if (h.realized_pnl > 0) winCount++;
+                    });
+
+                    periodPnl = Math.round(periodPnl * 100) / 100;
+                    const winRate = filtered.length > 0 ? ((winCount / filtered.length) * 100).toFixed(1) : "0.0";
+
+                    const pnlElem = document.getElementById('stat-pnl');
+                    if (pnlElem) {
+                        pnlElem.innerText = `${periodPnl >= 0 ? '+' : ''}$${periodPnl.toFixed(2)}`;
+                        pnlElem.className = `text-sm font-extrabold font-mono ${periodPnl >= 0 ? 'text-emerald-400' : 'text-red-400'}`;
+                    }
+                    document.getElementById('stat-winrate').innerText = `%${winRate}`;
+                    document.getElementById('stat-trades').innerText = filtered.length;
+                } catch(e) {}
+            }
+
+            function recalculateAdvancedStats() {
+                try {
+                    const boundaries = getTurkeyTimeBoundaries();
+                    let filtered = [];
+
+                    tradeHistoryCache.forEach(h => {
+                        const ts = h.close_timestamp || 0;
+                        if (currentStatsFilter === 'today' && ts >= boundaries.todayStartTs) filtered.push(h);
+                        else if (currentStatsFilter === 'week' && ts >= boundaries.weekStartTs) filtered.push(h);
+                        else if (currentStatsFilter === 'month' && ts >= boundaries.monthStartTs) filtered.push(h);
+                        else if (currentStatsFilter === 'all') filtered.push(h);
+                    });
+
+                    let totalWin = 0, totalLoss = 0, winOps = 0, lossOps = 0, longTotal = 0, shortTotal = 0, totalDuration = 0;
+                    let symbolPnlMap = {}, pnlSeries = [], currentWinStreak = 0, maxWinStreak = 0, currentLossStreak = 0, maxLossStreak = 0;
+
+                    const sortedFiltered = [...filtered].sort((a,b) => (a.close_timestamp || 0) - (b.close_timestamp || 0));
+
+                    sortedFiltered.forEach(h => {
+                        totalDuration += (h.duration_mins || 1);
+                        pnlSeries.push(h.realized_pnl);
+
+                        if (h.realized_pnl > 0) {
+                            totalWin += h.realized_pnl; winOps++; currentWinStreak++; currentLossStreak = 0;
+                            if (currentWinStreak > maxWinStreak) maxWinStreak = currentWinStreak;
+                        } else {
+                            totalLoss += Math.abs(h.realized_pnl); lossOps++; currentLossStreak++; currentWinStreak = 0;
+                            if (currentLossStreak > maxLossStreak) maxLossStreak = currentLossStreak;
+                        }
+
+                        if (h.direction === 'LONG') longTotal++; else shortTotal++;
+                        symbolPnlMap[h.symbol] = (symbolPnlMap[h.symbol] || 0) + h.realized_pnl;
+                    });
+
+                    const totalOps = filtered.length;
+                    const winRateVal = totalOps > 0 ? (winOps / totalOps) : 0;
+                    const lossRateVal = totalOps > 0 ? (lossOps / totalOps) : 0;
+                    const avgWinVal = winOps > 0 ? (totalWin / winOps) : 0;
+                    const avgLossVal = lossOps > 0 ? (totalLoss / lossOps) : 0;
+
+                    const expectancy = (winRateVal * avgWinVal) - (lossRateVal * avgLossVal);
+                    const pf = totalLoss > 0 ? (totalWin / totalLoss).toFixed(2) : (totalWin > 0 ? "∞" : "0.00");
+
+                    let sharpe = "0.00", sortino = "0.00";
+                    if (pnlSeries.length > 1) {
+                        const meanPnl = pnlSeries.reduce((a,b)=>a+b,0) / pnlSeries.length;
+                        const variance = pnlSeries.reduce((a,b)=>a + Math.pow(b - meanPnl, 2), 0) / pnlSeries.length;
+                        const stdDev = Math.sqrt(variance) || 1;
+                        sharpe = (meanPnl / stdDev * Math.sqrt(365)).toFixed(2);
+                        const negativeReturns = pnlSeries.filter(p => p < 0);
+                        const downsideVar = negativeReturns.length > 0 ? negativeReturns.reduce((a,b)=>a + Math.pow(b, 2), 0) / negativeReturns.length : 1;
+                        sortino = (meanPnl / (Math.sqrt(downsideVar) || 1) * Math.sqrt(365)).toFixed(2);
+                    }
+
+                    document.getElementById('stat-pf').innerText = pf;
+                    const expEl = document.getElementById('stat-expectancy');
+                    expEl.innerText = `${expectancy >= 0 ? '+' : ''}$${expectancy.toFixed(2)}`;
+                    expEl.className = `text-xl font-bold font-mono ${expectancy >= 0 ? 'text-sky-400' : 'text-red-400'}`;
+
+                    document.getElementById('stat-sharpe').innerText = `${sharpe} / ${sortino}`;
+                    document.getElementById('stat-avg-win').innerText = `+$${avgWinVal.toFixed(2)}`;
+                    document.getElementById('stat-avg-loss').innerText = `-$${avgLossVal.toFixed(2)}`;
+                    document.getElementById('stat-max-win-streak').innerText = maxWinStreak;
+                    document.getElementById('stat-max-loss-streak').innerText = maxLossStreak;
+                    document.getElementById('stat-avg-duration').innerText = `${totalOps > 0 ? Math.round(totalDuration / totalOps) : 0} Dakika`;
+
+                    const lPct = (longTotal + shortTotal) > 0 ? Math.round((longTotal / (longTotal + shortTotal)) * 100) : 50;
+                    document.getElementById('stat-ls-ratio').innerText = `L: %${lPct} | S: %${100 - lPct}`;
+                    document.getElementById('stat-ls-bar').style.width = `${lPct}%`;
+
+                    const sortedSymbols = Object.keys(symbolPnlMap).sort((a,b) => symbolPnlMap[b] - symbolPnlMap[a]);
+                    const topTbody = document.getElementById('top-symbols-table');
+                    if (topTbody) {
+                        topTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] > 0).slice(0, 5).map(sym => `
+                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-emerald-400">+$${symbolPnlMap[sym].toFixed(2)}</td></tr>
+                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
+                    }
+
+                    const worstTbody = document.getElementById('worst-symbols-table');
+                    if (worstTbody) {
+                        worstTbody.innerHTML = sortedSymbols.filter(s => symbolPnlMap[s] < 0).reverse().slice(0, 5).map(sym => `
+                            <tr><td class="py-2 font-bold text-white">${sym}</td><td class="text-slate-400">${filtered.filter(h => h.symbol === sym).length}</td><td class="font-bold text-right text-rose-400">-$${Math.abs(symbolPnlMap[sym]).toFixed(2)}</td></tr>
+                        `).join('') || '<tr><td colspan="3" class="py-2 text-slate-500 italic">Veri yok...</td></tr>';
+                    }
+                } catch(e) {}
+            }
+
+            async function loadReportsList() {
+                try {
+                    const res = await fetch('/api/reports/list');
+                    const files = await res.json();
+                    const tbody = document.getElementById('reports-table');
+                    if (tbody) {
+                        tbody.innerHTML = files.map(f => `<tr><td class="py-2 font-mono text-slate-300">📄 ${f}</td><td class="text-right"><a href="/api/reports/download/${f}" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-2 py-1 rounded text-[10px]">İndir</a></td></tr>`).join('') || '<tr><td colspan="2" class="py-2 text-slate-500 italic">Arşiv yok...</td></tr>';
+                    }
+                } catch(e) {}
+            }
+
             async function fetchCandlesDirect(symbol, interval = '5') {
                 let rawSym = symbol.split('/')[0] + 'USDT'; 
                 
@@ -2212,7 +2393,6 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
-                    // OTONOM MOD KONTROLÜ
                     const isAiActive = data.ai_mode_active;
                     const aiBtn = document.getElementById('ai-toggle-btn');
                     if (aiBtn) {
