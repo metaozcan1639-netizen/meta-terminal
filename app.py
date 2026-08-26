@@ -43,7 +43,7 @@ system_state = {
     "daily_drawdown_limit_pct": 10.0,
     "daily_loss_locked": False,
     "daily_start_balance": 1000.0,
-    "last_day_reset": get_now_datetime().strftime("%Y-%m-%d"), # HATA DÜZELTİLDİ: Eksik anahtar eklendi
+    "last_day_reset": get_now_datetime().strftime("%Y-%m-%d"),
     "btc_regime": "YÜKLENİYOR...",
     "btc_15m_change": 0.0,
     "btc_shock_lock": False,
@@ -96,7 +96,6 @@ EXCLUDED_KEYWORDS = [
     'CASHCAT', 'WLFI', 'TRUMP', 'MELANIA', 'PEPE2', 'SHIB2'
 ]
 
-# Sektör Dağılımı ve Korelasyon Koruması İçin
 SECTORS = {
     "AI": ["FET", "AGIX", "OCEAN", "RNDR", "WLD", "ARKM", "TAO", "NEAR", "ICP", "GRT"],
     "MEME": ["PEPE", "DOGE", "SHIB", "FLOKI", "BONK", "WIF", "BOME", "MEME", "DOGS"],
@@ -123,7 +122,7 @@ def is_macro_event_near():
         if now > ev: 
             ev = ev.replace(month = ev.month % 12 + 1)
         diff = abs((now - ev).total_seconds())
-        if diff <= 3600: # +/- 1 SAAT FRENİ
+        if diff <= 3600:
             return True
     return False
 
@@ -292,7 +291,6 @@ async def update_btc_metrics(exchange):
         pct_15m = ((c_now - c_prev) / c_prev) * 100
         system_state["btc_15m_change"] = round(pct_15m, 2)
 
-        # FLASH CRASH SİGORTASI
         if pct_15m <= -10.0:
             system_state["flash_crash_active"] = True
             system_state["bot_trading_active"] = False
@@ -626,7 +624,6 @@ async def keep_alive_loop():
             except Exception:
                 pass
 
-# AVCI DÖNGÜ: Sadece Piyasayı Tarar ve İşlem Fırsatı Arar (Tıkanıklık Yaratmaz)
 async def market_scanner_loop():
     await asyncio.sleep(2)
     add_log("Quant Motoru (Avcı): 1H Ana Trend Filtresi Aktif | Likit Kripto Taraması Devrede...")
@@ -738,7 +735,6 @@ async def market_scanner_loop():
                     pass
             await asyncio.sleep(2)
 
-# KORUYUCU DÖNGÜ (Protector): Yalnızca açık işlemleri saniyede bir kontrol edip SL/TP ve Trailing hesaplar.
 async def position_manager_loop():
     await asyncio.sleep(5)
     add_log("🛡️ Koruyucu Döngü (Protector) Aktif: Açık pozisyonlar milisaniyelik takip ediliyor.")
@@ -773,7 +769,6 @@ async def position_manager_loop():
                     pnl_raw = ((curr_price - pos['entry']) / pos['entry']) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'])
                     pos['unrealized_pnl'] = round(pos['active_size'] * pnl_raw, 2)
 
-                    # AKILLI ATR TRAILING STOP KONTROLÜ
                     if pos.get("trailing_active"):
                         atr_val = pos.get("atr", curr_price * 0.01)
                         if direction == "LONG" and curr_price > pos['entry']:
@@ -787,7 +782,6 @@ async def position_manager_loop():
                     favorable_move = (curr_price - pos['entry']) if direction == "LONG" else (pos['entry'] - curr_price)
                     pos['progress_pct'] = max(0.0, min(100.0, round((favorable_move / (target_dist + 1e-9)) * 100, 1)))
 
-                    # ZAMAN AŞIMI (6 SAAT) ÇIKIŞI
                     if now_ts - pos.get('open_timestamp', now_ts) > 6 * 3600:
                         close_reason = "⏳ 6 Saat Zaman Aşımı (Momentum Kaybı)"
                     elif (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
@@ -857,7 +851,7 @@ async def position_manager_loop():
                     pass
 
             await exchange.close()
-            await asyncio.sleep(1) # Hızlı tepki süresi için 1 saniyelik Koruyucu döngü hızı
+            await asyncio.sleep(1) 
         except Exception as e:
             if exchange:
                 try: await exchange.close()
@@ -913,13 +907,13 @@ class DateRangePayload(BaseModel):
 
 @app.post("/api/update_settings")
 async def update_settings(payload: SettingsPayload):
-    if system_state["total_balance"] != payload.total_balance:
+    if abs(system_state["total_balance"] - payload.total_balance) > 1.0:
         system_state["initial_balance"] = payload.total_balance
         system_state["daily_start_balance"] = payload.total_balance
         system_state["peak_balance"] = payload.total_balance
         system_state["equity_curve"] = [{"time": int(get_now_datetime().timestamp()), "value": payload.total_balance}]
+        system_state["total_balance"] = payload.total_balance
         
-    system_state["total_balance"] = payload.total_balance
     system_state["risk_pct"] = payload.risk_pct
     system_state["leverage"] = payload.leverage
     system_state["margin_mode"] = payload.margin_mode
@@ -962,6 +956,9 @@ async def manual_close_position(payload: ClosePosPayload):
         now_dt = get_now_datetime()
         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
 
+        # GERÇEK İŞLEM SÜRESİ HESAPLAMA EKLENDİ
+        duration_mins = max(1, int((now_dt.timestamp() - target.get('open_timestamp', now_dt.timestamp())) / 60))
+
         history_item = {
             "symbol": target['symbol'],
             "direction": target['direction'],
@@ -970,7 +967,7 @@ async def manual_close_position(payload: ClosePosPayload):
             "pnl_pct": round(pnl_pct, 2),
             "realized_pnl": realized_pnl,
             "score": target['score'],
-            "duration_mins": 1,
+            "duration_mins": duration_mins,
             "open_reasons": target['reasons'],
             "close_reason": "✋ MANUEL KAPATILDI",
             "close_time": now_dt.strftime("%H:%M:%S"),
@@ -1015,6 +1012,7 @@ async def manual_partial_close(payload: PartialClosePayload):
 
 @app.post("/api/manual/close_all")
 async def manual_close_all():
+    now_dt = get_now_datetime()
     for pos in list(system_state["active_positions"]):
         curr_price = pos.get('current_price', pos['entry'])
         direction = pos['direction']
@@ -1022,7 +1020,8 @@ async def manual_close_all():
         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
         apply_realized_pnl(realized_pnl)
 
-        now_dt = get_now_datetime()
+        duration_mins = max(1, int((now_dt.timestamp() - pos.get('open_timestamp', now_dt.timestamp())) / 60))
+
         history_item = {
             "symbol": pos['symbol'],
             "direction": pos['direction'],
@@ -1031,7 +1030,7 @@ async def manual_close_all():
             "pnl_pct": round(pnl_pct, 2),
             "realized_pnl": realized_pnl,
             "score": pos['score'],
-            "duration_mins": 1,
+            "duration_mins": duration_mins,
             "open_reasons": pos['reasons'],
             "close_reason": "🚨 ACİL TÜMÜNÜ KAPAT",
             "close_time": now_dt.strftime("%H:%M:%S"),
@@ -1294,7 +1293,7 @@ async def get_dashboard(request: Request):
                             <option value="100">%100</option>
                         </select>
                     </div>
-                    <button onclick="saveSettings()" class="mt-3 bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-2 py-1 rounded transition text-xs">KAYDET</button>
+                    <button onclick="saveSettings(this)" class="mt-3 bg-emerald-600 hover:bg-emerald-500 text-black font-bold px-2 py-1 rounded transition text-xs">KAYDET</button>
                 </div>
             </div>
 
@@ -1610,8 +1609,8 @@ async def get_dashboard(request: Request):
                     <p class="text-xs text-slate-400 mt-0.5">Toplam Pozisyon, Risk ve Marjin durumunu takip edin, toplu veya kademeli işlemler yapın.</p>
                 </div>
                 <div class="flex space-x-2">
-                    <button onclick="manualBreakevenAll()" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-3 py-2 rounded-lg text-xs transition">🛡️ TÜMÜNÜ BAŞABAŞ ÇEK</button>
-                    <button onclick="manualCloseAll()" class="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-2 rounded-lg text-xs transition">🚨 TÜMÜNÜ KAPAT (ACİL)</button>
+                    <button onclick="manualBreakevenAll(this)" class="bg-sky-600 hover:bg-sky-500 text-white font-bold px-3 py-2 rounded-lg text-xs transition">🛡️ TÜMÜNÜ BAŞABAŞ ÇEK</button>
+                    <button onclick="manualCloseAll(this)" class="bg-rose-600 hover:bg-rose-500 text-white font-bold px-3 py-2 rounded-lg text-xs transition">🚨 TÜMÜNÜ KAPAT (ACİL)</button>
                 </div>
             </div>
 
@@ -1805,7 +1804,7 @@ async def get_dashboard(request: Request):
                     <div><label class="text-slate-400 block mb-1">AĞ TÜRÜ</label><select id="api-mode" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none"><option value="TESTNET" selected>Testnet (Sanal)</option><option value="LIVE">Live (Gerçek)</option></select></div>
                     <div><label class="text-slate-400 block mb-1">API KEY</label><input id="api-key" type="password" placeholder="API Key..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono"></div>
                     <div><label class="text-slate-400 block mb-1">API SECRET</label><input id="api-secret" type="password" placeholder="API Secret..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono"></div>
-                    <button onclick="saveApiSettings()" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded transition">KAYDET</button>
+                    <button onclick="saveApiSettings(this)" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded transition">KAYDET</button>
                 </div>
             </div>
         </div>
@@ -1921,6 +1920,23 @@ async def get_dashboard(request: Request):
                     const shortCount = filtered.filter(h => h.direction === 'SHORT').length;
                     const longPct = totalCount > 0 ? ((longCount / totalCount) * 100).toFixed(0) : 50;
 
+                    // 1. Ortalama İşlem Süresi Hesaplaması
+                    const totalMins = filtered.reduce((acc, h) => acc + (h.duration_mins || 0), 0);
+                    const avgDurationMins = totalCount > 0 ? Math.round(totalMins / totalCount) : 0;
+
+                    // 2. Sharpe ve Sortino Oranları Hesaplaması
+                    let pnlArray = filtered.map(h => h.pnl_pct || 0);
+                    let avgPnlPct = pnlArray.length > 0 ? pnlArray.reduce((a, b) => a + b, 0) / pnlArray.length : 0;
+                    
+                    let variance = pnlArray.length > 0 ? pnlArray.reduce((a, b) => a + Math.pow(b - avgPnlPct, 2), 0) / pnlArray.length : 0;
+                    let stdDev = Math.sqrt(variance);
+                    
+                    let downsideVariance = pnlArray.length > 0 ? pnlArray.reduce((a, b) => a + (b < 0 ? Math.pow(b, 2) : 0), 0) / pnlArray.length : 0;
+                    let downsideStdDev = Math.sqrt(downsideVariance);
+
+                    let sharpe = stdDev > 0 ? (avgPnlPct / stdDev).toFixed(2) : (avgPnlPct > 0 ? "3.00" : "0.00");
+                    let sortino = downsideStdDev > 0 ? (avgPnlPct / downsideStdDev).toFixed(2) : (avgPnlPct > 0 ? "5.00" : "0.00");
+
                     if (document.getElementById('stat-pf')) document.getElementById('stat-pf').innerText = profitFactor;
                     if (document.getElementById('stat-expectancy')) document.getElementById('stat-expectancy').innerText = `$${expectancy}`;
                     if (document.getElementById('stat-avg-win')) document.getElementById('stat-avg-win').innerText = `+$${avgWin}`;
@@ -1929,6 +1945,8 @@ async def get_dashboard(request: Request):
                     if (document.getElementById('stat-max-loss-streak')) document.getElementById('stat-max-loss-streak').innerText = maxLossStreak;
                     if (document.getElementById('stat-ls-ratio')) document.getElementById('stat-ls-ratio').innerText = `L: %${longPct} | S: %${100 - longPct}`;
                     if (document.getElementById('stat-ls-bar')) document.getElementById('stat-ls-bar').style.width = `${longPct}%`;
+                    if (document.getElementById('stat-avg-duration')) document.getElementById('stat-avg-duration').innerText = `${avgDurationMins} Dakika`;
+                    if (document.getElementById('stat-sharpe')) document.getElementById('stat-sharpe').innerText = `${sharpe} / ${sortino}`;
 
                     let symbolMap = {};
                     filtered.forEach(h => {
@@ -2496,49 +2514,58 @@ async def get_dashboard(request: Request):
                     </div>`;
             }
 
-            async function manualClosePos(symbol) {
+            async function manualClosePos(symbol, btn) {
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
                 await fetch('/api/manual/close_position', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol}) });
                 updateDashboard();
             }
 
-            async function manualPartialClose(symbol, ratio) {
+            async function manualPartialClose(symbol, ratio, btn) {
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
                 await fetch('/api/manual/partial_close', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol, ratio}) });
                 updateDashboard();
             }
 
-            async function manualCloseAll() {
+            async function manualCloseAll(btn) {
                 if (confirm("Tüm pozisyonları kapatmak istediğinize emin misiniz?")) {
+                    if(btn){ btn.innerText = "⏳ Kapatılıyor..."; btn.disabled = true; btn.classList.add("opacity-50"); }
                     await fetch('/api/manual/close_all', { method: 'POST' });
                     updateDashboard();
+                    if(btn){ btn.innerText = "🚨 TÜMÜNÜ KAPAT (ACİL)"; btn.disabled = false; btn.classList.remove("opacity-50"); }
                 }
             }
 
-            async function manualBreakevenAll() {
+            async function manualBreakevenAll(btn) {
                 if (confirm("Tüm stopları başa başa çekmek istiyor musunuz?")) {
+                    if(btn){ btn.innerText = "⏳ İşleniyor..."; btn.disabled = true; btn.classList.add("opacity-50"); }
                     await fetch('/api/manual/breakeven_all', { method: 'POST' });
                     updateDashboard();
+                    if(btn){ btn.innerText = "🛡️ TÜMÜNÜ BAŞABAŞ ÇEK"; btn.disabled = false; btn.classList.remove("opacity-50"); }
                 }
             }
 
-            async function manualBreakeven(symbol) {
+            async function manualBreakeven(symbol, btn) {
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
                 await fetch('/api/manual/breakeven', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol}) });
                 updateDashboard();
             }
 
-            async function manualToggleTrailing(symbol) {
+            async function manualToggleTrailing(symbol, btn) {
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
                 await fetch('/api/manual/toggle_trailing', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol}) });
                 updateDashboard();
             }
 
-            async function manualUpdateSlTp(symbol) {
+            async function manualUpdateSlTp(symbol, btn) {
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
                 const sl = parseFloat(document.getElementById(`manual-sl-${symbol}`).value);
                 const tp2 = parseFloat(document.getElementById(`manual-tp-${symbol}`).value);
                 await fetch('/api/manual/update_sltp', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol, sl, tp2}) });
-                alert("SL and TP Updated!");
                 updateDashboard();
             }
 
-            async function saveSettings() {
+            async function saveSettings(btn) {
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
                 const total_balance = parseFloat(document.getElementById('input-balance').value);
                 const risk_pct = parseFloat(document.getElementById('input-risk').value);
                 const leverage = parseInt(document.getElementById('input-leverage').value);
@@ -2551,17 +2578,21 @@ async def get_dashboard(request: Request):
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({total_balance, risk_pct, leverage, margin_mode, max_open_positions, max_total_margin_pct})
                 });
-                if (res.ok) { alert("Ayarlar Kaydedildi!"); updateDashboard(); }
+                if (res.ok) { 
+                    updateDashboard(); 
+                    if(btn){ btn.innerText = "KAYDET"; btn.disabled = false; btn.classList.remove("opacity-50"); }
+                }
             }
 
-            async function saveApiSettings() {
+            async function saveApiSettings(btn) {
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
                 const exchange = document.getElementById('api-exchange').value;
                 const mode = document.getElementById('api-mode').value;
                 const api_key = document.getElementById('api-key').value;
                 const api_secret = document.getElementById('api-secret').value;
                 await fetch('/api/update_api', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({exchange, mode, api_key, api_secret, auto_trade: false}) });
-                alert("API Kaydedildi!");
                 updateDashboard();
+                if(btn){ btn.innerText = "KAYDET"; btn.disabled = false; btn.classList.remove("opacity-50"); }
             }
 
             async function updateDashboard() {
@@ -2650,6 +2681,11 @@ async def get_dashboard(request: Request):
                         }
                     }
 
+                    const balanceInput = document.getElementById('input-balance');
+                    if (balanceInput && document.activeElement !== balanceInput) {
+                        balanceInput.value = data.total_balance.toFixed(2);
+                    }
+
                     tradeHistoryCache = data.trade_history;
                     recalculatePnlMetrics();
                     recalculateAdvancedStats();
@@ -2690,12 +2726,12 @@ async def get_dashboard(request: Request):
                                 <td class="font-bold ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}</td>
                                 <td><input id="manual-sl-${p.symbol}" type="number" step="any" value="${p.sl}" class="bg-slate-900 border border-slate-700 w-20 px-1 py-0.5 rounded text-white font-mono"></td>
                                 <td><input id="manual-tp-${p.symbol}" type="number" step="any" value="${p.tp2}" class="bg-slate-900 border border-slate-700 w-20 px-1 py-0.5 rounded text-white font-mono"></td>
-                                <td class="text-center"><button onclick="manualToggleTrailing('${p.symbol}')" class="px-2 py-1 rounded text-[10px] font-bold ${p.trailing_active ? 'bg-emerald-600 text-black animate-pulse' : 'bg-slate-800 text-slate-400'}">${p.trailing_active ? 'AÇIK' : 'KAPALI'}</button></td>
+                                <td class="text-center"><button onclick="manualToggleTrailing('${p.symbol}', this)" class="px-2 py-1 rounded text-[10px] font-bold ${p.trailing_active ? 'bg-emerald-600 text-black animate-pulse' : 'bg-slate-800 text-slate-400'}">${p.trailing_active ? 'AÇIK' : 'KAPALI'}</button></td>
                                 <td class="text-right space-x-1">
-                                    <button onclick="manualUpdateSlTp('${p.symbol}')" class="bg-slate-700 hover:bg-slate-600 px-1.5 py-1 rounded text-[10px] text-white">💾</button>
-                                    <button onclick="manualPartialClose('${p.symbol}', 0.5)" class="bg-amber-600 hover:bg-amber-500 px-1.5 py-1 rounded text-[10px] text-white font-bold">%50</button>
-                                    <button onclick="manualBreakeven('${p.symbol}')" class="bg-sky-600 hover:bg-sky-500 px-1.5 py-1 rounded text-[10px] text-white">Başa Baş</button>
-                                    <button onclick="manualClosePos('${p.symbol}')" class="bg-rose-600 hover:bg-rose-500 px-2 py-1 rounded text-[10px] text-white font-bold">Kapat</button>
+                                    <button onclick="manualUpdateSlTp('${p.symbol}', this)" class="bg-slate-700 hover:bg-slate-600 px-1.5 py-1 rounded text-[10px] text-white">💾</button>
+                                    <button onclick="manualPartialClose('${p.symbol}', 0.5, this)" class="bg-amber-600 hover:bg-amber-500 px-1.5 py-1 rounded text-[10px] text-white font-bold">%50</button>
+                                    <button onclick="manualBreakeven('${p.symbol}', this)" class="bg-sky-600 hover:bg-sky-500 px-1.5 py-1 rounded text-[10px] text-white">Başa Baş</button>
+                                    <button onclick="manualClosePos('${p.symbol}', this)" class="bg-rose-600 hover:bg-rose-500 px-2 py-1 rounded text-[10px] text-white font-bold">Kapat</button>
                                 </td>
                             </tr>`).join('') || '<tr><td colspan="8" class="py-3 text-slate-500 italic">Açık pozisyon yok...</td></tr>';
                     }
