@@ -91,7 +91,6 @@ EXCLUDED_KEYWORDS = [
     'CASHCAT', 'WLFI', 'TRUMP', 'MELANIA', 'PEPE2', 'SHIB2'
 ]
 
-# Break & Retest aşamasındaki pariteleri hafızada tutar
 retest_tracker = {}
 
 async def create_exchange_instance():
@@ -193,7 +192,6 @@ def calculate_indicators(df):
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
 
-    # ADX (Average Directional Index) Hesaplaması
     high_diff = df['high'].diff()
     low_diff = -df['low'].diff()
     plus_dm = high_diff.where((high_diff > low_diff) & (high_diff > 0), 0.0)
@@ -344,12 +342,10 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
-        # 1. ADX FİLTRESİ: Trend gücü zayıfsa (ADX < 20) yatay piyasa, işlem alma
         adx_val = c_1h['adx'] if pd.notnull(c_1h['adx']) else 25.0
         if adx_val < 20:
             return None
 
-        # 2. GÜÇLÜ GÖVDE VE LİKİDİTE SWEEP KONTROLÜ
         sweep_low = df_15m['low'].iloc[-4:].min() < swing_low_15m
         body_size = abs(c_5m['close'] - c_5m['open'])
         total_candle_size = c_5m['high'] - c_5m['low']
@@ -366,7 +362,6 @@ async def analyze_symbol(exchange, symbol):
             and (body_size / (total_candle_size + 1e-9) > 0.4)
         )
 
-        # 3. BREAK & RETEST (KIRILIM VE ONAY) AŞAMASI
         if sweep_low and is_strong_green:
             if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] <= -1.2):
                 retest_tracker[symbol] = {
@@ -384,7 +379,6 @@ async def analyze_symbol(exchange, symbol):
                     "reasons": ["⚡ 15M Tepe Likiditesi Alındı + Güçlü Gövdeli Kırılım"]
                 }
 
-        # Retest bekleyen paritenin seviyeyi test edip onay alması
         if symbol in retest_tracker:
             tracker = retest_tracker[symbol]
             if tracker["direction"] == "LONG":
@@ -400,7 +394,6 @@ async def analyze_symbol(exchange, symbol):
                     reasons = tracker["reasons"] + ["🎯 Başarılı Break & Retest (Direnç Onayı) Alındı"]
                     del retest_tracker[symbol]
 
-        # 4. 1H ANA TREND ONAYI
         if direction == "LONG":
             if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
                 score += 25
@@ -426,7 +419,6 @@ async def analyze_symbol(exchange, symbol):
             score += 10
             reasons.append(f"🎯 Dengeli Momentum RSI ({c_5m['rsi']:.1f})")
 
-        # 5. FUNDING RATE (FONLAMA ORANI) CEZA FİLTRESİ
         if direction:
             avg_funding_str = system_state["sentiment_data"].get("avg_funding_rate", "+0.0098%")
             try:
@@ -440,7 +432,6 @@ async def analyze_symbol(exchange, symbol):
             except Exception:
                 pass
 
-        # Radar Güncellemesi
         radar_item = {
             "symbol": symbol,
             "price": float(c_5m['close']),
@@ -455,15 +446,13 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
-        # 6. DİNAMİK PUAN BARAJI (Volatiliteye Göre Esneyen Eşik)
         btc_change_abs = abs(system_state["btc_15m_change"])
         dynamic_threshold = 75
         if btc_change_abs > 0.8:
-            dynamic_threshold = 85  # Piyasa hareketliyken sadece kusursuz kurulumlar
+            dynamic_threshold = 85
         elif btc_change_abs < 0.3:
-            dynamic_threshold = 70  # Piyasa sakinleştiğinde fırsat kaçmasın
+            dynamic_threshold = 70
 
-        # Sinyal yoksa veya puan barajın altında kalırsa işlem alma
         if not direction or score < dynamic_threshold:
             return None
 
@@ -1271,8 +1260,8 @@ async def get_dashboard(request: Request):
                     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">Kripto Korku ve Açgözlülük</div>
                     <div id="fng-val" class="text-4xl font-extrabold font-mono text-emerald-400">66</div>
                     <div id="fng-text" class="text-sm font-bold text-slate-300 mt-1 uppercase">AÇGÖZLÜLÜK</div>
-                    <div class="w-full bg-slate-800 h-2.5 rounded-full mt-3 overflow-hidden">
-                        <div id="fng-bar" class="bg-emerald-500 h-2.5 rounded-full" style="width: 66%"></div>
+                    <div id="fng-bar" class="w-full bg-slate-800 h-2.5 rounded-full mt-3 overflow-hidden">
+                        <div class="bg-emerald-500 h-2.5 rounded-full" style="width: 66%"></div>
                     </div>
                 </div>
                 <div class="card p-4 rounded-xl space-y-2">
@@ -1719,8 +1708,8 @@ async def get_dashboard(request: Request):
             let lastPositions = [];
             let tradeHistoryCache = [];
             let lastKnownPosCount = 0;
+            let resolvedSymbolCache = {};
 
-            // EKLENEN EKSİK FONKSİYONLAR (Hatanın çözümü)
             function recalculatePnlMetrics() {
                 try {
                     const now = new Date();
@@ -1735,7 +1724,7 @@ async def get_dashboard(request: Request):
                         if (currentPnlFilter === 'yesterday') return ts >= startOfYesterday && ts < startOfToday;
                         if (currentPnlFilter === 'week') return ts >= startOfWeek;
                         if (currentPnlFilter === 'month') return ts >= startOfMonth;
-                        return true; // all
+                        return true; 
                     });
 
                     const totalPnl = filtered.reduce((acc, h) => acc + (h.realized_pnl || 0), 0);
@@ -1796,7 +1785,6 @@ async def get_dashboard(request: Request):
                     const avgWin = winsList.length > 0 ? (grossProfit / winsList.length).toFixed(2) : "0.00";
                     const avgLoss = lossesList.length > 0 ? (grossLoss / lossesList.length).toFixed(2) : "0.00";
 
-                    // Seri hesaplama
                     let maxWinStreak = 0, maxLossStreak = 0, curWin = 0, curLoss = 0;
                     [...filtered].reverse().forEach(h => {
                         if ((h.realized_pnl || 0) > 0) {
@@ -1821,7 +1809,6 @@ async def get_dashboard(request: Request):
                     if (document.getElementById('stat-ls-ratio')) document.getElementById('stat-ls-ratio').innerText = `L: %${longPct} | S: %${100 - longPct}`;
                     if (document.getElementById('stat-ls-bar')) document.getElementById('stat-ls-bar').style.width = `${longPct}%`;
 
-                    // Top/Worst Pariteler Tabloları
                     let symbolMap = {};
                     filtered.forEach(h => {
                         if (!symbolMap[h.symbol]) symbolMap[h.symbol] = { count: 0, pnl: 0 };
@@ -2234,21 +2221,39 @@ async def get_dashboard(request: Request):
                 resizeCanvas();
             }
 
-            async function fetchCandlesDirect(symbol, interval = '5') {
-                let rawSym = symbol.split('/')[0] + 'USDT'; 
-                const thCoins = ['PEPE', 'SHIB', 'FLOKI', 'BONK', 'LUNC', 'XEC', 'SATS', 'RATS', 'BTT', 'TURBO', 'MEME', 'DOGS'];
-                const baseSym = symbol.split('/')[0].toUpperCase();
-                if (thCoins.includes(baseSym)) {
-                    rawSym = '1000' + baseSym + 'USDT';
-                }
-
+            async function fetchCandlesDirect(symbol, interval = '5', fetchLimit = 1000) {
+                let baseSym = symbol.split('/')[0].toUpperCase();
+                
                 const tfMap = { '1': '1m', '5': '5m', '15': '15m', '60': '1h', '240': '4h', 'D': '1d' };
                 const binanceInterval = tfMap[interval] || '5m';
 
-                const url = `https://fapi.binance.com/fapi/v1/klines?symbol=${rawSym}&interval=${binanceInterval}&limit=1000`;
+                let rawSym = resolvedSymbolCache[symbol] || (baseSym + 'USDT'); 
+                let url = `https://fapi.binance.com/fapi/v1/klines?symbol=${rawSym}&interval=${binanceInterval}&limit=${fetchLimit}`;
+                
                 try {
-                    const res = await fetch(url);
-                    const data = await res.json();
+                    let res = await fetch(url);
+                    let data = await res.json();
+                    
+                    if (data.code !== undefined && !resolvedSymbolCache[symbol]) {
+                        let altSym1 = '1000' + baseSym + 'USDT';
+                        let url1 = `https://fapi.binance.com/fapi/v1/klines?symbol=${altSym1}&interval=${binanceInterval}&limit=${fetchLimit}`;
+                        let res1 = await fetch(url1);
+                        let data1 = await res1.json();
+                        
+                        if (data1.code !== undefined && baseSym.startsWith('1000')) {
+                            let altSym2 = baseSym.substring(4) + 'USDT';
+                            let url2 = `https://fapi.binance.com/fapi/v1/klines?symbol=${altSym2}&interval=${binanceInterval}&limit=${fetchLimit}`;
+                            let res2 = await fetch(url2);
+                            data = await res2.json();
+                            if (data.length > 0) resolvedSymbolCache[symbol] = altSym2;
+                        } else {
+                            data = data1;
+                            if (data.length > 0) resolvedSymbolCache[symbol] = altSym1;
+                        }
+                    } else if (data.length > 0) {
+                        resolvedSymbolCache[symbol] = rawSym;
+                    }
+
                     if (Array.isArray(data)) {
                         return data.map(c => ({
                             time: Math.floor(c[0] / 1000), 
@@ -2264,65 +2269,67 @@ async def get_dashboard(request: Request):
 
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
-                    const candles = await fetchCandlesDirect(symbol, currentTimeframe);
+                    const limit = isLiveTick ? 2 : 1000;
+                    const candles = await fetchCandlesDirect(symbol, currentTimeframe, limit);
+                    
                     if (candles.length > 0 && candleSeries) {
-                        const lastCandle = candles[candles.length - 1];
-                        const pConf = getPrecisionConfig(lastCandle.close);
-                        candleSeries.applyOptions({ priceFormat: { type: 'price', precision: pConf.precision, minMove: pConf.minMove } });
-                        
-                        const intervalSec = getIntervalSeconds(currentTimeframe);
-                        let futureData = [];
-                        let lastTime = lastCandle.time;
-                        for (let i = 1; i <= 150; i++) {
-                            futureData.push({ time: lastTime + (i * intervalSec) });
-                        }
-                        
-                        candleSeries.setData([...candles, ...futureData]);
+                        if (isLiveTick) {
+                            candles.forEach(c => candleSeries.update(c));
+                            drawPositionBoxes();
+                        } else {
+                            const lastCandle = candles[candles.length - 1];
+                            const pConf = getPrecisionConfig(lastCandle.close);
+                            candleSeries.applyOptions({ priceFormat: { type: 'price', precision: pConf.precision, minMove: pConf.minMove } });
+                            
+                            const intervalSec = getIntervalSeconds(currentTimeframe);
+                            let futureData = [];
+                            let lastTime = lastCandle.time;
+                            for (let i = 1; i <= 150; i++) {
+                                futureData.push({ time: lastTime + (i * intervalSec) });
+                            }
+                            
+                            candleSeries.setData([...candles, ...futureData]);
 
-                        if (!isLiveTick) {
                             const dec = lastCandle.close < 1 ? pConf.precision : 2;
                             document.getElementById('bar-open').innerText = `$${lastCandle.open.toFixed(dec)}`;
                             document.getElementById('bar-high').innerText = `$${lastCandle.high.toFixed(dec)}`;
                             document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
                             document.getElementById('bar-close').innerText = `$${lastCandle.close.toFixed(dec)}`;
                             
-                            if (chart) {
-                                chart.priceScale('right').applyOptions({ autoScale: true });
-                            }
-                        }
-                        resizeCanvas();
-                        drawPositionBoxes();
-                    }
+                            if (chart) chart.priceScale('right').applyOptions({ autoScale: true });
+                            
+                            resizeCanvas();
+                            drawPositionBoxes();
 
-                    if (!isLiveTick) {
-                        priceLines.forEach(l => candleSeries.removePriceLine(l));
-                        priceLines = [];
-                        const tfLabel = currentTimeframe === '60' ? '1H' : (currentTimeframe === '240' ? '4H' : (currentTimeframe === 'D' ? '1D' : `${currentTimeframe}M`));
-                        document.getElementById('chart-title').innerText = `${symbol} (${tfLabel})`;
+                            priceLines.forEach(l => candleSeries.removePriceLine(l));
+                            priceLines = [];
+                            const tfLabel = currentTimeframe === '60' ? '1H' : (currentTimeframe === '240' ? '4H' : (currentTimeframe === 'D' ? '1D' : `${currentTimeframe}M`));
+                            document.getElementById('chart-title').innerText = `${symbol} (${tfLabel})`;
 
-                        if (posData && candleSeries) {
-                            const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
-                            const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP' });
-                            
-                            priceLines.push(entryLine, slLine);
-                            
-                            const p = posData.entry < 1 ? 6 : 2;
-                            let htmlStr = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span>`;
-                            
-                            if (Math.abs(posData.tp1 - posData.tp2) / posData.entry < 0.001) {
-                                const tpLine = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP (TAM ÇIKIŞ)' });
-                                priceLines.push(tpLine);
-                                htmlStr += ` | <span class="text-emerald-500 font-mono font-bold">TP: ${posData.tp1.toFixed(p)}</span>`;
+                            if (posData && candleSeries) {
+                                const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
+                                const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP' });
+                                
+                                priceLines.push(entryLine, slLine);
+                                
+                                const p = posData.entry < 1 ? 6 : 2;
+                                let htmlStr = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span>`;
+                                
+                                if (Math.abs(posData.tp1 - posData.tp2) / posData.entry < 0.001) {
+                                    const tpLine = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP (TAM ÇIKIŞ)' });
+                                    priceLines.push(tpLine);
+                                    htmlStr += ` | <span class="text-emerald-500 font-mono font-bold">TP: ${posData.tp1.toFixed(p)}</span>`;
+                                } else {
+                                    const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
+                                    const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
+                                    priceLines.push(tp1Line, tp2Line);
+                                    htmlStr += ` | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
+                                }
+                                
+                                document.getElementById('chart-levels').innerHTML = htmlStr;
                             } else {
-                                const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
-                                const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
-                                priceLines.push(tp1Line, tp2Line);
-                                htmlStr += ` | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
+                                document.getElementById('chart-levels').innerHTML = '';
                             }
-                            
-                            document.getElementById('chart-levels').innerHTML = htmlStr;
-                        } else {
-                            document.getElementById('chart-levels').innerHTML = '';
                         }
                     }
                 } catch(e) {}
