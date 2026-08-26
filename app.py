@@ -17,11 +17,34 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 TURKEY_TZ = timezone(timedelta(hours=3))
 
+# =================================================================
+# 📱 TELEGRAM BİLDİRİM AYARLARI (BURAYI DOLDURUN)
+# =================================================================
+TELEGRAM_BOT_TOKEN = "8971696278:AAHiBk7gzMGxjAz2mi4KqV4LEUWwhVH6NKc"  # Örn: "123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
+TELEGRAM_CHAT_ID = "2088808175"    # Örn: "987654321"
+# =================================================================
+
 def get_now_str():
     return datetime.now(TURKEY_TZ).strftime("%H:%M:%S")
 
 def get_now_datetime():
     return datetime.now(TURKEY_TZ)
+
+async def send_telegram_alert(message: str):
+    """Asenkron Telegram bildirim motoru (Sistemi yavaşlatmaz)"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "HTML"
+    }
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.post(url, json=payload, timeout=5)
+    except Exception as e:
+        logging.error(f"Telegram bildirim hatası: {e}")
 
 CSV_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "daily_reports")
 os.makedirs(CSV_DIR, exist_ok=True)
@@ -213,7 +236,9 @@ def check_daily_drawdown():
     
     if daily_loss >= max_allowed_loss and not system_state["daily_loss_locked"]:
         system_state["daily_loss_locked"] = True
-        add_log(f"🛑 GÜNLÜK ZARAR LİMİTİ TETİKLENDİ: -${daily_loss:.2f} (%{system_state['daily_drawdown_limit_pct']}) Kayıp. Yeni İşlemler Geceye Kadar Kilitlendi!")
+        msg = f"🛑 GÜNLÜK ZARAR LİMİTİ TETİKLENDİ: -${daily_loss:.2f} (%{system_state['daily_drawdown_limit_pct']}) Kayıp. Yeni İşlemler Geceye Kadar Kilitlendi!"
+        add_log(msg)
+        asyncio.create_task(send_telegram_alert(f"⚠️ <b>ACİL DURUM KORUMASI</b>\n\n{msg}"))
 
 def calculate_indicators(df):
     delta = df['close'].diff()
@@ -294,7 +319,9 @@ async def update_btc_metrics(exchange):
         if pct_15m <= -10.0:
             system_state["flash_crash_active"] = True
             system_state["bot_trading_active"] = False
-            add_log("🚨 FLASH CRASH TESPİT EDİLDİ! Bot acil uyku moduna geçti, işlemler kilitlendi!")
+            msg = "🚨 FLASH CRASH TESPİT EDİLDİ! Bot acil uyku moduna geçti, işlemler kilitlendi!"
+            add_log(msg)
+            asyncio.create_task(send_telegram_alert(f"🚨 <b>FLASH CRASH UYARISI</b>\n{msg}"))
 
         if pct_15m <= -1.2:
             system_state["btc_shock_lock"] = True
@@ -641,7 +668,9 @@ async def market_scanner_loop():
             macro_near = is_macro_event_near()
             if macro_near and not system_state.get("macro_lock"):
                 system_state["macro_lock"] = True
-                add_log("⚠️ MAKRO VERİ KORUMASI: Etkinliğe 1 Saat Kaldı! Yeni işlem alımı durduruldu. Stoplar Girişe (Başa Baş) çekiliyor.")
+                msg = "⚠️ MAKRO VERİ KORUMASI: Etkinliğe 1 Saat Kaldı! Yeni işlem alımı durduruldu. Stoplar Girişe (Başa Baş) çekiliyor."
+                add_log(msg)
+                asyncio.create_task(send_telegram_alert(f"⚠️ <b>MAKRO VERİ KİLİDİ</b>\n{msg}"))
                 for p in system_state["active_positions"]:
                     p['sl'] = p['entry']
             elif not macro_near and system_state.get("macro_lock"):
@@ -701,7 +730,13 @@ async def market_scanner_loop():
                             system_state["active_positions"].append(sig)
                             sync_wallet_accounting()
                             mode_label = "İzole" if sig['margin_mode'] == "ISOLATED" else "Cross"
-                            add_log(f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | {sig['score']} Puan | {sig['leverage']}x {mode_label} | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}")
+                            
+                            log_msg = f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | Puan: {sig['score']} | {sig['leverage']}x | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}"
+                            add_log(log_msg)
+                            
+                            # TELEGRAM: YENİ İŞLEM BİLDİRİMİ
+                            tg_msg = f"🟢 <b>YENİ İŞLEM AÇILDI</b>\n\n<b>Parite:</b> {sig['symbol']}\n<b>Yön:</b> {sig['direction']} ({sig['leverage']}x {mode_label})\n<b>Giriş:</b> {sig['entry']}\n<b>Hedef 2:</b> {sig['tp2']}\n<b>Stop:</b> {sig['sl']}\n<b>Risk (Zarar):</b> ${sig['max_loss']}\n<b>Skor:</b> {sig['score']}"
+                            asyncio.create_task(send_telegram_alert(tg_msg))
 
                             if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
                                 try:
@@ -799,7 +834,13 @@ async def position_manager_loop():
                             apply_realized_pnl(partial_pnl)
                             pos["margin"] = round(pos.get("margin", 0.0) * 0.5, 2)
                             system_state["equity_curve"].append({"time": now_ts, "value": round(system_state["total_balance"], 2)})
-                            add_log(f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi.")
+                            
+                            log_msg = f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi."
+                            add_log(log_msg)
+                            
+                            # TELEGRAM: TP1 BİLDİRİMİ
+                            tg_msg = f"⚡ <b>İLK HEDEF (TP1) VURULDU</b>\n\n<b>Parite:</b> {pos['symbol']}\n<b>Kâr:</b> +${partial_pnl}\n<b>Aksiyon:</b> Pozisyon %50 küçültüldü ve Stop-Loss başabaş seviyesine (Giriş: {pos['entry']}) çekildi."
+                            asyncio.create_task(send_telegram_alert(tg_msg))
 
                             if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
                                 try:
@@ -835,7 +876,15 @@ async def position_manager_loop():
                         system_state["trade_history"].insert(0, history_item)
                         system_state["active_positions"].remove(pos)
                         sync_wallet_accounting()
-                        add_log(f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}")
+                        
+                        log_msg = f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}"
+                        add_log(log_msg)
+                        
+                        # TELEGRAM: KAPANIŞ BİLDİRİMİ
+                        icon = "🎯" if realized_pnl > 0 else "❌"
+                        tg_msg = f"{icon} <b>POZİSYON KAPANDI</b>\n\n<b>Parite:</b> {pos['symbol']}\n<b>Yön:</b> {pos['direction']}\n<b>Net Kâr/Zarar:</b> ${realized_pnl} (%{pnl_pct:.2f})\n<b>Neden:</b> {close_reason}"
+                        asyncio.create_task(send_telegram_alert(tg_msg))
+                        
                         check_daily_drawdown()
 
                         if system_state["api_settings"]["auto_trade"] and system_state["api_settings"]["api_key"]:
@@ -956,7 +1005,6 @@ async def manual_close_position(payload: ClosePosPayload):
         now_dt = get_now_datetime()
         system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
 
-        # GERÇEK İŞLEM SÜRESİ HESAPLAMA EKLENDİ
         duration_mins = max(1, int((now_dt.timestamp() - target.get('open_timestamp', now_dt.timestamp())) / 60))
 
         history_item = {
@@ -977,6 +1025,7 @@ async def manual_close_position(payload: ClosePosPayload):
         system_state["active_positions"].remove(target)
         sync_wallet_accounting()
         add_log(f"✋ MANUEL KAPATMA: {target['symbol']} | PnL: ${realized_pnl}")
+        asyncio.create_task(send_telegram_alert(f"✋ <b>MANUEL KAPATMA</b>\n\n<b>Parite:</b> {target['symbol']}\n<b>Net Kâr/Zarar:</b> ${realized_pnl}"))
         
         asyncio.create_task(execute_manual_real_order(target['symbol'], target['direction'], target['active_size']))
         return {"status": "success"}
@@ -1042,6 +1091,7 @@ async def manual_close_all():
         
     sync_wallet_accounting()
     add_log("🚨 TÜM POZİSYONLAR KAPATILDI!")
+    asyncio.create_task(send_telegram_alert(f"🚨 <b>ACİL KAPATMA (PANIC BUTTON)</b>\nAçık olan tüm pozisyonlar manuel olarak kapatıldı!"))
     return {"status": "success"}
 
 @app.post("/api/manual/breakeven_all")
@@ -1050,6 +1100,7 @@ async def manual_breakeven_all():
         pos['sl'] = pos['entry']
         pos['tp1_hit'] = True
     add_log("🛡️ TOPLU BAŞABAŞ: Tüm açık pozisyonların stopları giriş fiyatına çekildi!")
+    asyncio.create_task(send_telegram_alert(f"🛡️ <b>TOPLU GÜVENLİK</b>\nTüm açık pozisyonların stop seviyeleri Başa Baş (Giriş Fiyatı) noktasına çekildi."))
     return {"status": "success"}
 
 @app.post("/api/manual/breakeven")
@@ -1810,6 +1861,57 @@ async def get_dashboard(request: Request):
         </div>
 
         <script>
+            // BİLDİRİM İZNİ İSTE
+            if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
+                Notification.requestPermission();
+            }
+
+            function sendWebNotification(title, bodyText) {
+                if ("Notification" in window && Notification.permission === "granted") {
+                    new Notification(title, { body: bodyText, icon: "https://cryptologos.cc/logos/bitcoin-btc-logo.png" });
+                }
+            }
+
+            function playAlertSound(type) {
+                try {
+                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
+                    
+                    if (type === "OPEN") {
+                        osc.type = "sine";
+                        osc.frequency.setValueAtTime(440, ctx.currentTime);
+                        osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.1);
+                        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+                        gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.2);
+                    } else if (type === "WIN") {
+                        osc.type = "triangle";
+                        osc.frequency.setValueAtTime(523.25, ctx.currentTime); 
+                        osc.frequency.setValueAtTime(659.25, ctx.currentTime + 0.1); 
+                        osc.frequency.setValueAtTime(783.99, ctx.currentTime + 0.2); 
+                        gain.gain.setValueAtTime(0.2, ctx.currentTime);
+                        gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+                    } else if (type === "LOSS") {
+                        osc.type = "sawtooth";
+                        osc.frequency.setValueAtTime(250, ctx.currentTime);
+                        osc.frequency.exponentialRampToValueAtTime(100, ctx.currentTime + 0.3);
+                        gain.gain.setValueAtTime(0.3, ctx.currentTime);
+                        gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.4);
+                    } else {
+                        osc.type = "sine";
+                        osc.frequency.setValueAtTime(880, ctx.currentTime);
+                        osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.15);
+                        gain.gain.setValueAtTime(0.1, ctx.currentTime);
+                        gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+                    }
+
+                    osc.connect(gain);
+                    gain.connect(ctx.destination);
+                    osc.start();
+                    osc.stop(ctx.currentTime + 0.5);
+                } catch(e) {}
+            }
+
             let chart = null;
             let candleSeries = null;
             let equityChart = null;
@@ -1829,6 +1931,7 @@ async def get_dashboard(request: Request):
             let tradeHistoryCache = [];
             let lastKnownPosCount = 0;
             let resolvedSymbolCache = {};
+            let lastProcessedLog = "";
 
             function recalculatePnlMetrics() {
                 try {
@@ -1920,11 +2023,9 @@ async def get_dashboard(request: Request):
                     const shortCount = filtered.filter(h => h.direction === 'SHORT').length;
                     const longPct = totalCount > 0 ? ((longCount / totalCount) * 100).toFixed(0) : 50;
 
-                    // 1. Ortalama İşlem Süresi Hesaplaması
                     const totalMins = filtered.reduce((acc, h) => acc + (h.duration_mins || 0), 0);
                     const avgDurationMins = totalCount > 0 ? Math.round(totalMins / totalCount) : 0;
 
-                    // 2. Sharpe ve Sortino Oranları Hesaplaması
                     let pnlArray = filtered.map(h => h.pnl_pct || 0);
                     let avgPnlPct = pnlArray.length > 0 ? pnlArray.reduce((a, b) => a + b, 0) / pnlArray.length : 0;
                     
@@ -2271,23 +2372,6 @@ async def get_dashboard(request: Request):
             }
             setInterval(updateMultiCountdowns, 1000);
 
-            function playAlertSound() {
-                try {
-                    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-                    const osc = ctx.createOscillator();
-                    const gain = ctx.createGain();
-                    osc.type = "sine";
-                    osc.frequency.setValueAtTime(880, ctx.currentTime);
-                    osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.15);
-                    gain.gain.setValueAtTime(0.3, ctx.currentTime);
-                    gain.gain.linearRampToValueAtTime(0.01, ctx.currentTime + 0.25);
-                    osc.connect(gain);
-                    gain.connect(ctx.destination);
-                    osc.start();
-                    osc.stop(ctx.currentTime + 0.25);
-                } catch(e) {}
-            }
-
             function getPrecisionConfig(price) {
                 if (price < 0.001) return { precision: 6, minMove: 0.000001 };
                 if (price < 1) return { precision: 4, minMove: 0.0001 };
@@ -2515,19 +2599,20 @@ async def get_dashboard(request: Request):
             }
 
             async function manualClosePos(symbol, btn) {
-                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); playAlertSound("CLICK"); }
                 await fetch('/api/manual/close_position', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol}) });
                 updateDashboard();
             }
 
             async function manualPartialClose(symbol, ratio, btn) {
-                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); playAlertSound("CLICK"); }
                 await fetch('/api/manual/partial_close', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol, ratio}) });
                 updateDashboard();
             }
 
             async function manualCloseAll(btn) {
                 if (confirm("Tüm pozisyonları kapatmak istediğinize emin misiniz?")) {
+                    playAlertSound("CLICK");
                     if(btn){ btn.innerText = "⏳ Kapatılıyor..."; btn.disabled = true; btn.classList.add("opacity-50"); }
                     await fetch('/api/manual/close_all', { method: 'POST' });
                     updateDashboard();
@@ -2537,6 +2622,7 @@ async def get_dashboard(request: Request):
 
             async function manualBreakevenAll(btn) {
                 if (confirm("Tüm stopları başa başa çekmek istiyor musunuz?")) {
+                    playAlertSound("CLICK");
                     if(btn){ btn.innerText = "⏳ İşleniyor..."; btn.disabled = true; btn.classList.add("opacity-50"); }
                     await fetch('/api/manual/breakeven_all', { method: 'POST' });
                     updateDashboard();
@@ -2545,19 +2631,19 @@ async def get_dashboard(request: Request):
             }
 
             async function manualBreakeven(symbol, btn) {
-                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); playAlertSound("CLICK"); }
                 await fetch('/api/manual/breakeven', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol}) });
                 updateDashboard();
             }
 
             async function manualToggleTrailing(symbol, btn) {
-                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); playAlertSound("CLICK"); }
                 await fetch('/api/manual/toggle_trailing', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol}) });
                 updateDashboard();
             }
 
             async function manualUpdateSlTp(symbol, btn) {
-                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); playAlertSound("CLICK"); }
                 const sl = parseFloat(document.getElementById(`manual-sl-${symbol}`).value);
                 const tp2 = parseFloat(document.getElementById(`manual-tp-${symbol}`).value);
                 await fetch('/api/manual/update_sltp', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({symbol, sl, tp2}) });
@@ -2565,7 +2651,7 @@ async def get_dashboard(request: Request):
             }
 
             async function saveSettings(btn) {
-                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); playAlertSound("CLICK"); }
                 const total_balance = parseFloat(document.getElementById('input-balance').value);
                 const risk_pct = parseFloat(document.getElementById('input-risk').value);
                 const leverage = parseInt(document.getElementById('input-leverage').value);
@@ -2585,7 +2671,7 @@ async def get_dashboard(request: Request):
             }
 
             async function saveApiSettings(btn) {
-                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); }
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); playAlertSound("CLICK"); }
                 const exchange = document.getElementById('api-exchange').value;
                 const mode = document.getElementById('api-mode').value;
                 const api_key = document.getElementById('api-key').value;
@@ -2600,8 +2686,26 @@ async def get_dashboard(request: Request):
                     const res = await fetch('/api/state');
                     const data = await res.json();
 
-                    if (data.active_positions.length > lastKnownPosCount) playAlertSound();
-                    lastKnownPosCount = data.active_positions.length;
+                    // BİLDİRİM KONTROL (Sadece yeni log eklendiyse çalışır)
+                    if (data.logs && data.logs.length > 0) {
+                        const currentTopLog = data.logs[0];
+                        if (currentTopLog !== lastProcessedLog) {
+                            lastProcessedLog = currentTopLog;
+                            
+                            if (currentTopLog.includes("POZİSYON AÇILDI")) {
+                                playAlertSound("OPEN");
+                                sendWebNotification("🟢 Yeni İşlem Açıldı", currentTopLog.split("]")[1]);
+                            } else if (currentTopLog.includes("TP1 ALINDI") || currentTopLog.includes("Likidite Havuzuna Ulaşıldı") || currentTopLog.includes("Momentum Kaybı")) {
+                                playAlertSound("WIN");
+                                sendWebNotification("🎯 Kâr Alındı / Hedef Vuruldu", currentTopLog.split("]")[1]);
+                            } else if (currentTopLog.includes("Stop-Loss Tetiklendi") || currentTopLog.includes("LİMİTİ TETİKLENDİ")) {
+                                playAlertSound("LOSS");
+                                sendWebNotification("🛑 Stop-Loss Patladı", currentTopLog.split("]")[1]);
+                            } else if (currentTopLog.includes("MANUEL KAPATMA")) {
+                                playAlertSound("CLICK");
+                            }
+                        }
+                    }
 
                     const logBoxElem = document.getElementById('log-box');
                     if(logBoxElem) {
