@@ -91,6 +91,9 @@ EXCLUDED_KEYWORDS = [
     'CASHCAT', 'WLFI', 'TRUMP', 'MELANIA', 'PEPE2', 'SHIB2'
 ]
 
+# Break & Retest aşamasındaki pariteleri hafızada tutar
+retest_tracker = {}
+
 async def create_exchange_instance():
     api_conf = system_state["api_settings"]
     exch_id = api_conf["exchange"].lower()
@@ -190,11 +193,24 @@ def calculate_indicators(df):
     df['ema20'] = df['close'].ewm(span=20, adjust=False).mean()
     df['ema50'] = df['close'].ewm(span=50, adjust=False).mean()
 
+    # ADX (Average Directional Index) Hesaplaması
+    high_diff = df['high'].diff()
+    low_diff = -df['low'].diff()
+    plus_dm = high_diff.where((high_diff > low_diff) & (high_diff > 0), 0.0)
+    minus_dm = low_diff.where((low_diff > high_diff) & (low_diff > 0), 0.0)
+
     high_low = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
     low_close = (df['low'] - df['close'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = tr.rolling(window=14).mean()
+
+    atr14 = df['atr']
+    plus_di = 100 * (plus_dm.rolling(window=14).mean() / (atr14 + 1e-9))
+    minus_di = 100 * (minus_dm.rolling(window=14).mean() / (atr14 + 1e-9))
+    dx = 100 * ((plus_di - minus_di).abs() / (plus_di + minus_di + 1e-9))
+    df['adx'] = dx.rolling(window=14).mean()
+
     df['vol_ma'] = df['volume'].rolling(window=20).mean()
     return df
 
@@ -291,6 +307,7 @@ async def update_btc_metrics(exchange):
         system_state["btc_regime"] = "BTC: AKTİF"
 
 async def analyze_symbol(exchange, symbol):
+    global retest_tracker
     try:
         if system_state["daily_loss_locked"] or not system_state.get("bot_trading_active", True):
             return None
@@ -327,23 +344,63 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
+        # 1. ADX FİLTRESİ: Trend gücü zayıfsa (ADX < 20) yatay piyasa, işlem alma
+        adx_val = c_1h['adx'] if pd.notnull(c_1h['adx']) else 25.0
+        if adx_val < 20:
+            return None
+
+        # 2. GÜÇLÜ GÖVDE VE LİKİDİTE SWEEP KONTROLÜ
         sweep_low = df_15m['low'].iloc[-4:].min() < swing_low_15m
-        mss_bull = c_5m['close'] > recent_breakout_high and c_5m['close'] > df_5m['ema20'].iloc[-1] and c_5m['close'] > c_5m['open']
+        body_size = abs(c_5m['close'] - c_5m['open'])
+        total_candle_size = c_5m['high'] - c_5m['low']
+        is_strong_green = (
+            c_5m['close'] > recent_breakout_high
+            and c_5m['close'] > c_5m['open']
+            and (body_size / (total_candle_size + 1e-9) > 0.4)
+        )
 
         sweep_high = df_15m['high'].iloc[-4:].max() > swing_high_15m
-        mss_bear = c_5m['close'] < recent_breakout_low and c_5m['close'] < df_5m['ema20'].iloc[-1] and c_5m['close'] < c_5m['open']
+        is_strong_red = (
+            c_5m['close'] < recent_breakout_low
+            and c_5m['close'] < c_5m['open']
+            and (body_size / (total_candle_size + 1e-9) > 0.4)
+        )
 
-        if sweep_low and mss_bull:
+        # 3. BREAK & RETEST (KIRILIM VE ONAY) AŞAMASI
+        if sweep_low and is_strong_green:
             if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] <= -1.2):
-                direction = "LONG"
-                score += 40
-                reasons.append("⚡ 15M Dip Likiditesi Alındı + 5M MSS Kırılımı")
-        elif sweep_high and mss_bear:
+                retest_tracker[symbol] = {
+                    "direction": "LONG",
+                    "level": recent_breakout_high,
+                    "score_base": 40,
+                    "reasons": ["⚡ 15M Dip Likiditesi Alındı + Güçlü Gövdeli Kırılım"]
+                }
+        elif sweep_high and is_strong_red:
             if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] >= 1.2):
-                direction = "SHORT"
-                score += 40
-                reasons.append("⚡ 15M Tepe Likiditesi Alındı + 5M MSS Kırılımı")
+                retest_tracker[symbol] = {
+                    "direction": "SHORT",
+                    "level": recent_breakout_low,
+                    "score_base": 40,
+                    "reasons": ["⚡ 15M Tepe Likiditesi Alındı + Güçlü Gövdeli Kırılım"]
+                }
 
+        # Retest bekleyen paritenin seviyeyi test edip onay alması
+        if symbol in retest_tracker:
+            tracker = retest_tracker[symbol]
+            if tracker["direction"] == "LONG":
+                if c_5m['low'] <= tracker["level"] * 1.002 and c_5m['close'] > tracker["level"]:
+                    direction = "LONG"
+                    score += tracker["score_base"] + 20
+                    reasons = tracker["reasons"] + ["🎯 Başarılı Break & Retest (Destek Onayı) Alındı"]
+                    del retest_tracker[symbol]
+            elif tracker["direction"] == "SHORT":
+                if c_5m['high'] >= tracker["level"] * 0.998 and c_5m['close'] < tracker["level"]:
+                    direction = "SHORT"
+                    score += tracker["score_base"] + 20
+                    reasons = tracker["reasons"] + ["🎯 Başarılı Break & Retest (Direnç Onayı) Alındı"]
+                    del retest_tracker[symbol]
+
+        # 4. 1H ANA TREND ONAYI
         if direction == "LONG":
             if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
                 score += 25
@@ -353,7 +410,7 @@ async def analyze_symbol(exchange, symbol):
                 score += 25
                 reasons.append("📉 1H Güçlü Ana Trend (Ayı) Onayı")
 
-        if len(oi_data) >= 3 and direction:
+        if direction and len(oi_data) >= 3:
             oi_prev = oi_data[-2].get('openInterestValue') or oi_data[-2].get('openInterest', 0)
             oi_curr = oi_data[-1].get('openInterestValue') or oi_data[-1].get('openInterest', 0)
             if oi_curr > oi_prev:
@@ -361,14 +418,29 @@ async def analyze_symbol(exchange, symbol):
                 reasons.append("📊 Açık Pozisyon (OI) Artışı (Kurumsal Giriş Onayı)")
 
         vol_ratio = float(c_5m['volume'] / (c_5m['vol_ma'] + 1e-9)) if pd.notnull(c_5m['vol_ma']) else 1.0
-        if vol_ratio >= 1.30:
+        if direction and vol_ratio >= 1.30:
             score += 10
             reasons.append(f"🔥 Yüksek Hacim Onayı ({vol_ratio:.1f}x)")
 
-        if 42 <= c_5m['rsi'] <= 62:
+        if direction and 42 <= c_5m['rsi'] <= 62:
             score += 10
             reasons.append(f"🎯 Dengeli Momentum RSI ({c_5m['rsi']:.1f})")
 
+        # 5. FUNDING RATE (FONLAMA ORANI) CEZA FİLTRESİ
+        if direction:
+            avg_funding_str = system_state["sentiment_data"].get("avg_funding_rate", "+0.0098%")
+            try:
+                funding_val = float(avg_funding_str.replace("%", "").strip())
+                if direction == "LONG" and funding_val > 0.02:
+                    score -= 15
+                    reasons.append("⚠️ Aşırı Pozitif Funding (Long Kalabalığı) Cezası (-15 Puan)")
+                elif direction == "SHORT" and funding_val < -0.02:
+                    score -= 15
+                    reasons.append("⚠️ Aşırı Negatif Funding (Short Kalabalığı) Cezası (-15 Puan)")
+            except Exception:
+                pass
+
+        # Radar Güncellemesi
         radar_item = {
             "symbol": symbol,
             "price": float(c_5m['close']),
@@ -383,7 +455,16 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
-        if not direction or score < 75:
+        # 6. DİNAMİK PUAN BARAJI (Volatiliteye Göre Esneyen Eşik)
+        btc_change_abs = abs(system_state["btc_15m_change"])
+        dynamic_threshold = 75
+        if btc_change_abs > 0.8:
+            dynamic_threshold = 85  # Piyasa hareketliyken sadece kusursuz kurulumlar
+        elif btc_change_abs < 0.3:
+            dynamic_threshold = 70  # Piyasa sakinleştiğinde fırsat kaçmasın
+
+        # Sinyal yoksa veya puan barajın altında kalırsa işlem alma
+        if not direction or score < dynamic_threshold:
             return None
 
         entry = float(c_5m['close'])
