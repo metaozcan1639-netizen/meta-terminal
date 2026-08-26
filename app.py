@@ -43,11 +43,15 @@ system_state = {
     "daily_drawdown_limit_pct": 10.0,
     "daily_loss_locked": False,
     "daily_start_balance": 1000.0,
-    "last_day_reset": get_now_datetime().strftime("%Y-%m-%d"),
     "btc_regime": "YÜKLENİYOR...",
     "btc_15m_change": 0.0,
     "btc_shock_lock": False,
     "btc_shock_reason": "",
+    "macro_lock": False,
+    "flash_crash_active": False,
+    "market_breadth": 50.0,
+    "breadth_bullish": 0,
+    "breadth_total": 0,
     "fear_and_greed": {"value": 66, "classification": "Açgözlülük"},
     "sentiment_data": {
         "btc_rsi": 52.2,
@@ -91,7 +95,37 @@ EXCLUDED_KEYWORDS = [
     'CASHCAT', 'WLFI', 'TRUMP', 'MELANIA', 'PEPE2', 'SHIB2'
 ]
 
+# Sektör Dağılımı ve Korelasyon Koruması İçin
+SECTORS = {
+    "AI": ["FET", "AGIX", "OCEAN", "RNDR", "WLD", "ARKM", "TAO", "NEAR", "ICP", "GRT"],
+    "MEME": ["PEPE", "DOGE", "SHIB", "FLOKI", "BONK", "WIF", "BOME", "MEME", "DOGS"],
+    "L1_L2": ["BTC", "ETH", "SOL", "AVAX", "ADA", "SUI", "APT", "SEI", "OP", "ARB"]
+}
+
 retest_tracker = {}
+
+def get_sector(symbol):
+    base = symbol.split('/')[0].upper()
+    if base.startswith('1000'): base = base[4:]
+    for sec, coins in SECTORS.items():
+        if base in coins: return sec
+    return "OTHER"
+
+def is_macro_event_near():
+    now = get_now_datetime()
+    # Simüle edilmiş makro takvim (TÜFE, FOMC, NFP)
+    events = [
+        datetime(now.year, now.month, 10, 15, 30, tzinfo=TURKEY_TZ), 
+        datetime(now.year, now.month, 5, 15, 30, tzinfo=TURKEY_TZ),
+        datetime(now.year, now.month, 18, 21, 0, tzinfo=TURKEY_TZ)
+    ]
+    for ev in events:
+        if now > ev: # Geçmiş etkinlikleri bir sonraki aya taşı
+            ev = ev.replace(month = ev.month % 12 + 1)
+        diff = abs((now - ev).total_seconds())
+        if diff <= 3600: # +/- 1 SAAT FRENİ
+            return True
+    return False
 
 async def create_exchange_instance():
     api_conf = system_state["api_settings"]
@@ -258,6 +292,12 @@ async def update_btc_metrics(exchange):
         pct_15m = ((c_now - c_prev) / c_prev) * 100
         system_state["btc_15m_change"] = round(pct_15m, 2)
 
+        # FLASH CRASH SİGORTASI: -%10 Düşüş
+        if pct_15m <= -10.0:
+            system_state["flash_crash_active"] = True
+            system_state["bot_trading_active"] = False
+            add_log("🚨 FLASH CRASH TESPİT EDİLDİ! Bot acil uyku moduna geçti, işlemler kilitlendi!")
+
         if pct_15m <= -1.2:
             system_state["btc_shock_lock"] = True
             system_state["btc_shock_reason"] = f"🔴 BTC Ani Düşüş Şoku (%{pct_15m:.2f}) | LONG Kilitlendi"
@@ -307,7 +347,14 @@ async def update_btc_metrics(exchange):
 async def analyze_symbol(exchange, symbol):
     global retest_tracker
     try:
-        if system_state["daily_loss_locked"] or not system_state.get("bot_trading_active", True):
+        # Kilit Kalkanları Devredeyse İşlem Alma
+        if system_state["daily_loss_locked"] or not system_state.get("bot_trading_active", True) or system_state["macro_lock"] or system_state["flash_crash_active"]:
+            return None
+
+        # Sektör Çeşitlendirmesi (Aynı sektörden maks 2 coin)
+        sec = get_sector(symbol)
+        sec_count = sum(1 for p in system_state["active_positions"] if get_sector(p["symbol"]) == sec)
+        if sec != "OTHER" and sec_count >= 2:
             return None
 
         base = symbol.split('/')[0].upper()
@@ -333,6 +380,11 @@ async def analyze_symbol(exchange, symbol):
         c_15m = df_15m.iloc[-1]
         c_1h = df_1h.iloc[-1]
 
+        # MARKET BREADTH (Piyasa Genişliği Takibi)
+        system_state["breadth_total"] += 1
+        if c_1h['close'] > c_1h['ema50']:
+            system_state["breadth_bullish"] += 1
+
         swing_low_15m = df_15m['low'].iloc[-20:-3].min()
         swing_high_15m = df_15m['high'].iloc[-20:-3].max()
         recent_breakout_high = df_5m['high'].iloc[-8:-1].max()
@@ -342,6 +394,7 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
+        # ADX FİLTRESİ (Yatay Testere Piyasası Koruması)
         adx_val = c_1h['adx'] if pd.notnull(c_1h['adx']) else 25.0
         if adx_val < 20:
             return None
@@ -362,6 +415,7 @@ async def analyze_symbol(exchange, symbol):
             and (body_size / (total_candle_size + 1e-9) > 0.4)
         )
 
+        # BREAK & RETEST (Kırılım Onay Algoritması)
         if sweep_low and is_strong_green:
             if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] <= -1.2):
                 retest_tracker[symbol] = {
@@ -394,6 +448,22 @@ async def analyze_symbol(exchange, symbol):
                     reasons = tracker["reasons"] + ["🎯 Başarılı Break & Retest (Direnç Onayı) Alındı"]
                     del retest_tracker[symbol]
 
+        # MARKET BREADTH REDDİ
+        breadth_pct = system_state.get("market_breadth", 50.0)
+        if direction == "LONG" and breadth_pct < 20.0:
+            return None # Altcoinlerin geneli çöküşte, Long riskli
+        elif direction == "SHORT" and breadth_pct > 80.0:
+            return None # Altcoinlerin geneli uçuşta, Short riskli
+
+        # VOLUME PROFILE (Hacim Profili / POC)
+        poc_price = float(df_1h.groupby('close')['volume'].sum().idxmax())
+        if direction:
+            if abs(c_5m['close'] - poc_price) / poc_price > 0.02:
+                score -= 10 # POC bölgesine uzak, riskli giriş
+            else:
+                score += 15
+                reasons.append(f"📦 Volume Profile (POC) Yoğun Takas Bölgesi Onayı")
+
         if direction == "LONG":
             if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
                 score += 25
@@ -419,6 +489,7 @@ async def analyze_symbol(exchange, symbol):
             score += 10
             reasons.append(f"🎯 Dengeli Momentum RSI ({c_5m['rsi']:.1f})")
 
+        # FUNDING RATE (Fonlama Tuzağı) Cezası
         if direction:
             avg_funding_str = system_state["sentiment_data"].get("avg_funding_rate", "+0.0098%")
             try:
@@ -446,6 +517,7 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
+        # DİNAMİK PUAN BARAJI (Volatiliteye Göre Eşik)
         btc_change_abs = abs(system_state["btc_15m_change"])
         dynamic_threshold = 75
         if btc_change_abs > 0.8:
@@ -540,6 +612,7 @@ async def analyze_symbol(exchange, symbol):
             "margin_mode": system_state["margin_mode"],
             "tp1_hit": False,
             "trailing_active": False,
+            "atr": atr, # Trailing stop hesaplaması için ATR eklendi
             "active_size": pos_size,
             "current_price": entry,
             "unrealized_pnl": 0.0,
@@ -576,6 +649,25 @@ async def market_scanner_loop():
             await update_btc_metrics(exchange)
             await fetch_fear_greed()
 
+            # MAKRO VERİ 1 SAAT FREN KONTROLÜ
+            macro_near = is_macro_event_near()
+            if macro_near and not system_state.get("macro_lock"):
+                system_state["macro_lock"] = True
+                add_log("⚠️ MAKRO VERİ KORUMASI: Etkinliğe 1 Saat Kaldı! Yeni işlem alımı durduruldu. Stoplar Girişe (Başa Baş) çekiliyor.")
+                for p in system_state["active_positions"]:
+                    p['sl'] = p['entry']
+            elif not macro_near and system_state.get("macro_lock"):
+                system_state["macro_lock"] = False
+                add_log("✅ MAKRO VERİ KORUMASI: Piyasa dalgalanması sona erdi. Normal işleyişe dönüldü.")
+
+            # FLASH CRASH ACİL DURUM KAPATMASI
+            if system_state.get("flash_crash_active") and system_state["active_positions"]:
+                for pos in list(system_state["active_positions"]):
+                    asyncio.create_task(execute_manual_real_order(pos['symbol'], pos['direction'], pos['active_size']))
+                    system_state["active_positions"].remove(pos)
+                add_log("🚨 CRASH GÜVENLİĞİ: Tüm açık işlemler acil durum kapsamında market emriyle kapatıldı!")
+                sync_wallet_accounting()
+
             markets = await exchange.load_markets()
             tickers = await exchange.fetch_tickers()
 
@@ -590,6 +682,8 @@ async def market_scanner_loop():
                             crypto_symbols.append(s)
 
             system_state["scanned_count"] = len(crypto_symbols)
+            system_state["breadth_total"] = 0
+            system_state["breadth_bullish"] = 0
 
             batch_size = 10
             for i in range(0, len(crypto_symbols), batch_size):
@@ -641,6 +735,11 @@ async def market_scanner_loop():
                 system_state["last_scan_time"] = get_now_str()
                 await asyncio.sleep(0.1)
 
+            # Piyasa Genişliğini Global Değişkene Aktar
+            if system_state["breadth_total"] > 0:
+                system_state["market_breadth"] = (system_state["breadth_bullish"] / system_state["breadth_total"]) * 100
+
+            now_ts = int(get_now_datetime().timestamp())
             for pos in list(system_state["active_positions"]):
                 try:
                     ticker = await exchange.fetch_ticker(pos['symbol'])
@@ -652,21 +751,24 @@ async def market_scanner_loop():
                     pnl_raw = ((curr_price - pos['entry']) / pos['entry']) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'])
                     pos['unrealized_pnl'] = round(pos['active_size'] * pnl_raw, 2)
 
+                    # AKILLI ATR TRAILING STOP KONTROLÜ (Manuel UI'dan Aktif Edildiğinde Çalışır)
                     if pos.get("trailing_active"):
+                        atr_val = pos.get("atr", curr_price * 0.01)
                         if direction == "LONG" and curr_price > pos['entry']:
-                            new_sl = curr_price * 0.992
-                            if new_sl > pos['sl']:
-                                pos['sl'] = new_sl
+                            new_sl = curr_price - (1.5 * atr_val)
+                            if new_sl > pos['sl']: pos['sl'] = new_sl
                         elif direction == "SHORT" and curr_price < pos['entry']:
-                            new_sl = curr_price * 1.008
-                            if new_sl < pos['sl']:
-                                pos['sl'] = new_sl
+                            new_sl = curr_price + (1.5 * atr_val)
+                            if new_sl < pos['sl']: pos['sl'] = new_sl
 
                     target_dist = abs(pos['tp2'] - pos['entry'])
                     favorable_move = (curr_price - pos['entry']) if direction == "LONG" else (pos['entry'] - curr_price)
                     pos['progress_pct'] = max(0.0, min(100.0, round((favorable_move / (target_dist + 1e-9)) * 100, 1)))
 
-                    if (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
+                    # ZAMAN AŞIMI (6 SAAT) ÇIKIŞI
+                    if now_ts - pos.get('open_timestamp', now_ts) > 6 * 3600:
+                        close_reason = "⏳ 6 Saat Zaman Aşımı (Momentum Kaybı)"
+                    elif (direction == "LONG" and curr_price <= pos['sl']) or (direction == "SHORT" and curr_price >= pos['sl']):
                         close_reason = "❌ Stop-Loss Tetiklendi"
                     elif (direction == "LONG" and curr_price >= pos['tp2']) or (direction == "SHORT" and curr_price <= pos['tp2']):
                         close_reason = "🎯 TP2 Likidite Havuzuna Ulaşıldı"
@@ -680,7 +782,6 @@ async def market_scanner_loop():
                             pos['active_size'] = pos['pos_size'] * 0.5
                             apply_realized_pnl(partial_pnl)
                             pos["margin"] = round(pos.get("margin", 0.0) * 0.5, 2)
-                            now_ts = int(get_now_datetime().timestamp())
                             system_state["equity_curve"].append({"time": now_ts, "value": round(system_state["total_balance"], 2)})
                             add_log(f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi.")
 
@@ -948,7 +1049,7 @@ async def manual_toggle_trailing(payload: ClosePosPayload):
     if target:
         target['trailing_active'] = not target.get('trailing_active', False)
         status_str = "Aktif" if target['trailing_active'] else "Pasif"
-        add_log(f"🔄 TRAILING STOP: {target['symbol']} için {status_str} yapıldı.")
+        add_log(f"🔄 AKILLI ATR TRAILING STOP: {target['symbol']} için {status_str} yapıldı.")
         return {"status": "success"}
     return {"status": "error"}
 
@@ -1260,8 +1361,8 @@ async def get_dashboard(request: Request):
                     <div class="text-xs text-slate-400 uppercase tracking-wider mb-2">Kripto Korku ve Açgözlülük</div>
                     <div id="fng-val" class="text-4xl font-extrabold font-mono text-emerald-400">66</div>
                     <div id="fng-text" class="text-sm font-bold text-slate-300 mt-1 uppercase">AÇGÖZLÜLÜK</div>
-                    <div id="fng-bar" class="w-full bg-slate-800 h-2.5 rounded-full mt-3 overflow-hidden">
-                        <div class="bg-emerald-500 h-2.5 rounded-full" style="width: 66%"></div>
+                    <div class="w-full bg-slate-800 h-2.5 rounded-full mt-3 overflow-hidden">
+                        <div id="fng-bar" class="bg-emerald-500 h-2.5 rounded-full" style="width: 66%"></div>
                     </div>
                 </div>
                 <div class="card p-4 rounded-xl space-y-2">
