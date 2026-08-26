@@ -63,7 +63,7 @@ system_state = {
     "margin_mode": "ISOLATED",
     "max_open_positions": 5,
     "max_total_margin_pct": 50.0,
-    "daily_drawdown_limit_pct": 10.0,
+    "daily_drawdown_limit_pct": 100.0,
     "daily_loss_locked": False,
     "daily_start_balance": 1000.0,
     "last_day_reset": get_now_datetime().strftime("%Y-%m-%d"),
@@ -214,31 +214,7 @@ def apply_realized_pnl(amount: float):
     sync_wallet_accounting()
 
 def check_daily_drawdown():
-    now_str = get_now_datetime().strftime("%Y-%m-%d")
-    if system_state["last_day_reset"] != now_str:
-        system_state["last_day_reset"] = now_str
-        system_state["daily_start_balance"] = system_state["total_balance"]
-        system_state["daily_loss_locked"] = False
-        add_log("🌅 TSİ 00:00: Günlük Kasa Dengesi ve Drawdown Limiti Sıfırlandı.")
-
-    if system_state["total_balance"] > system_state["peak_balance"]:
-        system_state["peak_balance"] = system_state["total_balance"]
-    
-    peak = system_state["peak_balance"]
-    curr = system_state["total_balance"]
-    if peak > 0:
-        dd = ((peak - curr) / peak) * 100
-        if dd > system_state["max_drawdown_pct"]:
-            system_state["max_drawdown_pct"] = round(dd, 2)
-
-    daily_loss = system_state["daily_start_balance"] - system_state["total_balance"]
-    max_allowed_loss = system_state["daily_start_balance"] * (system_state["daily_drawdown_limit_pct"] / 100.0)
-    
-    if daily_loss >= max_allowed_loss and not system_state["daily_loss_locked"]:
-        system_state["daily_loss_locked"] = True
-        msg = f"🛑 GÜNLÜK ZARAR LİMİTİ TETİKLENDİ: -${daily_loss:.2f} (%{system_state['daily_drawdown_limit_pct']}) Kayıp. Yeni İşlemler Geceye Kadar Kilitlendi!"
-        add_log(msg)
-        asyncio.create_task(send_telegram_alert(f"⚠️ <b>ACİL DURUM KORUMASI</b>\n\n{msg}"))
+    return
 
 def calculate_indicators(df):
     delta = df['close'].diff()
