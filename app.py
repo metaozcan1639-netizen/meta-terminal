@@ -43,6 +43,7 @@ system_state = {
     "daily_drawdown_limit_pct": 10.0,
     "daily_loss_locked": False,
     "daily_start_balance": 1000.0,
+    "last_day_reset": get_now_datetime().strftime("%Y-%m-%d"), # HATA DÜZELTİLDİ: Eksik anahtar eklendi
     "btc_regime": "YÜKLENİYOR...",
     "btc_15m_change": 0.0,
     "btc_shock_lock": False,
@@ -113,14 +114,13 @@ def get_sector(symbol):
 
 def is_macro_event_near():
     now = get_now_datetime()
-    # Simüle edilmiş makro takvim (TÜFE, FOMC, NFP)
     events = [
         datetime(now.year, now.month, 10, 15, 30, tzinfo=TURKEY_TZ), 
         datetime(now.year, now.month, 5, 15, 30, tzinfo=TURKEY_TZ),
         datetime(now.year, now.month, 18, 21, 0, tzinfo=TURKEY_TZ)
     ]
     for ev in events:
-        if now > ev: # Geçmiş etkinlikleri bir sonraki aya taşı
+        if now > ev: 
             ev = ev.replace(month = ev.month % 12 + 1)
         diff = abs((now - ev).total_seconds())
         if diff <= 3600: # +/- 1 SAAT FRENİ
@@ -292,7 +292,7 @@ async def update_btc_metrics(exchange):
         pct_15m = ((c_now - c_prev) / c_prev) * 100
         system_state["btc_15m_change"] = round(pct_15m, 2)
 
-        # FLASH CRASH SİGORTASI: -%10 Düşüş
+        # FLASH CRASH SİGORTASI
         if pct_15m <= -10.0:
             system_state["flash_crash_active"] = True
             system_state["bot_trading_active"] = False
@@ -347,11 +347,9 @@ async def update_btc_metrics(exchange):
 async def analyze_symbol(exchange, symbol):
     global retest_tracker
     try:
-        # Kilit Kalkanları Devredeyse İşlem Alma
         if system_state["daily_loss_locked"] or not system_state.get("bot_trading_active", True) or system_state["macro_lock"] or system_state["flash_crash_active"]:
             return None
 
-        # Sektör Çeşitlendirmesi (Aynı sektörden maks 2 coin)
         sec = get_sector(symbol)
         sec_count = sum(1 for p in system_state["active_positions"] if get_sector(p["symbol"]) == sec)
         if sec != "OTHER" and sec_count >= 2:
@@ -380,7 +378,6 @@ async def analyze_symbol(exchange, symbol):
         c_15m = df_15m.iloc[-1]
         c_1h = df_1h.iloc[-1]
 
-        # MARKET BREADTH (Piyasa Genişliği Takibi)
         system_state["breadth_total"] += 1
         if c_1h['close'] > c_1h['ema50']:
             system_state["breadth_bullish"] += 1
@@ -394,7 +391,6 @@ async def analyze_symbol(exchange, symbol):
         direction = None
         reasons = []
 
-        # ADX FİLTRESİ (Yatay Testere Piyasası Koruması)
         adx_val = c_1h['adx'] if pd.notnull(c_1h['adx']) else 25.0
         if adx_val < 20:
             return None
@@ -415,7 +411,6 @@ async def analyze_symbol(exchange, symbol):
             and (body_size / (total_candle_size + 1e-9) > 0.4)
         )
 
-        # BREAK & RETEST (Kırılım Onay Algoritması)
         if sweep_low and is_strong_green:
             if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] <= -1.2):
                 retest_tracker[symbol] = {
@@ -448,18 +443,16 @@ async def analyze_symbol(exchange, symbol):
                     reasons = tracker["reasons"] + ["🎯 Başarılı Break & Retest (Direnç Onayı) Alındı"]
                     del retest_tracker[symbol]
 
-        # MARKET BREADTH REDDİ
         breadth_pct = system_state.get("market_breadth", 50.0)
         if direction == "LONG" and breadth_pct < 20.0:
-            return None # Altcoinlerin geneli çöküşte, Long riskli
+            return None 
         elif direction == "SHORT" and breadth_pct > 80.0:
-            return None # Altcoinlerin geneli uçuşta, Short riskli
+            return None 
 
-        # VOLUME PROFILE (Hacim Profili / POC)
         poc_price = float(df_1h.groupby('close')['volume'].sum().idxmax())
         if direction:
             if abs(c_5m['close'] - poc_price) / poc_price > 0.02:
-                score -= 10 # POC bölgesine uzak, riskli giriş
+                score -= 10 
             else:
                 score += 15
                 reasons.append(f"📦 Volume Profile (POC) Yoğun Takas Bölgesi Onayı")
@@ -489,7 +482,6 @@ async def analyze_symbol(exchange, symbol):
             score += 10
             reasons.append(f"🎯 Dengeli Momentum RSI ({c_5m['rsi']:.1f})")
 
-        # FUNDING RATE (Fonlama Tuzağı) Cezası
         if direction:
             avg_funding_str = system_state["sentiment_data"].get("avg_funding_rate", "+0.0098%")
             try:
@@ -517,7 +509,6 @@ async def analyze_symbol(exchange, symbol):
         if len(system_state["radar_symbols"]) > 60:
             system_state["radar_symbols"].pop(0)
 
-        # DİNAMİK PUAN BARAJI (Volatiliteye Göre Eşik)
         btc_change_abs = abs(system_state["btc_15m_change"])
         dynamic_threshold = 75
         if btc_change_abs > 0.8:
@@ -612,7 +603,7 @@ async def analyze_symbol(exchange, symbol):
             "margin_mode": system_state["margin_mode"],
             "tp1_hit": False,
             "trailing_active": False,
-            "atr": atr, # Trailing stop hesaplaması için ATR eklendi
+            "atr": atr, 
             "active_size": pos_size,
             "current_price": entry,
             "unrealized_pnl": 0.0,
@@ -635,9 +626,10 @@ async def keep_alive_loop():
             except Exception:
                 pass
 
+# AVCI DÖNGÜ: Sadece Piyasayı Tarar ve İşlem Fırsatı Arar (Tıkanıklık Yaratmaz)
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru: 1H Ana Trend Filtresi Aktif | Likit Kripto Taraması Devrede...")
+    add_log("Quant Motoru (Avcı): 1H Ana Trend Filtresi Aktif | Likit Kripto Taraması Devrede...")
 
     while True:
         exchange = None
@@ -649,7 +641,6 @@ async def market_scanner_loop():
             await update_btc_metrics(exchange)
             await fetch_fear_greed()
 
-            # MAKRO VERİ 1 SAAT FREN KONTROLÜ
             macro_near = is_macro_event_near()
             if macro_near and not system_state.get("macro_lock"):
                 system_state["macro_lock"] = True
@@ -660,7 +651,6 @@ async def market_scanner_loop():
                 system_state["macro_lock"] = False
                 add_log("✅ MAKRO VERİ KORUMASI: Piyasa dalgalanması sona erdi. Normal işleyişe dönüldü.")
 
-            # FLASH CRASH ACİL DURUM KAPATMASI
             if system_state.get("flash_crash_active") and system_state["active_positions"]:
                 for pos in list(system_state["active_positions"]):
                     asyncio.create_task(execute_manual_real_order(pos['symbol'], pos['direction'], pos['active_size']))
@@ -696,7 +686,6 @@ async def market_scanner_loop():
                         exists = any(p['symbol'] == sig['symbol'] for p in system_state["active_positions"])
                         if not exists:
                             max_pos = system_state["max_open_positions"]
-                            
                             if max_pos == -1:
                                 if system_state["btc_shock_lock"] or "AYI" in system_state["btc_regime"]:
                                     max_pos = 5
@@ -735,14 +724,47 @@ async def market_scanner_loop():
                 system_state["last_scan_time"] = get_now_str()
                 await asyncio.sleep(0.1)
 
-            # Piyasa Genişliğini Global Değişkene Aktar
             if system_state["breadth_total"] > 0:
                 system_state["market_breadth"] = (system_state["breadth_bullish"] / system_state["breadth_total"]) * 100
 
+            await exchange.close()
+            await asyncio.sleep(1)
+        except Exception as e:
+            add_log(f"Döngü Uyarısı: {str(e)[:45]}")
+            if exchange:
+                try:
+                    await exchange.close()
+                except Exception:
+                    pass
+            await asyncio.sleep(2)
+
+# KORUYUCU DÖNGÜ (Protector): Yalnızca açık işlemleri saniyede bir kontrol edip SL/TP ve Trailing hesaplar.
+async def position_manager_loop():
+    await asyncio.sleep(5)
+    add_log("🛡️ Koruyucu Döngü (Protector) Aktif: Açık pozisyonlar milisaniyelik takip ediliyor.")
+    while True:
+        exchange = None
+        try:
+            if not system_state["active_positions"]:
+                await asyncio.sleep(1)
+                continue
+
+            exchange = await create_exchange_instance()
+            symbols = [p['symbol'] for p in system_state["active_positions"]]
+            
+            try:
+                tickers = await exchange.fetch_tickers(symbols)
+            except:
+                tickers = await exchange.fetch_tickers() 
+            
             now_ts = int(get_now_datetime().timestamp())
+
             for pos in list(system_state["active_positions"]):
                 try:
-                    ticker = await exchange.fetch_ticker(pos['symbol'])
+                    ticker = tickers.get(pos['symbol'])
+                    if not ticker or not ticker.get('last'):
+                        ticker = await exchange.fetch_ticker(pos['symbol'])
+                    
                     curr_price = ticker['last']
                     pos['current_price'] = curr_price
                     direction = pos['direction']
@@ -751,7 +773,7 @@ async def market_scanner_loop():
                     pnl_raw = ((curr_price - pos['entry']) / pos['entry']) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'])
                     pos['unrealized_pnl'] = round(pos['active_size'] * pnl_raw, 2)
 
-                    # AKILLI ATR TRAILING STOP KONTROLÜ (Manuel UI'dan Aktif Edildiğinde Çalışır)
+                    # AKILLI ATR TRAILING STOP KONTROLÜ
                     if pos.get("trailing_active"):
                         atr_val = pos.get("atr", curr_price * 0.01)
                         if direction == "LONG" and curr_price > pos['entry']:
@@ -799,9 +821,8 @@ async def market_scanner_loop():
                         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
                         apply_realized_pnl(realized_pnl)
 
-                        now_dt = get_now_datetime()
-                        duration_mins = max(1, int((now_dt.timestamp() - pos.get('open_timestamp', now_dt.timestamp())) / 60))
-                        system_state["equity_curve"].append({"time": int(now_dt.timestamp()), "value": round(system_state["total_balance"], 2)})
+                        duration_mins = max(1, int((now_ts - pos.get('open_timestamp', now_ts)) / 60))
+                        system_state["equity_curve"].append({"time": now_ts, "value": round(system_state["total_balance"], 2)})
                         
                         history_item = {
                             "symbol": pos['symbol'],
@@ -814,8 +835,8 @@ async def market_scanner_loop():
                             "duration_mins": duration_mins,
                             "open_reasons": pos['reasons'],
                             "close_reason": close_reason,
-                            "close_time": now_dt.strftime("%H:%M:%S"),
-                            "close_timestamp": int(now_dt.timestamp())
+                            "close_time": get_now_str(),
+                            "close_timestamp": now_ts
                         }
                         system_state["trade_history"].insert(0, history_item)
                         system_state["active_positions"].remove(pos)
@@ -832,27 +853,26 @@ async def market_scanner_loop():
                             except Exception as e:
                                 add_log(f"❌ GERÇEK ÇIKIŞ HATASI ({pos['symbol']}): {str(e)[:60]}")
 
-                except Exception:
+                except Exception as e:
                     pass
 
             await exchange.close()
-            await asyncio.sleep(1)
+            await asyncio.sleep(1) # Hızlı tepki süresi için 1 saniyelik Koruyucu döngü hızı
         except Exception as e:
-            add_log(f"Döngü Uyarısı: {str(e)[:45]}")
             if exchange:
-                try:
-                    await exchange.close()
-                except Exception:
-                    pass
-            await asyncio.sleep(2)
+                try: await exchange.close()
+                except: pass
+            await asyncio.sleep(1)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     task1 = asyncio.create_task(market_scanner_loop())
     task2 = asyncio.create_task(keep_alive_loop())
+    task3 = asyncio.create_task(position_manager_loop())
     yield
     task1.cancel()
     task2.cancel()
+    task3.cancel()
 
 app = FastAPI(title="Meta Quant Terminal Pro", lifespan=lifespan)
 
