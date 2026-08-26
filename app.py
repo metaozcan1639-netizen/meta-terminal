@@ -701,7 +701,7 @@ async def market_scanner_loop():
             system_state["breadth_total"] = 0
             system_state["breadth_bullish"] = 0
 
-            batch_size = 10
+            batch_size = 3
             for i in range(0, len(crypto_symbols), batch_size):
                 chunk = crypto_symbols[i:i + batch_size]
                 tasks = [analyze_symbol(exchange, s) for s in chunk]
@@ -754,7 +754,7 @@ async def market_scanner_loop():
                                     add_log(f"❌ GERÇEK EMİR HATASI ({sig['symbol']}): {str(e)[:60]}")
 
                 system_state["last_scan_time"] = get_now_str()
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(2)
 
             if system_state["breadth_total"] > 0:
                 system_state["market_breadth"] = (system_state["breadth_bullish"] / system_state["breadth_total"]) * 100
@@ -2676,7 +2676,7 @@ async def get_dashboard(request: Request):
                 const mode = document.getElementById('api-mode').value;
                 const api_key = document.getElementById('api-key').value;
                 const api_secret = document.getElementById('api-secret').value;
-                await fetch('/api/update_api', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({exchange, mode, api_key, api_secret, auto_trade: false}) });
+                await fetch('/api/update_api', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({exchange, mode, api_key, api_secret, auto_trade: true}) });
                 updateDashboard();
                 if(btn){ btn.innerText = "KAYDET"; btn.disabled = false; btn.classList.remove("opacity-50"); }
             }
