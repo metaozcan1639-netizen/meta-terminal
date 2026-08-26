@@ -2421,54 +2421,56 @@ async def get_dashboard(request: Request):
             }
 
             async function fetchCandlesDirect(symbol, interval = '5', fetchLimit = 1000) {
-                let baseSym = symbol.split('/')[0].toUpperCase();
+                let baseSym = symbol.split('/')[0].toUpperCase().replace(':USDT', '');
+                if (baseSym.endsWith('USDT') && baseSym !== 'USDT') {
+                    baseSym = baseSym.replace('USDT', '');
+                }
                 
                 const tfMap = { '1': '1m', '5': '5m', '15': '15m', '60': '1h', '240': '4h', 'D': '1d' };
                 const binanceInterval = tfMap[interval] || '5m';
 
-                let rawSym = resolvedSymbolCache[symbol] || (baseSym + 'USDT'); 
-                let url = `https://fapi.binance.com/fapi/v1/klines?symbol=${rawSym}&interval=${binanceInterval}&limit=${fetchLimit}`;
-                
-                try {
-                    let res = await fetch(url);
-                    let data = await res.json();
-                    
-                    if (data.code !== undefined && !resolvedSymbolCache[symbol]) {
-                        let altSym1 = '1000' + baseSym + 'USDT';
-                        let url1 = `https://fapi.binance.com/fapi/v1/klines?symbol=${altSym1}&interval=${binanceInterval}&limit=${fetchLimit}`;
-                        let res1 = await fetch(url1);
-                        let data1 = await res1.json();
-                        
-                        if (data1.code !== undefined && baseSym.startsWith('1000')) {
-                            let altSym2 = baseSym.substring(4) + 'USDT';
-                            let url2 = `https://fapi.binance.com/fapi/v1/klines?symbol=${altSym2}&interval=${binanceInterval}&limit=${fetchLimit}`;
-                            let res2 = await fetch(url2);
-                            data = await res2.json();
-                            if (data.length > 0) resolvedSymbolCache[symbol] = altSym2;
-                        } else {
-                            data = data1;
-                            if (data.length > 0) resolvedSymbolCache[symbol] = altSym1;
-                        }
-                    } else if (data.length > 0) {
-                        resolvedSymbolCache[symbol] = rawSym;
-                    }
+                let possibleSymbols = [
+                    resolvedSymbolCache[symbol],
+                    baseSym + 'USDT',
+                    '1000' + baseSym + 'USDT',
+                    baseSym.replace('1000', '') + 'USDT'
+                ].filter(Boolean);
 
-                    if (Array.isArray(data)) {
-                        return data.map(c => ({
-                            time: Math.floor(c[0] / 1000), 
-                            open: parseFloat(c[1]), 
-                            high: parseFloat(c[2]), 
-                            low: parseFloat(c[3]), 
-                            close: parseFloat(c[4])
-                        }));
-                    }
-                } catch(e) {}
+                let data = [];
+                let finalUsedSym = null;
+
+                for (let rawSym of possibleSymbols) {
+                    let url = `https://fapi.binance.com/fapi/v1/klines?symbol=${rawSym}&interval=${binanceInterval}&limit=${fetchLimit}&_t=${Date.now()}`;
+                    try {
+                        let res = await fetch(url);
+                        let json = await res.json();
+                        if (Array.isArray(json) && json.length > 0 && json.code === undefined) {
+                            data = json;
+                            finalUsedSym = rawSym;
+                            break;
+                        }
+                    } catch(e) {}
+                }
+
+                if (finalUsedSym) {
+                    resolvedSymbolCache[symbol] = finalUsedSym;
+                }
+
+                if (Array.isArray(data) && data.length > 0) {
+                    return data.map(c => ({
+                        time: Math.floor(c[0] / 1000), 
+                        open: parseFloat(c[1]), 
+                        high: parseFloat(c[2]), 
+                        low: parseFloat(c[3]), 
+                        close: parseFloat(c[4])
+                    }));
+                }
                 return [];
             }
 
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
-                    const limit = isLiveTick ? 2 : 1000;
+                    const limit = isLiveTick ? 5 : 1000;
                     const candles = await fetchCandlesDirect(symbol, currentTimeframe, limit);
                     
                     if (candles.length > 0 && candleSeries) {
