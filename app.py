@@ -360,11 +360,12 @@ async def analyze_symbol(exchange, symbol):
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
 
+        # YÜKSEK ZAMAN DİLİMİ (1H Ana Trend, 1H Retest ve 4H Yapı Analizi)
         tasks = [
-            exchange.fetch_ohlcv(symbol, timeframe='5m', limit=35),
-            exchange.fetch_ohlcv(symbol, timeframe='15m', limit=35),
-            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=50),
-            exchange.fetch_open_interest_history(symbol, timeframe='5m', limit=6)
+            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=35),
+            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=35),
+            exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50),
+            exchange.fetch_open_interest_history(symbol, timeframe='1h', limit=6)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
         if any(isinstance(r, Exception) or not r or len(r) < 30 for r in results[:3]):
@@ -418,7 +419,7 @@ async def analyze_symbol(exchange, symbol):
                     "direction": "LONG",
                     "level": recent_breakout_high,
                     "score_base": 40,
-                    "reasons": ["⚡ 15M Dip Likiditesi Alındı + Güçlü Gövdeli Kırılım"]
+                    "reasons": ["⚡ 1H Dip Likiditesi Alındı + Güçlü Gövdeli Kırılım"]
                 }
         elif sweep_high and is_strong_red:
             if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] >= 1.2):
@@ -426,7 +427,7 @@ async def analyze_symbol(exchange, symbol):
                     "direction": "SHORT",
                     "level": recent_breakout_low,
                     "score_base": 40,
-                    "reasons": ["⚡ 15M Tepe Likiditesi Alındı + Güçlü Gövdeli Kırılım"]
+                    "reasons": ["⚡ 1H Tepe Likiditesi Alındı + Güçlü Gövdeli Kırılım"]
                 }
 
         if symbol in retest_tracker:
@@ -435,13 +436,13 @@ async def analyze_symbol(exchange, symbol):
                 if c_5m['low'] <= tracker["level"] * 1.002 and c_5m['close'] > tracker["level"]:
                     direction = "LONG"
                     score += tracker["score_base"] + 20
-                    reasons = tracker["reasons"] + ["🎯 Başarılı Break & Retest (Destek Onayı) Alındı"]
+                    reasons = tracker["reasons"] + ["🎯 Başarılı 1H Break & Retest (Destek Onayı) Alındı"]
                     del retest_tracker[symbol]
             elif tracker["direction"] == "SHORT":
                 if c_5m['high'] >= tracker["level"] * 0.998 and c_5m['close'] < tracker["level"]:
                     direction = "SHORT"
                     score += tracker["score_base"] + 20
-                    reasons = tracker["reasons"] + ["🎯 Başarılı Break & Retest (Direnç Onayı) Alındı"]
+                    reasons = tracker["reasons"] + ["🎯 Başarılı 1H Break & Retest (Direnç Onayı) Alındı"]
                     del retest_tracker[symbol]
 
         breadth_pct = system_state.get("market_breadth", 50.0)
@@ -551,10 +552,11 @@ async def analyze_symbol(exchange, symbol):
         except Exception:
             pass
 
+        # STOP MESAFESİ GENİŞLETİLDİ (1.8 yerine 2.8 ATR katsayısı kullanılarak fitillere karşı güvenli marj sağlandı)
         if direction == "LONG":
-            sl = float(df_5m['low'].iloc[-8:].min() - (1.8 * atr))
-            if (entry - sl) / entry < 0.012:
-                sl = entry * 0.988
+            sl = float(df_5m['low'].iloc[-8:].min() - (2.8 * atr))
+            if (entry - sl) / entry < 0.018:
+                sl = entry * 0.982
             risk_dist = entry - sl
 
             dyn_tp1 = float(df_15m['high'].iloc[-25:-1].max()) - (0.5 * atr)
@@ -570,9 +572,9 @@ async def analyze_symbol(exchange, symbol):
             tp1, tp2 = dyn_tp1, dyn_tp2
 
         else:
-            sl = float(df_5m['high'].iloc[-8:].max() + (1.8 * atr))
-            if (sl - entry) / entry < 0.012:
-                sl = entry * 1.012
+            sl = float(df_5m['high'].iloc[-8:].max() + (2.8 * atr))
+            if (sl - entry) / entry < 0.018:
+                sl = entry * 1.018
             risk_dist = sl - entry
 
             dyn_tp1 = float(df_15m['low'].iloc[-25:-1].min()) + (0.5 * atr)
@@ -1331,9 +1333,9 @@ async def get_dashboard(request: Request):
                             <span id="chart-title" class="text-xs font-bold text-emerald-400 tracking-wider">GRAFİK</span>
                             <div class="flex space-x-1 bg-slate-900 p-0.5 rounded border border-slate-800 text-[10px]">
                                 <button onclick="changeTimeframe('1')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-1">1M</button>
-                                <button onclick="changeTimeframe('5')" class="tf-btn active px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-5">5M</button>
+                                <button onclick="changeTimeframe('5')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-5">5M</button>
                                 <button onclick="changeTimeframe('15')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-15">15M</button>
-                                <button onclick="changeTimeframe('60')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-60">1H</button>
+                                <button onclick="changeTimeframe('60')" class="tf-btn active px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-60">1H</button>
                                 <button onclick="changeTimeframe('240')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-240">4H</button>
                                 <button onclick="changeTimeframe('D')" class="tf-btn px-2 py-0.5 rounded text-slate-400 hover:text-white" id="tf-D">1D</button>
                             </div>
@@ -1896,7 +1898,7 @@ async def get_dashboard(request: Request):
             let currentSymbol = "BTC/USDT:USDT";
             localStorage.setItem("selected_sym", "BTC/USDT:USDT");
 
-            let currentTimeframe = "5";
+            let currentTimeframe = "60";
             let currentPnlFilter = "today";
             let currentStatsFilter = "today";
             let journalDirectionFilter = "ALL";
@@ -2420,14 +2422,14 @@ async def get_dashboard(request: Request):
                 resizeCanvas();
             }
 
-            async function fetchCandlesDirect(symbol, interval = '5', fetchLimit = 1000) {
+            async function fetchCandlesDirect(symbol, interval = '60', fetchLimit = 1000) {
                 let baseSym = symbol.split('/')[0].toUpperCase().replace(':USDT', '');
                 if (baseSym.endsWith('USDT') && baseSym !== 'USDT') {
                     baseSym = baseSym.replace('USDT', '');
                 }
                 
                 const tfMap = { '1': '1m', '5': '5m', '15': '15m', '60': '1h', '240': '4h', 'D': '1d' };
-                const binanceInterval = tfMap[interval] || '5m';
+                const binanceInterval = tfMap[currentTimeframe] || '1h';
 
                 let possibleSymbols = [
                     resolvedSymbolCache[symbol],
@@ -2868,7 +2870,7 @@ async def get_dashboard(request: Request):
 
             initCharts();
             loadChartCandles(currentSymbol, null, false);
-            setInterval(updateDashboard, 2000);
+            setInterval(updateDashboard, 5000);
         </script>
     </body>
     </html>
