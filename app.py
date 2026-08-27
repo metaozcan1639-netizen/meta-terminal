@@ -2336,7 +2336,7 @@ async def get_dashboard(request: Request):
                         lockVisibleTimeRangeOnResize: false,
                         tickMarkFormatter: (time, tickMarkType, locale) => {
                             const d = new Date(time * 1000);
-                            return d.toLocaleTimeString('en-GB', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
+                            return d.toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
                         }
                     },
                     rightPriceScale: { autoScale: true, scaleMargins: { top: 0.15, bottom: 0.15 } }
@@ -2416,8 +2416,9 @@ async def get_dashboard(request: Request):
                 }
 
                 if (Array.isArray(data) && data.length > 0) {
+                    // Türkiye saati (TSİ / +3 saat = +10800 saniye) hizalaması ve grafik senkronizasyonu
                     return data.map(c => ({
-                        time: Math.floor(c[0] / 1000), 
+                        time: Math.floor(c[0] / 1000) + 10800, 
                         open: parseFloat(c[1]), 
                         high: parseFloat(c[2]), 
                         low: parseFloat(c[3]), 
@@ -2427,7 +2428,6 @@ async def get_dashboard(request: Request):
                 return [];
             }
 
-            // ANLIK FİYAT ENJEKSİYONU İLE CANLI AKIŞ MOTORU EKLENDİ
             async function fetchLiveTickerPrice(symbol) {
                 let baseSym = symbol.split('/')[0].toUpperCase().replace(':USDT', '');
                 if (baseSym.endsWith('USDT') && baseSym !== 'USDT') baseSym = baseSym.replace('USDT', '');
