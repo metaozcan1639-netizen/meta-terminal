@@ -15,23 +15,23 @@ import uvicorn
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-TURKEY_TZ = timezone(timedelta(hours=3))
+# Sistem zamanı borsa standardı UTC'ye sabitlendi
+UTC_TZ = timezone.utc
 
 # =================================================================
 # 📱 TELEGRAM BİLDİRİM AYARLARI (BURAYI DOLDURUN)
 # =================================================================
-TELEGRAM_BOT_TOKEN = "8971696278:AAHiBk7gzMGxjAz2mi4KqV4LEUWwhVH6NKc"  # Örn: "123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ"
-TELEGRAM_CHAT_ID = "2088808175"    # Örn: "987654321"
+TELEGRAM_BOT_TOKEN = "8971696278:AAHiBk7gzMGxjAz2mi4KqV4LEUWwhVH6NKc"
+TELEGRAM_CHAT_ID = "2088808175"
 # =================================================================
 
 def get_now_str():
-    return datetime.now(TURKEY_TZ).strftime("%H:%M:%S")
+    return datetime.now(UTC_TZ).strftime("%H:%M:%S")
 
 def get_now_datetime():
-    return datetime.now(TURKEY_TZ)
+    return datetime.now(UTC_TZ)
 
 async def send_telegram_alert(message: str):
-    """Asenkron Telegram bildirim motoru (Sistemi yavaşlatmaz)"""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -138,9 +138,9 @@ def get_sector(symbol):
 def is_macro_event_near():
     now = get_now_datetime()
     events = [
-        datetime(now.year, now.month, 10, 15, 30, tzinfo=TURKEY_TZ), 
-        datetime(now.year, now.month, 5, 15, 30, tzinfo=TURKEY_TZ),
-        datetime(now.year, now.month, 18, 21, 0, tzinfo=TURKEY_TZ)
+        datetime(now.year, now.month, 10, 15, 30, tzinfo=UTC_TZ), 
+        datetime(now.year, now.month, 5, 15, 30, tzinfo=UTC_TZ),
+        datetime(now.year, now.month, 18, 21, 0, tzinfo=UTC_TZ)
     ]
     for ev in events:
         if now > ev: 
@@ -446,14 +446,12 @@ async def analyze_symbol(exchange, symbol):
         if symbol in retest_tracker:
             tracker = retest_tracker[symbol]
             if tracker["direction"] == "LONG":
-                # KESİN RETEST ONAYI: Fiyat iğne atabilir ancak mum KAPANISI seviyenin ÜZERİNDE VE YEŞİL olmalıdır!
                 if c_1h['low'] <= tracker["level"] * 1.005 and c_1h['close'] > tracker["level"] and c_1h['close'] > c_1h['open']:
                     direction = "LONG"
                     score += tracker["score_base"] + 25
                     reasons = tracker["reasons"] + ["🎯 Kusursuz 1H Break & Retest (Seviye Üstü Yeşil Mum Kapanışı)"]
                     del retest_tracker[symbol]
             elif tracker["direction"] == "SHORT":
-                # KESİN RETEST ONAYI: Fiyat iğne atabilir ancak mum KAPANISI seviyenin ALTINDA VE KIRMIZI olmalıdır!
                 if c_1h['high'] >= tracker["level"] * 0.995 and c_1h['close'] < tracker["level"] and c_1h['close'] < c_1h['open']:
                     direction = "SHORT"
                     score += tracker["score_base"] + 25
@@ -570,7 +568,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru (Avcı): 1H Break & Retest (Mum Kapanış Onaylı) + L2 Aktif!")
+    add_log("Quant Motoru (Avcı): Saf UTC Zaman Dilimi + Mum Kapanış Onaylı Retest Aktif!")
 
     while True:
         exchange = None
@@ -1060,8 +1058,8 @@ async def export_current_csv():
 async def export_custom_csv(payload: DateRangePayload):
     filtered = []
     try:
-        start_ts = int(datetime.strptime(payload.start_date, "%Y-%m-%d").replace(tzinfo=TURKEY_TZ).timestamp())
-        end_ts = int(datetime.strptime(payload.end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=TURKEY_TZ).timestamp())
+        start_ts = int(datetime.strptime(payload.start_date, "%Y-%m-%d").replace(tzinfo=UTC_TZ).timestamp())
+        end_ts = int(datetime.strptime(payload.end_date, "%Y-%m-%d").replace(hour=23, minute=59, second=59, tzinfo=UTC_TZ).timestamp())
         for h in system_state["trade_history"]:
             ts = h.get("close_timestamp", 0)
             if start_ts <= ts <= end_ts:
@@ -1164,7 +1162,7 @@ async def get_dashboard(request: Request):
             <div class="card p-3 rounded-xl flex flex-wrap justify-between items-center gap-3">
                 <div class="flex flex-col space-y-1 bg-slate-900/90 p-2 rounded-xl border border-slate-800">
                     <div class="flex items-center justify-between gap-2 border-b border-slate-800 pb-1 text-[9px]">
-                        <span class="text-slate-400 font-semibold uppercase">Dönemsel PnL (TSİ 00:00):</span>
+                        <span class="text-slate-400 font-semibold uppercase">Dönemsel PnL (UTC 00:00):</span>
                         <div class="flex space-x-1">
                             <button onclick="changePnlFilter('today')" id="pnl-tf-today" class="pnl-tf-btn active px-1 py-0.5 rounded text-slate-400 hover:text-white">Bugün</button>
                             <button onclick="changePnlFilter('yesterday')" id="pnl-tf-yesterday" class="pnl-tf-btn px-1 py-0.5 rounded text-slate-400 hover:text-white">Dün</button>
@@ -2117,7 +2115,7 @@ async def get_dashboard(request: Request):
                 if (!selectedPos || !candleSeries || !chart) return;
 
                 const timeScale = chart.timeScale();
-                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp + 14400);
+                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp);
                 const rightX = canvas.width - 55;
                 const boxStartX = startX !== null ? Math.max(0, startX) : 40;
                 const boxWidth = rightX - boxStartX;
@@ -2339,7 +2337,7 @@ async def get_dashboard(request: Request):
                         lockVisibleTimeRangeOnResize: false,
                         tickMarkFormatter: (time, tickMarkType, locale) => {
                             const d = new Date(time * 1000);
-                            return d.toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
+                            return d.toLocaleTimeString('en-GB', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
                         }
                     },
                     rightPriceScale: { autoScale: true, scaleMargins: { top: 0.15, bottom: 0.15 } }
@@ -2419,9 +2417,9 @@ async def get_dashboard(request: Request):
                 }
 
                 if (Array.isArray(data) && data.length > 0) {
-                    // Tam Türkiye saatine hizalamak için +4 saat (+14400 saniye) eklendi
+                    // Saf UTC zaman damgası (Python backend ile %100 senkronize)
                     return data.map(c => ({
-                        time: Math.floor(c[0] / 1000) + 14400, 
+                        time: Math.floor(c[0] / 1000), 
                         open: parseFloat(c[1]), 
                         high: parseFloat(c[2]), 
                         low: parseFloat(c[3]), 
@@ -2808,7 +2806,7 @@ async def get_dashboard(request: Request):
                             let eqMap = new Map();
                             data.equity_curve.forEach(d => {
                                 if(d && !isNaN(d.time)) {
-                                    eqMap.set(Number(d.time) + 14400, Number(d.value));
+                                    eqMap.set(Number(d.time), Number(d.value));
                                 }
                             });
                             
