@@ -1867,8 +1867,6 @@ async def get_dashboard(request: Request):
             let lastProcessedLog = "";
             let lastLoadedSymbol = "";
             let lastLoadedTf = "";
-            let cachedCandles = [];
-            let wsClient = null;
 
             function recalculatePnlMetrics() {
                 try {
@@ -2342,7 +2340,7 @@ async def get_dashboard(request: Request):
                         lockVisibleTimeRangeOnResize: false,
                         tickMarkFormatter: (time, tickMarkType, locale) => {
                             const d = new Date(time * 1000);
-                            return d.toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
+                            return d.toLocaleTimeString('en-GB', { timeZone: 'UTC', hour: '2-digit', minute: '2-digit' });
                         }
                     },
                     rightPriceScale: { autoScale: true, scaleMargins: { top: 0.15, bottom: 0.15 } }
@@ -2422,65 +2420,41 @@ async def get_dashboard(request: Request):
                 }
 
                 if (Array.isArray(data) && data.length > 0) {
-                    cachedCandles = data.map(c => ({
+                    return data.map(c => ({
                         time: Math.floor(c[0] / 1000) + 10800, 
                         open: parseFloat(c[1]), 
                         high: parseFloat(c[2]), 
                         low: parseFloat(c[3]), 
                         close: parseFloat(c[4])
                     }));
-                    return cachedCandles;
                 }
                 return [];
-            }
-
-            // CANLI WEBSOCKET AKIŞ MOTORU (Saniyesinde Akan Grafik)
-            function connectBinanceWebSocket(symbol) {
-                if (wsClient) {
-                    wsClient.close();
-                    wsClient = null;
-                }
-                let baseSym = symbol.split('/')[0].toUpperCase().replace(':USDT', '');
-                if (baseSym.endsWith('USDT') && baseSym !== 'USDT') baseSym = baseSym.replace('USDT', '');
-                let rawSym = (resolvedSymbolCache[symbol] || (baseSym + 'USDT')).toLowerCase();
-                let tfMap = { '1': '1m', '5': '5m', '15': '15m', '60': '1h', '240': '4h', 'D': '1d' };
-                let interval = tfMap[currentTimeframe] || '1h';
-
-                wsClient = new WebSocket(`wss://fstream.binance.com/ws/${rawSym}@kline_${interval}`);
-                
-                wsClient.onmessage = function(event) {
-                    let message = JSON.parse(event.data);
-                    if (message.k && candleSeries) {
-                        let k = message.k;
-                        let candleTime = Math.floor(k.t / 1000) + 10800;
-                        let open = parseFloat(k.o);
-                        let high = parseFloat(k.h);
-                        let low = parseFloat(k.l);
-                        let close = parseFloat(k.c);
-
-                        let liveCandle = { time: candleTime, open: open, high: high, low: low, close: close };
-                        candleSeries.update(liveCandle);
-
-                        const dec = close < 1 ? 6 : 2;
-                        document.getElementById('bar-open').innerText = `$${open.toFixed(dec)}`;
-                        document.getElementById('bar-high').innerText = `$${high.toFixed(dec)}`;
-                        document.getElementById('bar-low').innerText = `$${low.toFixed(dec)}`;
-                        document.getElementById('bar-close').innerText = `$${close.toFixed(dec)}`;
-                        drawPositionBoxes();
-                    }
-                };
             }
 
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
                     const symbolChanged = (symbol !== lastLoadedSymbol || currentTimeframe !== lastLoadedTf);
+                    const limit = (isLiveTick && !symbolChanged) ? 3 : 1000;
                     
-                    if (isLiveTick && !symbolChanged && cachedCandles.length > 0) {
-                        return; // WebSocket zaten anlık güncelliyor
-                    }
-
-                    const candles = await fetchCandlesDirect(symbol, currentTimeframe, 1000);
+                    const candles = await fetchCandlesDirect(symbol, currentTimeframe, limit);
+                    
                     if (candles.length > 0 && candleSeries) {
+                        if (isLiveTick && !symbolChanged) {
+                            // CANLI AKIŞ: Son 3 mumu çekip update ile eziyoruz. 
+                            // Bu sayede hem anlık fiyat oynar, hem de saat başlarında YENİ MUM anında oluşur!
+                            candles.forEach(c => candleSeries.update(c));
+                            
+                            const lastCandle = candles[candles.length - 1];
+                            const dec = lastCandle.close < 1 ? 6 : 2;
+                            document.getElementById('bar-open').innerText = `$${lastCandle.open.toFixed(dec)}`;
+                            document.getElementById('bar-high').innerText = `$${lastCandle.high.toFixed(dec)}`;
+                            document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
+                            document.getElementById('bar-close').innerText = `$${lastCandle.close.toFixed(dec)}`;
+                            
+                            drawPositionBoxes();
+                            return;
+                        }
+                        
                         lastLoadedSymbol = symbol;
                         lastLoadedTf = currentTimeframe;
 
@@ -2507,7 +2481,6 @@ async def get_dashboard(request: Request):
                         
                         resizeCanvas();
                         drawPositionBoxes();
-                        connectBinanceWebSocket(symbol);
 
                         priceLines.forEach(l => candleSeries.removePriceLine(l));
                         priceLines = [];
