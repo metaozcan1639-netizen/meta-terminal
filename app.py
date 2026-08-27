@@ -234,7 +234,7 @@ def calculate_indicators(df):
 
     high_low = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
-    low_close = (df['low'] - df['close'].shift()).abs()
+    low_close = (df['low'] - df['low'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = tr.rolling(window=14).mean()
 
@@ -1859,6 +1859,7 @@ async def get_dashboard(request: Request):
             let priceLines = [];
             let lastPositions = [];
             let tradeHistoryCache = [];
+            let lastKnownPosCount = 0;
             let resolvedSymbolCache = {};
             let lastProcessedLog = "";
             let lastLoadedSymbol = "";
@@ -2040,7 +2041,7 @@ async def get_dashboard(request: Request):
                         else btn.classList.remove('active');
                     }
                 });
-                lastLoadedSymbol = ""; 
+                lastLoadedSymbol = "";
                 loadChartCandles(currentSymbol, selectedPos, false);
             }
 
@@ -2114,7 +2115,7 @@ async def get_dashboard(request: Request):
                 if (!selectedPos || !candleSeries || !chart) return;
 
                 const timeScale = chart.timeScale();
-                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp + 10800);
+                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp + 14400);
                 const rightX = canvas.width - 55;
                 const boxStartX = startX !== null ? Math.max(0, startX) : 40;
                 const boxWidth = rightX - boxStartX;
@@ -2330,10 +2331,10 @@ async def get_dashboard(request: Request):
                         timeVisible: true, 
                         secondsVisible: false, 
                         borderColor: '#1e293b',
-                        rightOffset: 12,
+                        rightOffset: 25,
                         fixLeftEdge: false,
                         fixRightEdge: false,
-                        lockVisibleTimeRangeOnResize: true,
+                        lockVisibleTimeRangeOnResize: false,
                         tickMarkFormatter: (time, tickMarkType, locale) => {
                             const d = new Date(time * 1000);
                             return d.toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
@@ -2416,9 +2417,9 @@ async def get_dashboard(request: Request):
                 }
 
                 if (Array.isArray(data) && data.length > 0) {
-                    // UTC zamanını TSİ'ye (+3 saat = +10800 saniye) çeviriyoruz
+                    // Tam Türkiye saatine hizalamak için +4 saat (+14400 saniye) eklendi
                     return data.map(c => ({
-                        time: Math.floor(c[0] / 1000) + 10800, 
+                        time: Math.floor(c[0] / 1000) + 14400, 
                         open: parseFloat(c[1]), 
                         high: parseFloat(c[2]), 
                         low: parseFloat(c[3]), 
@@ -2430,18 +2431,14 @@ async def get_dashboard(request: Request):
 
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
-                    const symbolChanged = (symbol !== lastLoadedSymbol || currentTimeframe !== lastLoadedTf);
-                    const limit = (isLiveTick && !symbolChanged) ? 5 : 1000;
+                    const limit = isLiveTick ? 5 : 1000;
                     const candles = await fetchCandlesDirect(symbol, currentTimeframe, limit);
                     
                     if (candles.length > 0 && candleSeries) {
-                        if (isLiveTick && !symbolChanged) {
+                        if (isLiveTick) {
                             candles.forEach(c => candleSeries.update(c));
                             drawPositionBoxes();
                         } else {
-                            lastLoadedSymbol = symbol;
-                            lastLoadedTf = currentTimeframe;
-
                             const lastCandle = candles[candles.length - 1];
                             const pConf = getPrecisionConfig(lastCandle.close);
                             candleSeries.applyOptions({ priceFormat: { type: 'price', precision: pConf.precision, minMove: pConf.minMove } });
@@ -2449,7 +2446,7 @@ async def get_dashboard(request: Request):
                             const intervalSec = getIntervalSeconds(currentTimeframe);
                             let futureData = [];
                             let lastTime = lastCandle.time;
-                            for (let i = 1; i <= 50; i++) {
+                            for (let i = 1; i <= 150; i++) {
                                 futureData.push({ time: lastTime + (i * intervalSec) });
                             }
                             
@@ -2805,7 +2802,7 @@ async def get_dashboard(request: Request):
                             let eqMap = new Map();
                             data.equity_curve.forEach(d => {
                                 if(d && !isNaN(d.time)) {
-                                    eqMap.set(Number(d.time) + 10800, Number(d.value));
+                                    eqMap.set(Number(d.time) + 14400, Number(d.value));
                                 }
                             });
                             
