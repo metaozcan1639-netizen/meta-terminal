@@ -1267,7 +1267,7 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- GRAFİK VE SAĞ PANEL (L2 EMİR DEFTERİ LOGLARIN HEMEN ÜSTÜNDE) -->
+            <!-- GRAFİK VE SAĞ PANEL (L2 EMİR DEFTERİ DOĞRUDAN LOGLARIN ÜSTÜNDE) -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                 <div class="card p-3 rounded-xl lg:col-span-2 h-[520px] flex flex-col">
                     <div class="flex flex-wrap justify-between items-center mb-2 px-1 gap-2">
@@ -1296,17 +1296,18 @@ async def get_dashboard(request: Request):
                     </div>
                 </div>
 
-                <!-- SAĞ PANEL: GİRİŞ GEREKÇESİ, L2 EMİR DEFTERİ (LOGLARIN ÜSTÜNDE) VE LOGLAR -->
-                <div class="card p-3 rounded-xl flex flex-col justify-between h-[520px]">
-                    <div>
+                <!-- SAĞ PANEL: GİRİŞ GEREKÇESİ, L2 EMİR DEFTERİ VE LOGLAR -->
+                <div class="card p-3 rounded-xl flex flex-col h-[520px]">
+                    <!-- 1. GİRİŞ GEREKÇESİ (Üst Kısım) -->
+                    <div class="flex-1 overflow-y-auto mb-2">
                         <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
                         <div id="active-rationale" class="space-y-2 text-xs">
                             <div class="text-slate-500 italic">Tablodan bir parite seçin...</div>
                         </div>
                     </div>
                     
-                    <!-- L2 EMİR DEFTERİ (ORDER BOOK) - LOGLARIN HEMEN ÜSTÜNDE -->
-                    <div class="my-2 bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 space-y-1.5">
+                    <!-- 2. L2 EMİR DEFTERİ (TAHTA DERİNLİĞİ) - DOĞRUDAN LOGLARIN ÜSTÜNDE -->
+                    <div class="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 space-y-1.5 mb-2">
                         <h3 class="text-[11px] font-bold text-sky-400 uppercase">⚡ L2 Emir Defteri (Tahta Derinliği)</h3>
                         <div class="flex justify-between text-[11px] font-bold">
                             <span class="text-emerald-400">Alıcı (Bid): <b id="ob-bid-pct">%50.0</b></span>
@@ -1318,9 +1319,10 @@ async def get_dashboard(request: Request):
                         </div>
                     </div>
 
-                    <div>
+                    <!-- 3. SİSTEM LOGLARI (En Alt Kısım) -->
+                    <div class="h-32 flex flex-col">
                         <h3 class="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Sistem Logları</h3>
-                        <div id="log-box" class="bg-black/50 p-2 rounded text-[11px] text-emerald-500/80 font-mono h-24 overflow-y-auto space-y-1"></div>
+                        <div id="log-box" class="bg-black/50 p-2 rounded text-[11px] text-emerald-500/80 font-mono flex-1 overflow-y-auto space-y-1"></div>
                     </div>
                 </div>
             </div>
@@ -2761,7 +2763,7 @@ async def get_dashboard(request: Request):
                                 <td class="text-white font-mono">$${p.margin}</td>
                                 <td class="font-mono text-slate-300">${p.entry}</td>
                                 <td class="font-mono text-white font-bold">${p.current_price || p.entry}</td>
-                                <td class="font-mono font-bold ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}</td>
+                                <td class="font-mono font-bold ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}</td>
                                 <td class="w-24"><div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden"><div class="bg-emerald-500 h-1.5 rounded-full" style="width: ${p.progress_pct}%"></div></div><span class="text-[9px] text-slate-400 font-mono">%${p.progress_pct}</span></td>
                             </tr>`).join('');
                     }
