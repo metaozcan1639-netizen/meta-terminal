@@ -361,10 +361,10 @@ async def analyze_symbol(exchange, symbol):
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
 
-        # 1H ZAMAN DİLİMİNE SABİTLENMİŞ YÜKSEK KALİTELİ ANALİZ & L2 EMİR DEFTERİ
+        # 1H ve 4H Büyük Resim + 15M Hassas Retest Girişi + L2 Emir Defteri
         tasks = [
             exchange.fetch_ohlcv(symbol, timeframe='1h', limit=40),
-            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=40),
+            exchange.fetch_ohlcv(symbol, timeframe='15m', limit=40),
             exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50),
             exchange.fetch_order_book(symbol, limit=20)
         ]
@@ -372,8 +372,8 @@ async def analyze_symbol(exchange, symbol):
         if any(isinstance(r, Exception) or not r or len(r) < 30 for r in results[:3]):
             return None
 
-        df_1h_main = calculate_indicators(pd.DataFrame(results[0], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
-        df_1h_retest = calculate_indicators(pd.DataFrame(results[1], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        df_1h = calculate_indicators(pd.DataFrame(results[0], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        df_15m = calculate_indicators(pd.DataFrame(results[1], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         df_4h = calculate_indicators(pd.DataFrame(results[2], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         book = results[3] if not isinstance(results[3], Exception) and results[3] else {}
 
@@ -392,17 +392,18 @@ async def analyze_symbol(exchange, symbol):
                 "bid_pressure": bid_pressure, "ask_pressure": ask_pressure
             }
 
-        c_1h = df_1h_main.iloc[-1]
+        c_1h = df_1h.iloc[-1]
         c_4h = df_4h.iloc[-1]
+        c_15m = df_15m.iloc[-1]
 
         system_state["breadth_total"] += 1
         if c_1h['close'] > c_1h['ema50']:
             system_state["breadth_bullish"] += 1
 
-        swing_low_1h = df_1h_retest['low'].iloc[-20:-3].min()
-        swing_high_1h = df_1h_retest['high'].iloc[-20:-3].max()
-        recent_breakout_high = df_1h_main['high'].iloc[-8:-1].max()
-        recent_breakout_low = df_1h_main['low'].iloc[-8:-1].min()
+        swing_low_15m = df_15m['low'].iloc[-20:-3].min()
+        swing_high_15m = df_15m['high'].iloc[-20:-3].max()
+        recent_breakout_high = df_15m['high'].iloc[-8:-1].max()
+        recent_breakout_low = df_15m['low'].iloc[-8:-1].min()
 
         score = 0
         direction = None
@@ -412,19 +413,29 @@ async def analyze_symbol(exchange, symbol):
         if adx_val < 18:
             return None
 
-        sweep_low = df_1h_retest['low'].iloc[-4:].min() < swing_low_1h
-        body_size = abs(c_1h['close'] - c_1h['open'])
-        total_candle_size = c_1h['high'] - c_1h['low']
+        # 1H ve 4H Büyük Resim Trend Filtresi
+        if c_1h['close'] > c_1h['ema50'] and c_4h['close'] > c_4h['ema50']:
+            score += 25
+            reasons.append("📈 1H & 4H Büyük Resim Boğa Trendi Onayı")
+        elif c_1h['close'] < c_1h['ema50'] and c_4h['close'] < c_4h['ema50']:
+            score += 25
+            reasons.append("📉 1H & 4H Büyük Resim Ayı Trendi Onayı")
+        else:
+            return None # Büyük resim kararsızsa işlem açma
+
+        sweep_low = df_15m['low'].iloc[-4:].min() < swing_low_15m
+        body_size = abs(c_15m['close'] - c_15m['open'])
+        total_candle_size = c_15m['high'] - c_15m['low']
         is_strong_green = (
-            c_1h['close'] > recent_breakout_high
-            and c_1h['close'] > c_1h['open']
+            c_15m['close'] > recent_breakout_high
+            and c_15m['close'] > c_15m['open']
             and (body_size / (total_candle_size + 1e-9) > 0.35)
         )
 
-        sweep_high = df_1h_retest['high'].iloc[-4:].max() > swing_high_1h
+        sweep_high = df_15m['high'].iloc[-4:].max() > swing_high_15m
         is_strong_red = (
-            c_1h['close'] < recent_breakout_low
-            and c_1h['close'] < c_1h['open']
+            c_15m['close'] < recent_breakout_low
+            and c_15m['close'] < c_15m['open']
             and (body_size / (total_candle_size + 1e-9) > 0.35)
         )
 
@@ -434,7 +445,7 @@ async def analyze_symbol(exchange, symbol):
                     "direction": "LONG",
                     "level": recent_breakout_high,
                     "score_base": 40,
-                    "reasons": ["⚡ 1H Dip Likiditesi Alındı + 1H Güçlü Kırılım"]
+                    "reasons": ["⚡ 15M Dip Likiditesi Alındı + 15M Güçlü Kırılım"]
                 }
         elif sweep_high and is_strong_red:
             if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] >= 1.2):
@@ -442,22 +453,22 @@ async def analyze_symbol(exchange, symbol):
                     "direction": "SHORT",
                     "level": recent_breakout_low,
                     "score_base": 40,
-                    "reasons": ["⚡ 1H Tepe Likiditesi Alındı + 1H Güçlü Kırılım"]
+                    "reasons": ["⚡ 15M Tepe Likiditesi Alındı + 15M Güçlü Kırılım"]
                 }
 
         if symbol in retest_tracker:
             tracker = retest_tracker[symbol]
             if tracker["direction"] == "LONG":
-                if c_1h['low'] <= tracker["level"] * 1.003 and c_1h['close'] > tracker["level"]:
+                if c_15m['low'] <= tracker["level"] * 1.003 and c_15m['close'] > tracker["level"]:
                     direction = "LONG"
                     score += tracker["score_base"] + 25
-                    reasons = tracker["reasons"] + ["🎯 Kusursuz 1H Break & Retest (Destek Onayı)"]
+                    reasons = tracker["reasons"] + ["🎯 Kusursuz 15M Break & Retest (Destek Onayı)"]
                     del retest_tracker[symbol]
             elif tracker["direction"] == "SHORT":
-                if c_1h['high'] >= tracker["level"] * 0.997 and c_1h['close'] < tracker["level"]:
+                if c_15m['high'] >= tracker["level"] * 0.997 and c_15m['close'] < tracker["level"]:
                     direction = "SHORT"
                     score += tracker["score_base"] + 25
-                    reasons = tracker["reasons"] + ["🎯 Kusursuz 1H Break & Retest (Direnç Onayı)"]
+                    reasons = tracker["reasons"] + ["🎯 Kusursuz 15M Break & Retest (Direnç Onayı)"]
                     del retest_tracker[symbol]
 
         # L2 Emir Defteri Dinamik Skorlama Matrisi
@@ -470,26 +481,17 @@ async def analyze_symbol(exchange, symbol):
             score += book_score
             reasons.append(f"🔴 L2 Emir Defteri Satıcı Baskısı Yüksek (%{ask_pressure})")
 
-        if direction == "LONG":
-            if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
-                score += 20
-                reasons.append("📈 1H Güçlü Ana Trend (Boğa) Onayı")
-        elif direction == "SHORT":
-            if c_1h['close'] < c_1h['ema50'] and c_1h['close'] < c_1h['ema20']:
-                score += 20
-                reasons.append("📉 1H Güçlü Ana Trend (Ayı) Onayı")
-
-        vol_ratio = float(c_1h['volume'] / (c_1h['vol_ma'] + 1e-9)) if pd.notnull(c_1h['vol_ma']) else 1.0
+        vol_ratio = float(c_15m['volume'] / (c_15m['vol_ma'] + 1e-9)) if pd.notnull(c_15m['vol_ma']) else 1.0
         if direction and vol_ratio >= 1.25:
             score += 10
             reasons.append(f"🔥 Yüksek Hacim Desteği ({vol_ratio:.1f}x)")
 
         radar_item = {
             "symbol": symbol,
-            "price": float(c_1h['close']),
-            "rsi": round(float(c_1h['rsi']), 1) if pd.notnull(c_1h['rsi']) else 50.0,
+            "price": float(c_15m['close']),
+            "rsi": round(float(c_15m['rsi']), 1) if pd.notnull(c_15m['rsi']) else 50.0,
             "vol_ratio": round(vol_ratio, 2),
-            "trend": direction if direction else ("LONG" if c_1h['close'] > c_1h['ema50'] else "SHORT"),
+            "trend": direction if direction else ("LONG" if c_15m['close'] > c_1h['ema50'] else "SHORT"),
             "score": score
         }
         
@@ -508,24 +510,24 @@ async def analyze_symbol(exchange, symbol):
         if not direction or score < dynamic_threshold:
             return None
 
-        entry = float(c_1h['close'])
-        atr = float(c_1h['atr']) if pd.notnull(c_1h['atr']) else entry * 0.01
+        entry = float(c_15m['close'])
+        atr = float(c_15m['atr']) if pd.notnull(c_15m['atr']) else entry * 0.01
 
         effective_leverage = system_state["leverage"]
         effective_risk = system_state["risk_pct"]
 
         # GÜVENLİ STOP MESAFESİ (2.8 * ATR Sabitlendi)
         if direction == "LONG":
-            sl = float(df_1h_main['low'].iloc[-8:].min() - (2.8 * atr))
-            if (entry - sl) / entry < 0.02:
-                sl = entry * 0.98
+            sl = float(df_15m['low'].iloc[-8:].min() - (2.8 * atr))
+            if (entry - sl) / entry < 0.015:
+                sl = entry * 0.985
             risk_dist = entry - sl
             tp1 = entry + (1.5 * risk_dist)
             tp2 = entry + (3.0 * risk_dist)
         else:
-            sl = float(df_1h_main['high'].iloc[-8:].max() + (2.8 * atr))
-            if (sl - entry) / entry < 0.02:
-                sl = entry * 1.02
+            sl = float(df_15m['high'].iloc[-8:].max() + (2.8 * atr))
+            if (sl - entry) / entry < 0.015:
+                sl = entry * 1.015
             risk_dist = sl - entry
             tp1 = entry - (1.5 * risk_dist)
             tp2 = entry - (3.0 * risk_dist)
@@ -572,7 +574,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru (Avcı): 1H Break & Retest + L2 Emir Defteri Derinlik Analizi Aktif!")
+    add_log("Quant Motoru (Avcı): 1H/4H Trend + 15M Retest + L2 Emir Defteri Aktif!")
 
     while True:
         exchange = None
@@ -1267,7 +1269,7 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- GRAFİK VE SAĞ PANEL (L2 EMİR DEFTERİ DOĞRUDAN LOGLARIN ÜSTÜNDE) -->
+            <!-- GRAFİK VE SAĞ PANEL -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                 <div class="card p-3 rounded-xl lg:col-span-2 h-[520px] flex flex-col">
                     <div class="flex flex-wrap justify-between items-center mb-2 px-1 gap-2">
@@ -1298,7 +1300,7 @@ async def get_dashboard(request: Request):
 
                 <!-- SAĞ PANEL: GİRİŞ GEREKÇESİ, L2 EMİR DEFTERİ VE LOGLAR -->
                 <div class="card p-3 rounded-xl flex flex-col h-[520px]">
-                    <!-- 1. GİRİŞ GEREKÇESİ (Üst Kısım) -->
+                    <!-- 1. GİRİŞ GEREKÇESİ -->
                     <div class="flex-1 overflow-y-auto mb-2">
                         <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
                         <div id="active-rationale" class="space-y-2 text-xs">
@@ -1306,7 +1308,7 @@ async def get_dashboard(request: Request):
                         </div>
                     </div>
                     
-                    <!-- 2. L2 EMİR DEFTERİ (TAHTA DERİNLİĞİ) - DOĞRUDAN LOGLARIN ÜSTÜNDE -->
+                    <!-- 2. L2 EMİR DEFTERİ - LOGLARIN ÜSTÜNDE -->
                     <div class="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 space-y-1.5 mb-2">
                         <h3 class="text-[11px] font-bold text-sky-400 uppercase">⚡ L2 Emir Defteri (Tahta Derinliği)</h3>
                         <div class="flex justify-between text-[11px] font-bold">
@@ -1319,7 +1321,7 @@ async def get_dashboard(request: Request):
                         </div>
                     </div>
 
-                    <!-- 3. SİSTEM LOGLARI (En Alt Kısım) -->
+                    <!-- 3. SİSTEM LOGLARI -->
                     <div class="h-32 flex flex-col">
                         <h3 class="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Sistem Logları</h3>
                         <div id="log-box" class="bg-black/50 p-2 rounded text-[11px] text-emerald-500/80 font-mono flex-1 overflow-y-auto space-y-1"></div>
