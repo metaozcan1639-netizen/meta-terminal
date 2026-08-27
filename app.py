@@ -1859,7 +1859,6 @@ async def get_dashboard(request: Request):
             let priceLines = [];
             let lastPositions = [];
             let tradeHistoryCache = [];
-            let lastKnownPosCount = 0;
             let resolvedSymbolCache = {};
             let lastProcessedLog = "";
             let lastLoadedSymbol = "";
@@ -2041,7 +2040,7 @@ async def get_dashboard(request: Request):
                         else btn.classList.remove('active');
                     }
                 });
-                lastLoadedSymbol = "";
+                lastLoadedSymbol = ""; 
                 loadChartCandles(currentSymbol, selectedPos, false);
             }
 
@@ -2105,10 +2104,6 @@ async def get_dashboard(request: Request):
                 if (chart && wrapper) {
                     chart.resize(wrapper.clientWidth, wrapper.clientHeight);
                 }
-                const eqWrapper = document.getElementById('equity-container');
-                if (equityChart && eqWrapper) {
-                    equityChart.resize(eqWrapper.clientWidth, eqWrapper.clientHeight);
-                }
             }
 
             function drawPositionBoxes() {
@@ -2119,7 +2114,7 @@ async def get_dashboard(request: Request):
                 if (!selectedPos || !candleSeries || !chart) return;
 
                 const timeScale = chart.timeScale();
-                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp);
+                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp + 10800);
                 const rightX = canvas.width - 55;
                 const boxStartX = startX !== null ? Math.max(0, startX) : 40;
                 const boxWidth = rightX - boxStartX;
@@ -2328,8 +2323,6 @@ async def get_dashboard(request: Request):
                 const container = document.getElementById('tv-container');
                 container.innerHTML = '';
                 chart = LightweightCharts.createChart(container, {
-                    width: container.clientWidth,
-                    height: container.clientHeight,
                     layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
                     grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
                     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
@@ -2371,8 +2364,6 @@ async def get_dashboard(request: Request):
                 const eqContainer = document.getElementById('equity-container');
                 eqContainer.innerHTML = '';
                 equityChart = LightweightCharts.createChart(eqContainer, {
-                    width: eqContainer.clientWidth,
-                    height: eqContainer.clientHeight,
                     layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
                     grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
                     timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#1e293b' },
@@ -2425,8 +2416,9 @@ async def get_dashboard(request: Request):
                 }
 
                 if (Array.isArray(data) && data.length > 0) {
+                    // UTC zamanını TSİ'ye (+3 saat = +10800 saniye) çeviriyoruz
                     return data.map(c => ({
-                        time: Math.floor(c[0] / 1000), 
+                        time: Math.floor(c[0] / 1000) + 10800, 
                         open: parseFloat(c[1]), 
                         high: parseFloat(c[2]), 
                         low: parseFloat(c[3]), 
@@ -2813,7 +2805,7 @@ async def get_dashboard(request: Request):
                             let eqMap = new Map();
                             data.equity_curve.forEach(d => {
                                 if(d && !isNaN(d.time)) {
-                                    eqMap.set(Number(d.time), Number(d.value));
+                                    eqMap.set(Number(d.time) + 10800, Number(d.value));
                                 }
                             });
                             
