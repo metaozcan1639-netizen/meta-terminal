@@ -421,7 +421,7 @@ async def analyze_symbol(exchange, symbol):
             score += 25
             reasons.append("📉 1H & 4H Büyük Resim Ayı Trendi Onayı")
         else:
-            return None # Büyük resim kararsızsa işlem açma
+            return None
 
         sweep_low = df_15m['low'].iloc[-4:].min() < swing_low_15m
         body_size = abs(c_15m['close'] - c_15m['open'])
@@ -1298,7 +1298,7 @@ async def get_dashboard(request: Request):
                     </div>
                 </div>
 
-                <!-- SAĞ PANEL: GİRİŞ GEREKÇESİ, L2 EMİR DEFTERİ VE LOGLAR -->
+                <!-- SAĞ PANEL -->
                 <div class="card p-3 rounded-xl flex flex-col h-[520px]">
                     <!-- 1. GİRİŞ GEREKÇESİ -->
                     <div class="flex-1 overflow-y-auto mb-2">
@@ -1308,7 +1308,7 @@ async def get_dashboard(request: Request):
                         </div>
                     </div>
                     
-                    <!-- 2. L2 EMİR DEFTERİ - LOGLARIN ÜSTÜNDE -->
+                    <!-- 2. L2 EMİR DEFTERİ -->
                     <div class="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 space-y-1.5 mb-2">
                         <h3 class="text-[11px] font-bold text-sky-400 uppercase">⚡ L2 Emir Defteri (Tahta Derinliği)</h3>
                         <div class="flex justify-between text-[11px] font-bold">
@@ -1868,9 +1868,10 @@ async def get_dashboard(request: Request):
             let priceLines = [];
             let lastPositions = [];
             let tradeHistoryCache = [];
-            let lastKnownPosCount = 0;
             let resolvedSymbolCache = {};
             let lastProcessedLog = "";
+            let lastLoadedSymbol = "";
+            let lastLoadedTf = "";
 
             function recalculatePnlMetrics() {
                 try {
@@ -2048,6 +2049,7 @@ async def get_dashboard(request: Request):
                         else btn.classList.remove('active');
                     }
                 });
+                lastLoadedSymbol = ""; // Zorunlu yeniden yüklet
                 loadChartCandles(currentSymbol, selectedPos, false);
             }
 
@@ -2433,14 +2435,18 @@ async def get_dashboard(request: Request):
 
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
-                    const limit = isLiveTick ? 5 : 1000;
+                    const symbolChanged = (symbol !== lastLoadedSymbol || currentTimeframe !== lastLoadedTf);
+                    const limit = (isLiveTick && !symbolChanged) ? 5 : 1000;
                     const candles = await fetchCandlesDirect(symbol, currentTimeframe, limit);
                     
                     if (candles.length > 0 && candleSeries) {
-                        if (isLiveTick) {
+                        if (isLiveTick && !symbolChanged) {
                             candles.forEach(c => candleSeries.update(c));
                             drawPositionBoxes();
                         } else {
+                            lastLoadedSymbol = symbol;
+                            lastLoadedTf = currentTimeframe;
+
                             const lastCandle = candles[candles.length - 1];
                             const pConf = getPrecisionConfig(lastCandle.close);
                             candleSeries.applyOptions({ priceFormat: { type: 'price', precision: pConf.precision, minMove: pConf.minMove } });
@@ -2656,7 +2662,7 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
-                    // L2 EMİR DEFTERİ PANEL GÜNCELLEMESİ (LOGLARIN HEMEN ÜSTÜ)
+                    // L2 EMİR DEFTERİ PANEL GÜNCELLEMESİ
                     if (data.order_book_metrics) {
                         let ob = data.order_book_metrics;
                         document.getElementById('ob-bid-pct').innerText = '%' + ob.bid_pressure;
