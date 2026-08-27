@@ -1863,7 +1863,8 @@ async def get_dashboard(request: Request):
             let lastProcessedLog = "";
             let lastLoadedSymbol = "";
             let lastLoadedTf = "";
-            let cachedCandles = []; // Canlı akış için bellek önbelleği
+            let cachedCandles = [];
+            let wsClient = null;
 
             function recalculatePnlMetrics() {
                 try {
@@ -2429,16 +2430,41 @@ async def get_dashboard(request: Request):
                 return [];
             }
 
-            async function fetchLiveTickerPrice(symbol) {
+            // DOĞRUDAN BİNANCE WEBSOCKET BAĞLANTISI (ANLIK AKIŞ)
+            function connectBinanceWebSocket(symbol) {
+                if (wsClient) {
+                    wsClient.close();
+                    wsClient = null;
+                }
                 let baseSym = symbol.split('/')[0].toUpperCase().replace(':USDT', '');
                 if (baseSym.endsWith('USDT') && baseSym !== 'USDT') baseSym = baseSym.replace('USDT', '');
-                let rawSym = resolvedSymbolCache[symbol] || (baseSym + 'USDT');
-                try {
-                    let res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${rawSym}`);
-                    let json = await res.json();
-                    if (json && json.price) return parseFloat(json.price);
-                } catch(e) {}
-                return null;
+                let rawSym = (resolvedSymbolCache[symbol] || (baseSym + 'USDT')).toLowerCase();
+                let tfMap = { '1': '1m', '5': '5m', '15': '15m', '60': '1h', '240': '4h', 'D': '1d' };
+                let interval = tfMap[currentTimeframe] || '1h';
+
+                wsClient = new WebSocket(`wss://fstream.binance.com/ws/${rawSym}@kline_${interval}`);
+                
+                wsClient.onmessage = function(event) {
+                    let message = JSON.parse(event.data);
+                    if (message.k && candleSeries) {
+                        let k = message.k;
+                        let candleTime = Math.floor(k.t / 1000) + 10800;
+                        let open = parseFloat(k.o);
+                        let high = parseFloat(k.h);
+                        let low = parseFloat(k.l);
+                        let close = parseFloat(k.c);
+
+                        let liveCandle = { time: candleTime, open: open, high: high, low: low, close: close };
+                        candleSeries.update(liveCandle);
+
+                        const dec = close < 1 ? 6 : 2;
+                        document.getElementById('bar-open').innerText = `$${open.toFixed(dec)}`;
+                        document.getElementById('bar-high').innerText = `$${high.toFixed(dec)}`;
+                        document.getElementById('bar-low').innerText = `$${low.toFixed(dec)}`;
+                        document.getElementById('bar-close').innerText = `$${close.toFixed(dec)}`;
+                        drawPositionBoxes();
+                    }
+                };
             }
 
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
@@ -2446,21 +2472,7 @@ async def get_dashboard(request: Request):
                     const symbolChanged = (symbol !== lastLoadedSymbol || currentTimeframe !== lastLoadedTf);
                     
                     if (isLiveTick && !symbolChanged && cachedCandles.length > 0) {
-                        let livePrice = await fetchLiveTickerPrice(symbol);
-                        if (livePrice && candleSeries) {
-                            let lastCandle = cachedCandles[cachedCandles.length - 1];
-                            lastCandle.close = livePrice;
-                            if (livePrice > lastCandle.high) lastCandle.high = livePrice;
-                            if (livePrice < lastCandle.low) lastCandle.low = livePrice;
-                            candleSeries.update(lastCandle);
-                            
-                            const dec = livePrice < 1 ? 6 : 2;
-                            document.getElementById('bar-close').innerText = `$${livePrice.toFixed(dec)}`;
-                            document.getElementById('bar-high').innerText = `$${lastCandle.high.toFixed(dec)}`;
-                            document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
-                        }
-                        drawPositionBoxes();
-                        return;
+                        return; // WebSocket zaten anlık güncelliyor
                     }
 
                     const candles = await fetchCandlesDirect(symbol, currentTimeframe, 1000);
@@ -2491,6 +2503,7 @@ async def get_dashboard(request: Request):
                         
                         resizeCanvas();
                         drawPositionBoxes();
+                        connectBinanceWebSocket(symbol);
 
                         priceLines.forEach(l => candleSeries.removePriceLine(l));
                         priceLines = [];
