@@ -105,6 +105,8 @@ system_state = {
         "mode": "TESTNET",
         "api_key": "",
         "api_secret": "",
+        "gemini_api_key": "",
+        "ai_filter_active": False,
         "auto_trade": False
     },
     "equity_curve": [{"time": int(get_now_datetime().timestamp()), "value": 1000.0}],
@@ -148,6 +150,47 @@ def is_macro_event_near():
         if diff <= 3600:
             return True
     return False
+
+# =================================================================
+# 🧠 GOOGLE GEMINI PRO API KARAR MOTORU (YAPAY ZEKA FİLTRESİ)
+# =================================================================
+async def ask_gemini_approval(signal, gemini_api_key):
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={gemini_api_key}"
+    
+    prompt = f"""
+    Sen üst düzey bir Kripto Fon Risk Yöneticisisin. Algoritmam (Kuantum Motoru) aşağıdaki işlem sinyalini buldu.
+    
+    Parite: {signal['symbol']}
+    Yön: {signal['direction']}
+    Giriş Fiyatı: {signal['entry']}
+    Stop Loss: {signal['sl']}
+    Algoritma Gerekçeleri: {', '.join(signal['reasons'])}
+    
+    Piyasa Anlık Durumu:
+    - Bitcoin Trendi: {system_state['btc_regime']} ({system_state['btc_15m_change']}%)
+    - Piyasa Eğilimi: {system_state['sentiment_data']['market_bias']}
+    - Korku/Açgözlülük: {system_state['fear_and_greed']['classification']} ({system_state['fear_and_greed']['value']})
+    
+    Lütfen bu işlemi genel piyasa riskleri açısından değerlendir.
+    Eğer mantıklıysa sadece "ONAY", riskli ise sadece "RED" kelimesiyle başla. Ardından "-" koyarak tek ve kısa bir cümleyle nedenini yaz.
+    """
+    
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.2, "maxOutputTokens": 100}
+    }
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=8) as res:
+                if res.status == 200:
+                    data = await res.json()
+                    text = data['candidates'][0]['content']['parts'][0]['text']
+                    return text.strip()
+                else:
+                    return "ONAY - API Yanıt Vermedi, Sistem Algoritması Geçerli."
+    except Exception as e:
+        return f"ONAY - AI Bağlantı Hatası: Kuantum Motoru onayı devrede."
 
 async def create_exchange_instance():
     api_conf = system_state["api_settings"]
@@ -233,7 +276,7 @@ def calculate_indicators(df):
 
     high_low = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
-    low_close = (df['low'] - df['close'].shift()).abs()
+    low_close = (df['low'] - df['low'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = tr.rolling(window=14).mean()
 
@@ -360,7 +403,6 @@ async def analyze_symbol(exchange, symbol):
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
 
-        # 1H Ana Yön için veriler + 15M Retest için 15M mum verileri çekiliyor
         tasks = [
             exchange.fetch_ohlcv(symbol, timeframe='1h', limit=40),
             exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30),
@@ -443,18 +485,15 @@ async def analyze_symbol(exchange, symbol):
                     "reasons": ["⚡ 1H Tepe Likiditesi Alındı + 1H Güçlü Kırılım"]
                 }
 
-        # 15 DAKİKALIK (15M) GRAFİKTE RETEST VE DESTEKTE TUTUNMA (MUM KAPANIŞ) KONTROLÜ
         if symbol in retest_tracker:
             tracker = retest_tracker[symbol]
             if tracker["direction"] == "LONG":
-                # 15M mumunun iğne atıp seviyeyi koruması VE 15M mumunun yeşil kapanması
                 if c_15m['low'] <= tracker["level"] * 1.003 and c_15m['close'] > tracker["level"] and c_15m['close'] > c_15m['open']:
                     direction = "LONG"
                     score += tracker["score_base"] + 25
                     reasons = tracker["reasons"] + ["🎯 15M Kusursuz Retest (Destekte Tutundu ve Yeşil Kapattı)"]
                     del retest_tracker[symbol]
             elif tracker["direction"] == "SHORT":
-                # 15M mumunun iğne atıp direnci koruması VE 15M mumunun kırmızı kapanması
                 if c_15m['high'] >= tracker["level"] * 0.997 and c_15m['close'] < tracker["level"] and c_15m['close'] < c_15m['open']:
                     direction = "SHORT"
                     score += tracker["score_base"] + 25
@@ -644,6 +683,20 @@ async def market_scanner_loop():
                             
                             if (current_total_margin + sig['margin']) > allowed_margin or sig['margin'] > system_state["free_balance"]:
                                 continue
+
+                            # 🧠 GÜMRÜK KAPISI: GOOGLE GEMINI PRO API ONAYI
+                            ai_api_key = system_state["api_settings"].get("gemini_api_key", "")
+                            ai_active = system_state["api_settings"].get("ai_filter_active", False)
+                            
+                            if ai_active and ai_api_key:
+                                add_log(f"🧠 Yapay Zeka Onayı Bekleniyor: {sig['symbol']} {sig['direction']}...")
+                                ai_response = await ask_gemini_approval(sig, ai_api_key)
+                                
+                                if "RED" in ai_response.upper()[:15]:
+                                    add_log(f"🛑 AI İŞLEMİ REDDETTİ ({sig['symbol']}): {ai_response}")
+                                    continue
+                                else:
+                                    sig["reasons"].insert(0, f"🤖 AI ONAYI: {ai_response}")
 
                             system_state["active_positions"].append(sig)
                             sync_wallet_accounting()
@@ -851,6 +904,8 @@ class ApiPayload(BaseModel):
     mode: str
     api_key: str
     api_secret: str
+    gemini_api_key: str
+    ai_filter_active: bool
     auto_trade: bool
 
 class ClosePosPayload(BaseModel):
@@ -897,7 +952,8 @@ async def update_settings(payload: SettingsPayload):
 async def update_api(payload: ApiPayload):
     system_state["api_settings"] = payload.dict()
     status_str = "AKTİF" if payload.auto_trade else "DEVRE DIŞI"
-    add_log(f"🔑 API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | Otomatik Emir: {status_str}")
+    ai_status = "AKTİF" if payload.ai_filter_active else "PASİF"
+    add_log(f"🔑 API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | AI Onay: {ai_status} | Otomatik Emir: {status_str}")
     return {"status": "success"}
 
 @app.post("/api/toggle_bot_trading")
@@ -1106,7 +1162,7 @@ async def get_dashboard(request: Request):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Meta Quant Terminal Pro Ultimate + L2</title>
+        <title>Meta Quant Terminal Pro Ultimate + AI</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
         <style>
@@ -1132,10 +1188,9 @@ async def get_dashboard(request: Request):
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
                 <div>
                     <div class="flex items-center space-x-2">
-                        <h1 class="text-base font-extrabold tracking-wider text-emerald-400">META QUANT ULTIMATE + L2</h1>
+                        <h1 class="text-base font-extrabold tracking-wider text-emerald-400">META QUANT ULTIMATE + AI</h1>
                         <span id="btc-regime-badge" class="text-[9px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">BTC: YÜKLENİYOR</span>
                         <span id="btc-shock-badge" class="hidden text-[9px] font-bold px-2 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800 animate-pulse">⚡ BTC ŞOK KORUMASI</span>
-                        <span id="drawdown-badge" class="hidden text-[9px] font-bold px-2 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800">🛑 GÜNLÜK ZARAR LİMİTİ</span>
                     </div>
                 </div>
             </div>
@@ -1150,7 +1205,7 @@ async def get_dashboard(request: Request):
                 <button onclick="switchTab('stats')" id="tab-stats" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📈 İstatistik</button>
                 <button onclick="switchTab('radar')" id="tab-radar" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🔥 Radar</button>
                 <button onclick="switchTab('journal')" id="tab-journal" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📖 Günlük</button>
-                <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ API</button>
+                <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ AI & API</button>
             </div>
 
             <div class="flex items-center space-x-3 text-xs text-slate-400">
@@ -1165,7 +1220,7 @@ async def get_dashboard(request: Request):
             <div class="card p-3 rounded-xl flex flex-wrap justify-between items-center gap-3">
                 <div class="flex flex-col space-y-1 bg-slate-900/90 p-2 rounded-xl border border-slate-800">
                     <div class="flex items-center justify-between gap-2 border-b border-slate-800 pb-1 text-[9px]">
-                        <span class="text-slate-400 font-semibold uppercase">Dönemsel PnL (TSİ 00:00):</span>
+                        <span class="text-slate-400 font-semibold uppercase">Dönemsel PnL (UTC 00:00):</span>
                         <div class="flex space-x-1">
                             <button onclick="changePnlFilter('today')" id="pnl-tf-today" class="pnl-tf-btn active px-1 py-0.5 rounded text-slate-400 hover:text-white">Bugün</button>
                             <button onclick="changePnlFilter('yesterday')" id="pnl-tf-yesterday" class="pnl-tf-btn px-1 py-0.5 rounded text-slate-400 hover:text-white">Dün</button>
@@ -1782,13 +1837,26 @@ async def get_dashboard(request: Request):
         <!-- SAYFA 9: BORSA API -->
         <div id="page-api" class="hidden space-y-3">
             <div class="card p-4 rounded-xl space-y-3 max-w-lg">
-                <h2 class="text-sm font-bold text-amber-400 uppercase">🔑 Borsa API Ayarları</h2>
+                <h2 class="text-sm font-bold text-amber-400 uppercase">🔑 Borsa & Yapay Zeka Ayarları</h2>
                 <div class="space-y-2 text-xs">
                     <div><label class="text-slate-400 block mb-1">BORSA</label><select id="api-exchange" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none"><option value="BINANCE" selected>Binance Futures</option><option value="BYBIT">Bybit Linear</option></select></div>
                     <div><label class="text-slate-400 block mb-1">AĞ TÜRÜ</label><select id="api-mode" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none"><option value="TESTNET" selected>Testnet (Sanal)</option><option value="LIVE">Live (Gerçek)</option></select></div>
                     <div><label class="text-slate-400 block mb-1">API KEY</label><input id="api-key" type="password" placeholder="API Key..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono"></div>
                     <div><label class="text-slate-400 block mb-1">API SECRET</label><input id="api-secret" type="password" placeholder="API Secret..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono"></div>
-                    <button onclick="saveApiSettings(this)" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded transition">KAYDET</button>
+                    
+                    <!-- 🧠 YENİ: YZ AYARLARI -->
+                    <div class="border-t border-slate-800 pt-3 mt-3 space-y-2">
+                        <div>
+                            <label class="text-emerald-400 font-bold block mb-1">🧠 GEMINI PRO API KEY (Ücretsiz)</label>
+                            <input id="gemini-api-key" type="password" placeholder="Google AI Studio Key..." class="w-full bg-emerald-950/20 border border-emerald-800/50 text-emerald-100 rounded p-1.5 outline-none font-mono">
+                        </div>
+                        <div class="flex items-center space-x-2 pt-1">
+                            <input type="checkbox" id="ai-filter-active" class="w-4 h-4 cursor-pointer">
+                            <label for="ai-filter-active" class="text-slate-300 font-bold cursor-pointer">🤖 İşlemlerde Yapay Zeka Onayı Bekle (Gemini Filtresi)</label>
+                        </div>
+                    </div>
+
+                    <button onclick="saveApiSettings(this)" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded transition">TÜMÜNÜ KAYDET</button>
                 </div>
             </div>
         </div>
@@ -2118,7 +2186,7 @@ async def get_dashboard(request: Request):
                 if (!selectedPos || !candleSeries || !chart) return;
 
                 const timeScale = chart.timeScale();
-                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp + 10800);
+                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp);
                 const rightX = canvas.width - 55;
                 const boxStartX = startX !== null ? Math.max(0, startX) : 40;
                 const boxWidth = rightX - boxStartX;
@@ -2421,7 +2489,7 @@ async def get_dashboard(request: Request):
 
                 if (Array.isArray(data) && data.length > 0) {
                     return data.map(c => ({
-                        time: Math.floor(c[0] / 1000) + 10800, 
+                        time: Math.floor(c[0] / 1000), 
                         open: parseFloat(c[1]), 
                         high: parseFloat(c[2]), 
                         low: parseFloat(c[3]), 
@@ -2440,8 +2508,6 @@ async def get_dashboard(request: Request):
                     
                     if (candles.length > 0 && candleSeries) {
                         if (isLiveTick && !symbolChanged) {
-                            // CANLI AKIŞ: Son 3 mumu çekip update ile eziyoruz. 
-                            // Bu sayede hem anlık fiyat oynar, hem de saat başlarında YENİ MUM anında oluşur!
                             candles.forEach(c => candleSeries.update(c));
                             
                             const lastCandle = candles[candles.length - 1];
@@ -2633,15 +2699,33 @@ async def get_dashboard(request: Request):
                 const mode = document.getElementById('api-mode').value;
                 const api_key = document.getElementById('api-key').value;
                 const api_secret = document.getElementById('api-secret').value;
-                await fetch('/api/update_api', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({exchange, mode, api_key, api_secret, auto_trade: true}) });
+                const gemini_api_key = document.getElementById('gemini-api-key').value;
+                const ai_filter_active = document.getElementById('ai-filter-active').checked;
+                
+                await fetch('/api/update_api', { 
+                    method: 'POST', 
+                    headers: {'Content-Type': 'application/json'}, 
+                    body: JSON.stringify({
+                        exchange, mode, api_key, api_secret, 
+                        gemini_api_key, ai_filter_active, 
+                        auto_trade: true
+                    }) 
+                });
                 updateDashboard();
-                if(btn){ btn.innerText = "KAYDET"; btn.disabled = false; btn.classList.remove("opacity-50"); }
+                if(btn){ btn.innerText = "TÜMÜNÜ KAYDET"; btn.disabled = false; btn.classList.remove("opacity-50"); }
             }
 
             async function updateDashboard() {
                 try {
                     const res = await fetch('/api/state');
                     const data = await res.json();
+
+                    if (data.api_settings) {
+                        const gk = document.getElementById('gemini-api-key');
+                        if (gk && !gk.value) gk.value = data.api_settings.gemini_api_key || "";
+                        const chk = document.getElementById('ai-filter-active');
+                        if (chk) chk.checked = data.api_settings.ai_filter_active || false;
+                    }
 
                     if (data.logs && data.logs.length > 0) {
                         const currentTopLog = data.logs[0];
