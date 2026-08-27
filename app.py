@@ -485,15 +485,18 @@ async def analyze_symbol(exchange, symbol):
                     "reasons": ["⚡ 1H Tepe Likiditesi Alındı + 1H Güçlü Kırılım"]
                 }
 
+        # 15 DAKİKALIK (15M) GRAFİKTE RETEST VE DESTEKTE TUTUNMA (MUM KAPANIŞ) KONTROLÜ
         if symbol in retest_tracker:
             tracker = retest_tracker[symbol]
             if tracker["direction"] == "LONG":
+                # 15M mumunun iğne atıp seviyeyi koruması VE 15M mumunun yeşil kapanması
                 if c_15m['low'] <= tracker["level"] * 1.003 and c_15m['close'] > tracker["level"] and c_15m['close'] > c_15m['open']:
                     direction = "LONG"
                     score += tracker["score_base"] + 25
                     reasons = tracker["reasons"] + ["🎯 15M Kusursuz Retest (Destekte Tutundu ve Yeşil Kapattı)"]
                     del retest_tracker[symbol]
             elif tracker["direction"] == "SHORT":
+                # 15M mumunun iğne atıp direnci koruması VE 15M mumunun kırmızı kapanması
                 if c_15m['high'] >= tracker["level"] * 0.997 and c_15m['close'] < tracker["level"] and c_15m['close'] < c_15m['open']:
                     direction = "SHORT"
                     score += tracker["score_base"] + 25
@@ -953,7 +956,7 @@ async def update_api(payload: ApiPayload):
     system_state["api_settings"] = payload.dict()
     status_str = "AKTİF" if payload.auto_trade else "DEVRE DIŞI"
     ai_status = "AKTİF" if payload.ai_filter_active else "PASİF"
-    add_log(f"🔑 API GÜNCELLENDİ: {payload.exchange} ({payload.mode}) | AI Onay: {ai_status} | Otomatik Emir: {status_str}")
+    add_log(f"🔑 API GÜNCELLENDİ: Borsa ({payload.mode}) | AI Onay: {ai_status} | Otomatik Emir: {status_str}")
     return {"status": "success"}
 
 @app.post("/api/toggle_bot_trading")
@@ -1836,29 +1839,36 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 9: BORSA API -->
+        <!-- SAYFA 9: API VE YAPAY ZEKA AYARLARI -->
         <div id="page-api" class="hidden space-y-3">
-            <div class="card p-4 rounded-xl space-y-3 max-w-lg">
-                <h2 class="text-sm font-bold text-amber-400 uppercase">🔑 Borsa API Ayarları</h2>
-                <div class="space-y-2 text-xs">
-                    <div><label class="text-slate-400 block mb-1">BORSA</label><select id="api-exchange" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none"><option value="BINANCE" selected>Binance Futures</option><option value="BYBIT">Bybit Linear</option></select></div>
-                    <div><label class="text-slate-400 block mb-1">AĞ TÜRÜ</label><select id="api-mode" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none"><option value="TESTNET" selected>Testnet (Sanal)</option><option value="LIVE">Live (Gerçek)</option></select></div>
-                    <div><label class="text-slate-400 block mb-1">API KEY</label><input id="api-key" type="password" placeholder="API Key..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono"></div>
-                    <div><label class="text-slate-400 block mb-1">API SECRET</label><input id="api-secret" type="password" placeholder="API Secret..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono"></div>
-                    
-                    <!-- 🧠 YENİ: YZ AYARLARI -->
-                    <div class="border-t border-slate-800 pt-3 mt-3 space-y-2">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <!-- BORSA KARTI -->
+                <div class="card p-4 rounded-xl space-y-3">
+                    <h2 class="text-sm font-bold text-amber-400 uppercase">🏦 Borsa Motoru Ayarları</h2>
+                    <div class="space-y-2 text-xs">
+                        <div><label class="text-slate-400 block mb-1">BORSA</label><select id="api-exchange" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none"><option value="BINANCE" selected>Binance Futures</option><option value="BYBIT">Bybit Linear</option></select></div>
+                        <div><label class="text-slate-400 block mb-1">AĞ TÜRÜ</label><select id="api-mode" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none"><option value="TESTNET" selected>Testnet (Sanal)</option><option value="LIVE">Live (Gerçek)</option></select></div>
+                        <div><label class="text-slate-400 block mb-1">API KEY</label><input id="api-key" type="password" placeholder="API Key..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono"></div>
+                        <div><label class="text-slate-400 block mb-1">API SECRET</label><input id="api-secret" type="password" placeholder="API Secret..." class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none font-mono"></div>
+                        <button onclick="saveExchangeSettings(this)" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 mt-2 rounded transition">BORSA MOTORUNU BAĞLA</button>
+                    </div>
+                </div>
+
+                <!-- YAPAY ZEKA KARTI -->
+                <div class="card p-4 rounded-xl space-y-3">
+                    <h2 class="text-sm font-bold text-fuchsia-400 uppercase">🧠 Yapay Zeka (Gemini) Ayarları</h2>
+                    <div class="space-y-2 text-xs">
                         <div>
-                            <label class="text-fuchsia-400 font-bold block mb-1">🧠 GEMINI PRO API KEY (Ücretsiz)</label>
+                            <label class="text-fuchsia-400 font-bold block mb-1">GEMINI PRO API KEY (Ücretsiz)</label>
                             <input id="gemini-api-key" type="password" placeholder="Google AI Studio Key..." class="w-full bg-fuchsia-950/20 border border-fuchsia-800/50 text-fuchsia-100 rounded p-1.5 outline-none font-mono">
                         </div>
-                        <div class="flex items-center space-x-2 pt-1">
+                        <div class="flex items-center space-x-2 pt-2">
                             <input type="checkbox" id="ai-filter-active" class="w-4 h-4 cursor-pointer accent-fuchsia-500">
-                            <label for="ai-filter-active" class="text-slate-300 font-bold cursor-pointer">🤖 İşlemlerde Yapay Zeka Onayı Bekle (Gemini Filtresi)</label>
+                            <label for="ai-filter-active" class="text-slate-300 font-bold cursor-pointer">🤖 İşlemlerde Yapay Zeka Onayı Bekle</label>
                         </div>
+                        <div class="text-[10px] text-slate-500 pt-1 pb-2">Bu özellik açıldığında, bot sinyal bulsa dahi yapay zeka piyasa şartlarını onaylamadan işlem açılmaz.</div>
+                        <button onclick="saveAiSettings(this)" class="w-full bg-fuchsia-600 hover:bg-fuchsia-500 text-white font-bold py-2 rounded transition shadow-[0_0_10px_rgba(192,38,211,0.4)]">YAPAY ZEKAYI AKTİFLEŞTİR</button>
                     </div>
-
-                    <button onclick="saveApiSettings(this)" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded transition">KAYDET</button>
                 </div>
             </div>
         </div>
@@ -2675,27 +2685,7 @@ async def get_dashboard(request: Request):
                 updateDashboard();
             }
 
-            async function saveSettings(btn) {
-                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); playAlertSound("CLICK"); }
-                const total_balance = parseFloat(document.getElementById('input-balance').value);
-                const risk_pct = parseFloat(document.getElementById('input-risk').value);
-                const leverage = parseInt(document.getElementById('input-leverage').value);
-                const margin_mode = document.getElementById('input-margin-mode').value;
-                const max_open_positions = parseInt(document.getElementById('input-max-pos').value);
-                const max_total_margin_pct = parseFloat(document.getElementById('input-max-margin-pct').value);
-
-                const res = await fetch('/api/update_settings', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({total_balance, risk_pct, leverage, margin_mode, max_open_positions, max_total_margin_pct})
-                });
-                if (res.ok) { 
-                    updateDashboard(); 
-                    if(btn){ btn.innerText = "KAYDET"; btn.disabled = false; btn.classList.remove("opacity-50"); }
-                }
-            }
-
-            async function saveApiSettings(btn) {
+            async function saveExchangeSettings(btn) {
                 if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); playAlertSound("CLICK"); }
                 const exchange = document.getElementById('api-exchange').value;
                 const mode = document.getElementById('api-mode').value;
@@ -2714,7 +2704,49 @@ async def get_dashboard(request: Request):
                     }) 
                 });
                 updateDashboard();
-                if(btn){ btn.innerText = "TÜMÜNÜ KAYDET"; btn.disabled = false; btn.classList.remove("opacity-50"); }
+                if(btn){ btn.innerText = "BORSA KAYDEDİLDİ"; btn.disabled = false; btn.classList.remove("opacity-50"); setTimeout(() => btn.innerText="BORSA MOTORUNU BAĞLA", 2000); }
+            }
+
+            async function saveAiSettings(btn) {
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); playAlertSound("CLICK"); }
+                const exchange = document.getElementById('api-exchange').value;
+                const mode = document.getElementById('api-mode').value;
+                const api_key = document.getElementById('api-key').value;
+                const api_secret = document.getElementById('api-secret').value;
+                const gemini_api_key = document.getElementById('gemini-api-key').value;
+                const ai_filter_active = document.getElementById('ai-filter-active').checked;
+                
+                await fetch('/api/update_api', { 
+                    method: 'POST', 
+                    headers: {'Content-Type': 'application/json'}, 
+                    body: JSON.stringify({
+                        exchange, mode, api_key, api_secret, 
+                        gemini_api_key, ai_filter_active, 
+                        auto_trade: true
+                    }) 
+                });
+                updateDashboard();
+                if(btn){ btn.innerText = "YAPAY ZEKA KAYDEDİLDİ"; btn.disabled = false; btn.classList.remove("opacity-50"); setTimeout(() => btn.innerText="YAPAY ZEKAYI AKTİFLEŞTİR", 2000); }
+            }
+
+            async function saveSettings(btn) {
+                if(btn){ btn.innerText = "⏳"; btn.disabled = true; btn.classList.add("opacity-50"); playAlertSound("CLICK"); }
+                const total_balance = parseFloat(document.getElementById('input-balance').value);
+                const risk_pct = parseFloat(document.getElementById('input-risk').value);
+                const leverage = parseInt(document.getElementById('input-leverage').value);
+                const margin_mode = document.getElementById('input-margin-mode').value;
+                const max_open_positions = parseInt(document.getElementById('input-max-pos').value);
+                const max_total_margin_pct = parseFloat(document.getElementById('input-max-margin-pct').value);
+
+                const res = await fetch('/api/update_settings', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({total_balance, risk_pct, leverage, margin_mode, max_open_positions, max_total_margin_pct})
+                });
+                if (res.ok) { 
+                    updateDashboard(); 
+                    if(btn){ btn.innerText = "KAYDET"; btn.disabled = false; btn.classList.remove("opacity-50"); }
+                }
             }
 
             async function updateDashboard() {
