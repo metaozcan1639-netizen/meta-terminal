@@ -978,7 +978,7 @@ async def manual_close_all():
     for pos in list(system_state["active_positions"]):
         curr_price = pos.get('current_price', pos['entry'])
         direction = pos['direction']
-        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
+        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
         apply_realized_pnl(realized_pnl)
 
@@ -1348,9 +1348,7 @@ async def get_dashboard(request: Request):
                     <h2 class="text-xs font-semibold text-sky-400 mb-2 flex items-center">
                         <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> KASA BÜYÜME EĞRİSİ (EQUITY)
                     </h2>
-                    <div class="w-full flex-1 rounded overflow-hidden relative">
-                        <div id="equity-container" class="w-full h-full"></div>
-                    </div>
+                    <div id="equity-container" class="w-full flex-1 rounded overflow-hidden"></div>
                 </div>
             </div>
         </div>
@@ -2102,7 +2100,7 @@ async def get_dashboard(request: Request):
                     canvas.width = wrapper.clientWidth;
                     canvas.height = wrapper.clientHeight;
                 }
-                if (chart) {
+                if (chart && wrapper) {
                     chart.resize(wrapper.clientWidth, wrapper.clientHeight);
                 }
                 const eqWrapper = document.getElementById('equity-container');
@@ -2337,7 +2335,7 @@ async def get_dashboard(request: Request):
                         timeVisible: true, 
                         secondsVisible: false, 
                         borderColor: '#1e293b',
-                        rightOffset: 5,
+                        rightOffset: 12,
                         fixLeftEdge: false,
                         fixRightEdge: false,
                         lockVisibleTimeRangeOnResize: true,
