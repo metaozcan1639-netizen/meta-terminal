@@ -276,7 +276,7 @@ def calculate_indicators(df):
 
     high_low = df['high'] - df['low']
     high_close = (df['high'] - df['close'].shift()).abs()
-    low_close = (df['low'] - df['low'].shift()).abs()
+    low_close = (df['low'] - df['close'].shift()).abs()
     tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
     df['atr'] = tr.rolling(window=14).mean()
 
@@ -1162,7 +1162,7 @@ async def get_dashboard(request: Request):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Meta Quant Terminal Pro Ultimate + AI</title>
+        <title>Meta Quant Terminal Pro Ultimate + L2</title>
         <script src="https://cdn.tailwindcss.com"></script>
         <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
         <style>
@@ -1188,9 +1188,10 @@ async def get_dashboard(request: Request):
                 <div class="w-3 h-3 bg-emerald-500 rounded-full animate-ping"></div>
                 <div>
                     <div class="flex items-center space-x-2">
-                        <h1 class="text-base font-extrabold tracking-wider text-emerald-400">META QUANT ULTIMATE + AI</h1>
+                        <h1 class="text-base font-extrabold tracking-wider text-emerald-400">META QUANT ULTIMATE + L2</h1>
                         <span id="btc-regime-badge" class="text-[9px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">BTC: YÜKLENİYOR</span>
                         <span id="btc-shock-badge" class="hidden text-[9px] font-bold px-2 py-0.5 rounded bg-rose-950 text-rose-400 border border-rose-800 animate-pulse">⚡ BTC ŞOK KORUMASI</span>
+                        <span id="drawdown-badge" class="hidden text-[9px] font-bold px-2 py-0.5 rounded bg-amber-950 text-amber-400 border border-amber-800">🛑 GÜNLÜK ZARAR LİMİTİ</span>
                     </div>
                 </div>
             </div>
@@ -1205,10 +1206,11 @@ async def get_dashboard(request: Request):
                 <button onclick="switchTab('stats')" id="tab-stats" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📈 İstatistik</button>
                 <button onclick="switchTab('radar')" id="tab-radar" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">🔥 Radar</button>
                 <button onclick="switchTab('journal')" id="tab-journal" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">📖 Günlük</button>
-                <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ AI & API</button>
+                <button onclick="switchTab('api')" id="tab-api" class="nav-tab px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">⚙️ API</button>
             </div>
 
             <div class="flex items-center space-x-3 text-xs text-slate-400">
+                <button onclick="switchTab('api')" id="ai-status-btn" class="px-2.5 py-1 rounded-lg font-bold bg-slate-800 text-slate-400 transition">🧠 AI: KAPALI</button>
                 <button onclick="toggleBotTrading()" id="bot-toggle-btn" class="px-2.5 py-1 rounded-lg font-bold bg-emerald-600 text-black hover:bg-emerald-500 transition">🤖 Bot: AÇIK</button>
                 <div>Taranan: <span id="scanned-count" class="text-white font-bold">0</span></div>
                 <div>Son: <span id="last-scan" class="text-white font-bold">-</span></div>
@@ -1837,7 +1839,7 @@ async def get_dashboard(request: Request):
         <!-- SAYFA 9: BORSA API -->
         <div id="page-api" class="hidden space-y-3">
             <div class="card p-4 rounded-xl space-y-3 max-w-lg">
-                <h2 class="text-sm font-bold text-amber-400 uppercase">🔑 Borsa & Yapay Zeka Ayarları</h2>
+                <h2 class="text-sm font-bold text-amber-400 uppercase">🔑 Borsa API Ayarları</h2>
                 <div class="space-y-2 text-xs">
                     <div><label class="text-slate-400 block mb-1">BORSA</label><select id="api-exchange" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none"><option value="BINANCE" selected>Binance Futures</option><option value="BYBIT">Bybit Linear</option></select></div>
                     <div><label class="text-slate-400 block mb-1">AĞ TÜRÜ</label><select id="api-mode" class="w-full bg-slate-900 border border-slate-700 text-white rounded p-1.5 outline-none"><option value="TESTNET" selected>Testnet (Sanal)</option><option value="LIVE">Live (Gerçek)</option></select></div>
@@ -1847,16 +1849,16 @@ async def get_dashboard(request: Request):
                     <!-- 🧠 YENİ: YZ AYARLARI -->
                     <div class="border-t border-slate-800 pt-3 mt-3 space-y-2">
                         <div>
-                            <label class="text-emerald-400 font-bold block mb-1">🧠 GEMINI PRO API KEY (Ücretsiz)</label>
-                            <input id="gemini-api-key" type="password" placeholder="Google AI Studio Key..." class="w-full bg-emerald-950/20 border border-emerald-800/50 text-emerald-100 rounded p-1.5 outline-none font-mono">
+                            <label class="text-fuchsia-400 font-bold block mb-1">🧠 GEMINI PRO API KEY (Ücretsiz)</label>
+                            <input id="gemini-api-key" type="password" placeholder="Google AI Studio Key..." class="w-full bg-fuchsia-950/20 border border-fuchsia-800/50 text-fuchsia-100 rounded p-1.5 outline-none font-mono">
                         </div>
                         <div class="flex items-center space-x-2 pt-1">
-                            <input type="checkbox" id="ai-filter-active" class="w-4 h-4 cursor-pointer">
+                            <input type="checkbox" id="ai-filter-active" class="w-4 h-4 cursor-pointer accent-fuchsia-500">
                             <label for="ai-filter-active" class="text-slate-300 font-bold cursor-pointer">🤖 İşlemlerde Yapay Zeka Onayı Bekle (Gemini Filtresi)</label>
                         </div>
                     </div>
 
-                    <button onclick="saveApiSettings(this)" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded transition">TÜMÜNÜ KAYDET</button>
+                    <button onclick="saveApiSettings(this)" class="w-full bg-amber-500 hover:bg-amber-400 text-black font-bold py-2 rounded transition">KAYDET</button>
                 </div>
             </div>
         </div>
@@ -2725,6 +2727,17 @@ async def get_dashboard(request: Request):
                         if (gk && !gk.value) gk.value = data.api_settings.gemini_api_key || "";
                         const chk = document.getElementById('ai-filter-active');
                         if (chk) chk.checked = data.api_settings.ai_filter_active || false;
+                        
+                        const aiBtn = document.getElementById('ai-status-btn');
+                        if (aiBtn) {
+                            if (data.api_settings.ai_filter_active) {
+                                aiBtn.className = "px-2.5 py-1 rounded-lg font-bold bg-fuchsia-600 text-white shadow-[0_0_12px_rgba(192,38,211,0.6)] transition";
+                                aiBtn.innerText = "🧠 AI: AÇIK";
+                            } else {
+                                aiBtn.className = "px-2.5 py-1 rounded-lg font-bold bg-slate-800 text-slate-400 transition";
+                                aiBtn.innerText = "🧠 AI: KAPALI";
+                            }
+                        }
                     }
 
                     if (data.logs && data.logs.length > 0) {
