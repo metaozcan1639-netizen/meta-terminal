@@ -361,7 +361,6 @@ async def analyze_symbol(exchange, symbol):
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
 
-        # 1H ve 4H Büyük Resim + 15M Hassas Retest Girişi + L2 Emir Defteri
         tasks = [
             exchange.fetch_ohlcv(symbol, timeframe='1h', limit=40),
             exchange.fetch_ohlcv(symbol, timeframe='15m', limit=40),
@@ -377,7 +376,6 @@ async def analyze_symbol(exchange, symbol):
         df_4h = calculate_indicators(pd.DataFrame(results[2], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         book = results[3] if not isinstance(results[3], Exception) and results[3] else {}
 
-        # L2 Emir Defteri (Order Book) Derinlik Baskısı
         bids = book.get('bids', [])
         asks = book.get('asks', [])
         bid_vol = sum(b[1] for b in bids[:10]) if bids else 1.0
@@ -413,7 +411,6 @@ async def analyze_symbol(exchange, symbol):
         if adx_val < 18:
             return None
 
-        # 1H ve 4H Büyük Resim Trend Filtresi
         if c_1h['close'] > c_1h['ema50'] and c_4h['close'] > c_4h['ema50']:
             score += 25
             reasons.append("📈 1H & 4H Büyük Resim Boğa Trendi Onayı")
@@ -471,7 +468,6 @@ async def analyze_symbol(exchange, symbol):
                     reasons = tracker["reasons"] + ["🎯 Kusursuz 15M Break & Retest (Direnç Onayı)"]
                     del retest_tracker[symbol]
 
-        # L2 Emir Defteri Dinamik Skorlama Matrisi
         if direction == "LONG" and bid_pressure >= 55.0:
             book_score = int((bid_pressure - 50) * 1.5)
             score += book_score
@@ -516,7 +512,6 @@ async def analyze_symbol(exchange, symbol):
         effective_leverage = system_state["leverage"]
         effective_risk = system_state["risk_pct"]
 
-        # GÜVENLİ STOP MESAFESİ (2.8 * ATR Sabitlendi)
         if direction == "LONG":
             sl = float(df_15m['low'].iloc[-8:].min() - (2.8 * atr))
             if (entry - sl) / entry < 0.015:
@@ -655,7 +650,6 @@ async def market_scanner_loop():
                             log_msg = f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | Puan: {sig['score']} | {sig['leverage']}x | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}"
                             add_log(log_msg)
                             
-                            # TELEGRAM: YENİ İŞLEM BİLDİRİMİ
                             tg_msg = f"🟢 <b>YENİ İŞLEM AÇILDI</b>\n\n<b>Parite:</b> {sig['symbol']}\n<b>Yön:</b> {sig['direction']} ({sig['leverage']}x {mode_label})\n<b>Giriş:</b> {sig['entry']}\n<b>Hedef 2:</b> {sig['tp2']}\n<b>Stop:</b> {sig['sl']}\n<b>Risk (Zarar):</b> ${sig['max_loss']}\n<b>Skor:</b> {sig['score']}"
                             asyncio.create_task(send_telegram_alert(tg_msg))
 
@@ -759,7 +753,6 @@ async def position_manager_loop():
                             log_msg = f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi."
                             add_log(log_msg)
                             
-                            # TELEGRAM: TP1 BİLDİRİMİ
                             tg_msg = f"⚡ <b>İLK HEDEF (TP1) VURULDU</b>\n\n<b>Parite:</b> {pos['symbol']}\n<b>Kâr:</b> +${partial_pnl}\n<b>Aksiyon:</b> Pozisyon %50 küçültüldü ve Stop-Loss başabaş seviyesine (Giriş: {pos['entry']}) çekildi."
                             asyncio.create_task(send_telegram_alert(tg_msg))
 
@@ -801,7 +794,6 @@ async def position_manager_loop():
                         log_msg = f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}"
                         add_log(log_msg)
                         
-                        # TELEGRAM: KAPANIŞ BİLDİRİMİ
                         icon = "🎯" if realized_pnl > 0 else "❌"
                         tg_msg = f"{icon} <b>POZİSYON KAPANDI</b>\n\n<b>Parite:</b> {pos['symbol']}\n<b>Yön:</b> {pos['direction']}\n<b>Net Kâr/Zarar:</b> ${realized_pnl} (%{pnl_pct:.2f})\n<b>Neden:</b> {close_reason}"
                         asyncio.create_task(send_telegram_alert(tg_msg))
@@ -986,7 +978,7 @@ async def manual_close_all():
     for pos in list(system_state["active_positions"]):
         curr_price = pos.get('current_price', pos['entry'])
         direction = pos['direction']
-        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
+        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
         apply_realized_pnl(realized_pnl)
 
@@ -1128,6 +1120,7 @@ async def get_dashboard(request: Request):
             .nav-tab.active { background-color: #10b981; color: #000; font-weight: bold; }
             #tv-wrapper { position: relative; width: 100%; height: 100%; }
             #box-canvas { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 2; }
+            #equity-container { position: relative; width: 100%; height: 100%; }
         </style>
     </head>
     <body class="p-3 space-y-3 pb-16">
@@ -1300,7 +1293,6 @@ async def get_dashboard(request: Request):
 
                 <!-- SAĞ PANEL -->
                 <div class="card p-3 rounded-xl flex flex-col h-[520px]">
-                    <!-- 1. GİRİŞ GEREKÇESİ -->
                     <div class="flex-1 overflow-y-auto mb-2">
                         <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
                         <div id="active-rationale" class="space-y-2 text-xs">
@@ -1308,7 +1300,6 @@ async def get_dashboard(request: Request):
                         </div>
                     </div>
                     
-                    <!-- 2. L2 EMİR DEFTERİ -->
                     <div class="bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 space-y-1.5 mb-2">
                         <h3 class="text-[11px] font-bold text-sky-400 uppercase">⚡ L2 Emir Defteri (Tahta Derinliği)</h3>
                         <div class="flex justify-between text-[11px] font-bold">
@@ -1321,7 +1312,6 @@ async def get_dashboard(request: Request):
                         </div>
                     </div>
 
-                    <!-- 3. SİSTEM LOGLARI -->
                     <div class="h-32 flex flex-col">
                         <h3 class="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Sistem Logları</h3>
                         <div id="log-box" class="bg-black/50 p-2 rounded text-[11px] text-emerald-500/80 font-mono flex-1 overflow-y-auto space-y-1"></div>
@@ -1358,7 +1348,9 @@ async def get_dashboard(request: Request):
                     <h2 class="text-xs font-semibold text-sky-400 mb-2 flex items-center">
                         <span class="w-2 h-2 bg-sky-400 rounded-full mr-2"></span> KASA BÜYÜME EĞRİSİ (EQUITY)
                     </h2>
-                    <div id="equity-container" class="w-full flex-1 rounded overflow-hidden"></div>
+                    <div class="w-full flex-1 rounded overflow-hidden relative">
+                        <div id="equity-container" class="w-full h-full"></div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2049,7 +2041,7 @@ async def get_dashboard(request: Request):
                         else btn.classList.remove('active');
                     }
                 });
-                lastLoadedSymbol = ""; // Zorunlu yeniden yüklet
+                lastLoadedSymbol = "";
                 loadChartCandles(currentSymbol, selectedPos, false);
             }
 
@@ -2109,6 +2101,13 @@ async def get_dashboard(request: Request):
                 if (wrapper && canvas) {
                     canvas.width = wrapper.clientWidth;
                     canvas.height = wrapper.clientHeight;
+                }
+                if (chart) {
+                    chart.resize(wrapper.clientWidth, wrapper.clientHeight);
+                }
+                const eqWrapper = document.getElementById('equity-container');
+                if (equityChart && eqWrapper) {
+                    equityChart.resize(eqWrapper.clientWidth, eqWrapper.clientHeight);
                 }
             }
 
@@ -2329,6 +2328,8 @@ async def get_dashboard(request: Request):
                 const container = document.getElementById('tv-container');
                 container.innerHTML = '';
                 chart = LightweightCharts.createChart(container, {
+                    width: container.clientWidth,
+                    height: container.clientHeight,
                     layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
                     grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
                     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
@@ -2336,10 +2337,10 @@ async def get_dashboard(request: Request):
                         timeVisible: true, 
                         secondsVisible: false, 
                         borderColor: '#1e293b',
-                        rightOffset: 25,
+                        rightOffset: 5,
                         fixLeftEdge: false,
                         fixRightEdge: false,
-                        lockVisibleTimeRangeOnResize: false,
+                        lockVisibleTimeRangeOnResize: true,
                         tickMarkFormatter: (time, tickMarkType, locale) => {
                             const d = new Date(time * 1000);
                             return d.toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
@@ -2370,6 +2371,8 @@ async def get_dashboard(request: Request):
                 const eqContainer = document.getElementById('equity-container');
                 eqContainer.innerHTML = '';
                 equityChart = LightweightCharts.createChart(eqContainer, {
+                    width: eqContainer.clientWidth,
+                    height: eqContainer.clientHeight,
                     layout: { background: { color: '#121824' }, textColor: '#94a3b8' },
                     grid: { vertLines: { color: '#1e293b' }, horzLines: { color: '#1e293b' } },
                     timeScale: { timeVisible: true, secondsVisible: false, borderColor: '#1e293b' },
@@ -2454,7 +2457,7 @@ async def get_dashboard(request: Request):
                             const intervalSec = getIntervalSeconds(currentTimeframe);
                             let futureData = [];
                             let lastTime = lastCandle.time;
-                            for (let i = 1; i <= 150; i++) {
+                            for (let i = 1; i <= 50; i++) {
                                 futureData.push({ time: lastTime + (i * intervalSec) });
                             }
                             
@@ -2633,7 +2636,6 @@ async def get_dashboard(request: Request):
                     const res = await fetch('/api/state');
                     const data = await res.json();
 
-                    // BİLDİRİM KONTROL (Sadece yeni log eklendiyse çalışır)
                     if (data.logs && data.logs.length > 0) {
                         const currentTopLog = data.logs[0];
                         if (currentTopLog !== lastProcessedLog) {
@@ -2662,7 +2664,6 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
-                    // L2 EMİR DEFTERİ PANEL GÜNCELLEMESİ
                     if (data.order_book_metrics) {
                         let ob = data.order_book_metrics;
                         document.getElementById('ob-bid-pct').innerText = '%' + ob.bid_pressure;
