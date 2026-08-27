@@ -361,9 +361,10 @@ async def analyze_symbol(exchange, symbol):
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
 
+        # 1H ve 4H Büyük Resim + 15M Hassas Retest Girişi + L2 Emir Defteri
         tasks = [
             exchange.fetch_ohlcv(symbol, timeframe='1h', limit=40),
-            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=40),
+            exchange.fetch_ohlcv(symbol, timeframe='15m', limit=40),
             exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50),
             exchange.fetch_order_book(symbol, limit=20)
         ]
@@ -371,11 +372,12 @@ async def analyze_symbol(exchange, symbol):
         if any(isinstance(r, Exception) or not r or len(r) < 30 for r in results[:3]):
             return None
 
-        df_1h_main = calculate_indicators(pd.DataFrame(results[0], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
-        df_1h_retest = calculate_indicators(pd.DataFrame(results[1], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        df_1h = calculate_indicators(pd.DataFrame(results[0], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        df_15m = calculate_indicators(pd.DataFrame(results[1], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         df_4h = calculate_indicators(pd.DataFrame(results[2], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         book = results[3] if not isinstance(results[3], Exception) and results[3] else {}
 
+        # L2 Emir Defteri (Order Book) Derinlik Baskısı
         bids = book.get('bids', [])
         asks = book.get('asks', [])
         bid_vol = sum(b[1] for b in bids[:10]) if bids else 1.0
@@ -390,17 +392,18 @@ async def analyze_symbol(exchange, symbol):
                 "bid_pressure": bid_pressure, "ask_pressure": ask_pressure
             }
 
-        c_1h = df_1h_main.iloc[-1]
+        c_1h = df_1h.iloc[-1]
         c_4h = df_4h.iloc[-1]
+        c_15m = df_15m.iloc[-1]
 
         system_state["breadth_total"] += 1
         if c_1h['close'] > c_1h['ema50']:
             system_state["breadth_bullish"] += 1
 
-        swing_low_1h = df_1h_retest['low'].iloc[-20:-3].min()
-        swing_high_1h = df_1h_retest['high'].iloc[-20:-3].max()
-        recent_breakout_high = df_1h_main['high'].iloc[-8:-1].max()
-        recent_breakout_low = df_1h_main['low'].iloc[-8:-1].min()
+        swing_low_15m = df_15m['low'].iloc[-20:-3].min()
+        swing_high_15m = df_15m['high'].iloc[-20:-3].max()
+        recent_breakout_high = df_15m['high'].iloc[-8:-1].max()
+        recent_breakout_low = df_15m['low'].iloc[-8:-1].min()
 
         score = 0
         direction = None
@@ -410,19 +413,29 @@ async def analyze_symbol(exchange, symbol):
         if adx_val < 18:
             return None
 
-        sweep_low = df_1h_retest['low'].iloc[-4:].min() < swing_low_1h
-        body_size = abs(c_1h['close'] - c_1h['open'])
-        total_candle_size = c_1h['high'] - c_1h['low']
+        # 1H ve 4H Büyük Resim Trend Filtresi
+        if c_1h['close'] > c_1h['ema50'] and c_4h['close'] > c_4h['ema50']:
+            score += 25
+            reasons.append("📈 1H & 4H Büyük Resim Boğa Trendi Onayı")
+        elif c_1h['close'] < c_1h['ema50'] and c_4h['close'] < c_4h['ema50']:
+            score += 25
+            reasons.append("📉 1H & 4H Büyük Resim Ayı Trendi Onayı")
+        else:
+            return None # Büyük resim kararsızsa işlem açma
+
+        sweep_low = df_15m['low'].iloc[-4:].min() < swing_low_15m
+        body_size = abs(c_15m['close'] - c_15m['open'])
+        total_candle_size = c_15m['high'] - c_15m['low']
         is_strong_green = (
-            c_1h['close'] > recent_breakout_high
-            and c_1h['close'] > c_1h['open']
+            c_15m['close'] > recent_breakout_high
+            and c_15m['close'] > c_15m['open']
             and (body_size / (total_candle_size + 1e-9) > 0.35)
         )
 
-        sweep_high = df_1h_retest['high'].iloc[-4:].max() > swing_high_1h
+        sweep_high = df_15m['high'].iloc[-4:].max() > swing_high_15m
         is_strong_red = (
-            c_1h['close'] < recent_breakout_low
-            and c_1h['close'] < c_1h['open']
+            c_15m['close'] < recent_breakout_low
+            and c_15m['close'] < c_15m['open']
             and (body_size / (total_candle_size + 1e-9) > 0.35)
         )
 
@@ -432,7 +445,7 @@ async def analyze_symbol(exchange, symbol):
                     "direction": "LONG",
                     "level": recent_breakout_high,
                     "score_base": 40,
-                    "reasons": ["⚡ 1H Dip Likiditesi Alındı + 1H Güçlü Kırılım"]
+                    "reasons": ["⚡ 15M Dip Likiditesi Alındı + 15M Güçlü Kırılım"]
                 }
         elif sweep_high and is_strong_red:
             if not (system_state["btc_shock_lock"] and system_state["btc_15m_change"] >= 1.2):
@@ -440,24 +453,25 @@ async def analyze_symbol(exchange, symbol):
                     "direction": "SHORT",
                     "level": recent_breakout_low,
                     "score_base": 40,
-                    "reasons": ["⚡ 1H Tepe Likiditesi Alındı + 1H Güçlü Kırılım"]
+                    "reasons": ["⚡ 15M Tepe Likiditesi Alındı + 15M Güçlü Kırılım"]
                 }
 
         if symbol in retest_tracker:
             tracker = retest_tracker[symbol]
             if tracker["direction"] == "LONG":
-                if c_1h['low'] <= tracker["level"] * 1.003 and c_1h['close'] > tracker["level"]:
+                if c_15m['low'] <= tracker["level"] * 1.003 and c_15m['close'] > tracker["level"]:
                     direction = "LONG"
                     score += tracker["score_base"] + 25
-                    reasons = tracker["reasons"] + ["🎯 Kusursuz 1H Break & Retest (Destek Onayı)"]
+                    reasons = tracker["reasons"] + ["🎯 Kusursuz 15M Break & Retest (Destek Onayı)"]
                     del retest_tracker[symbol]
             elif tracker["direction"] == "SHORT":
-                if c_1h['high'] >= tracker["level"] * 0.997 and c_1h['close'] < tracker["level"]:
+                if c_15m['high'] >= tracker["level"] * 0.997 and c_15m['close'] < tracker["level"]:
                     direction = "SHORT"
                     score += tracker["score_base"] + 25
-                    reasons = tracker["reasons"] + ["🎯 Kusursuz 1H Break & Retest (Direnç Onayı)"]
+                    reasons = tracker["reasons"] + ["🎯 Kusursuz 15M Break & Retest (Direnç Onayı)"]
                     del retest_tracker[symbol]
 
+        # L2 Emir Defteri Dinamik Skorlama Matrisi
         if direction == "LONG" and bid_pressure >= 55.0:
             book_score = int((bid_pressure - 50) * 1.5)
             score += book_score
@@ -467,26 +481,17 @@ async def analyze_symbol(exchange, symbol):
             score += book_score
             reasons.append(f"🔴 L2 Emir Defteri Satıcı Baskısı Yüksek (%{ask_pressure})")
 
-        if direction == "LONG":
-            if c_1h['close'] > c_1h['ema50'] and c_1h['close'] > c_1h['ema20']:
-                score += 20
-                reasons.append("📈 1H Güçlü Ana Trend (Boğa) Onayı")
-        elif direction == "SHORT":
-            if c_1h['close'] < c_1h['ema50'] and c_1h['close'] < c_1h['ema20']:
-                score += 20
-                reasons.append("📉 1H Güçlü Ana Trend (Ayı) Onayı")
-
-        vol_ratio = float(c_1h['volume'] / (c_1h['vol_ma'] + 1e-9)) if pd.notnull(c_1h['vol_ma']) else 1.0
+        vol_ratio = float(c_15m['volume'] / (c_15m['vol_ma'] + 1e-9)) if pd.notnull(c_15m['vol_ma']) else 1.0
         if direction and vol_ratio >= 1.25:
             score += 10
             reasons.append(f"🔥 Yüksek Hacim Desteği ({vol_ratio:.1f}x)")
 
         radar_item = {
             "symbol": symbol,
-            "price": float(c_1h['close']),
-            "rsi": round(float(c_1h['rsi']), 1) if pd.notnull(c_1h['rsi']) else 50.0,
+            "price": float(c_15m['close']),
+            "rsi": round(float(c_15m['rsi']), 1) if pd.notnull(c_15m['rsi']) else 50.0,
             "vol_ratio": round(vol_ratio, 2),
-            "trend": direction if direction else ("LONG" if c_1h['close'] > c_1h['ema50'] else "SHORT"),
+            "trend": direction if direction else ("LONG" if c_15m['close'] > c_1h['ema50'] else "SHORT"),
             "score": score
         }
         
@@ -505,23 +510,24 @@ async def analyze_symbol(exchange, symbol):
         if not direction or score < dynamic_threshold:
             return None
 
-        entry = float(c_1h['close'])
-        atr = float(c_1h['atr']) if pd.notnull(c_1h['atr']) else entry * 0.01
+        entry = float(c_15m['close'])
+        atr = float(c_15m['atr']) if pd.notnull(c_15m['atr']) else entry * 0.01
 
         effective_leverage = system_state["leverage"]
         effective_risk = system_state["risk_pct"]
 
+        # GÜVENLİ STOP MESAFESİ (2.8 * ATR Sabitlendi)
         if direction == "LONG":
-            sl = float(df_1h_main['low'].iloc[-8:].min() - (2.8 * atr))
-            if (entry - sl) / entry < 0.02:
-                sl = entry * 0.98
+            sl = float(df_15m['low'].iloc[-8:].min() - (2.8 * atr))
+            if (entry - sl) / entry < 0.015:
+                sl = entry * 0.985
             risk_dist = entry - sl
             tp1 = entry + (1.5 * risk_dist)
             tp2 = entry + (3.0 * risk_dist)
         else:
-            sl = float(df_1h_main['high'].iloc[-8:].max() + (2.8 * atr))
-            if (sl - entry) / entry < 0.02:
-                sl = entry * 1.02
+            sl = float(df_15m['high'].iloc[-8:].max() + (2.8 * atr))
+            if (sl - entry) / entry < 0.015:
+                sl = entry * 1.015
             risk_dist = sl - entry
             tp1 = entry - (1.5 * risk_dist)
             tp2 = entry - (3.0 * risk_dist)
@@ -568,7 +574,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru (Avcı): 1H Break & Retest + L2 Emir Defteri Derinlik Analizi Aktif!")
+    add_log("Quant Motoru (Avcı): 1H/4H Trend + 15M Retest + L2 Emir Defteri Aktif!")
 
     while True:
         exchange = None
@@ -649,6 +655,7 @@ async def market_scanner_loop():
                             log_msg = f"🟢 POZİSYON AÇILDI: {sig['symbol']} {sig['direction']} | Puan: {sig['score']} | {sig['leverage']}x | Teminat: ${sig['margin']} | Risk: ${sig['max_loss']}"
                             add_log(log_msg)
                             
+                            # TELEGRAM: YENİ İŞLEM BİLDİRİMİ
                             tg_msg = f"🟢 <b>YENİ İŞLEM AÇILDI</b>\n\n<b>Parite:</b> {sig['symbol']}\n<b>Yön:</b> {sig['direction']} ({sig['leverage']}x {mode_label})\n<b>Giriş:</b> {sig['entry']}\n<b>Hedef 2:</b> {sig['tp2']}\n<b>Stop:</b> {sig['sl']}\n<b>Risk (Zarar):</b> ${sig['max_loss']}\n<b>Skor:</b> {sig['score']}"
                             asyncio.create_task(send_telegram_alert(tg_msg))
 
@@ -752,6 +759,7 @@ async def position_manager_loop():
                             log_msg = f"⚡ TP1 ALINDI ({pos['symbol']}): %50 Kâr Realize Edildi (+${partial_pnl}) | Stop Başabaşa Çekildi."
                             add_log(log_msg)
                             
+                            # TELEGRAM: TP1 BİLDİRİMİ
                             tg_msg = f"⚡ <b>İLK HEDEF (TP1) VURULDU</b>\n\n<b>Parite:</b> {pos['symbol']}\n<b>Kâr:</b> +${partial_pnl}\n<b>Aksiyon:</b> Pozisyon %50 küçültüldü ve Stop-Loss başabaş seviyesine (Giriş: {pos['entry']}) çekildi."
                             asyncio.create_task(send_telegram_alert(tg_msg))
 
@@ -793,6 +801,7 @@ async def position_manager_loop():
                         log_msg = f"🔴 POZİSYON KAPANDI: {pos['symbol']} | PnL: %{pnl_pct:.2f} (${realized_pnl}) | {close_reason}"
                         add_log(log_msg)
                         
+                        # TELEGRAM: KAPANIŞ BİLDİRİMİ
                         icon = "🎯" if realized_pnl > 0 else "❌"
                         tg_msg = f"{icon} <b>POZİSYON KAPANDI</b>\n\n<b>Parite:</b> {pos['symbol']}\n<b>Yön:</b> {pos['direction']}\n<b>Net Kâr/Zarar:</b> ${realized_pnl} (%{pnl_pct:.2f})\n<b>Neden:</b> {close_reason}"
                         asyncio.create_task(send_telegram_alert(tg_msg))
@@ -977,7 +986,7 @@ async def manual_close_all():
     for pos in list(system_state["active_positions"]):
         curr_price = pos.get('current_price', pos['entry'])
         direction = pos['direction']
-        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((target['entry'] - curr_price) / target['entry'] * 100)
+        pnl_pct = ((curr_price - pos['entry']) / pos['entry'] * 100) if direction == "LONG" else ((pos['entry'] - curr_price) / pos['entry'] * 100)
         realized_pnl = round(pos['active_size'] * (pnl_pct / 100.0), 2)
         apply_realized_pnl(realized_pnl)
 
@@ -1859,10 +1868,9 @@ async def get_dashboard(request: Request):
             let priceLines = [];
             let lastPositions = [];
             let tradeHistoryCache = [];
+            let lastKnownPosCount = 0;
             let resolvedSymbolCache = {};
             let lastProcessedLog = "";
-            let lastLoadedSymbol = "";
-            let lastLoadedTf = "";
 
             function recalculatePnlMetrics() {
                 try {
@@ -2040,7 +2048,6 @@ async def get_dashboard(request: Request):
                         else btn.classList.remove('active');
                     }
                 });
-                lastLoadedSymbol = ""; 
                 loadChartCandles(currentSymbol, selectedPos, false);
             }
 
@@ -2101,9 +2108,6 @@ async def get_dashboard(request: Request):
                     canvas.width = wrapper.clientWidth;
                     canvas.height = wrapper.clientHeight;
                 }
-                if (chart && wrapper) {
-                    chart.resize(wrapper.clientWidth, wrapper.clientHeight);
-                }
             }
 
             function drawPositionBoxes() {
@@ -2114,7 +2118,7 @@ async def get_dashboard(request: Request):
                 if (!selectedPos || !candleSeries || !chart) return;
 
                 const timeScale = chart.timeScale();
-                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp + 10800);
+                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp);
                 const rightX = canvas.width - 55;
                 const boxStartX = startX !== null ? Math.max(0, startX) : 40;
                 const boxWidth = rightX - boxStartX;
@@ -2330,10 +2334,10 @@ async def get_dashboard(request: Request):
                         timeVisible: true, 
                         secondsVisible: false, 
                         borderColor: '#1e293b',
-                        rightOffset: 12,
+                        rightOffset: 25,
                         fixLeftEdge: false,
                         fixRightEdge: false,
-                        lockVisibleTimeRangeOnResize: true,
+                        lockVisibleTimeRangeOnResize: false,
                         tickMarkFormatter: (time, tickMarkType, locale) => {
                             const d = new Date(time * 1000);
                             return d.toLocaleTimeString('tr-TR', { timeZone: 'Europe/Istanbul', hour: '2-digit', minute: '2-digit' });
@@ -2416,9 +2420,8 @@ async def get_dashboard(request: Request):
                 }
 
                 if (Array.isArray(data) && data.length > 0) {
-                    // UTC zamanını TSİ'ye (+3 saat = +10800 saniye) çeviriyoruz
                     return data.map(c => ({
-                        time: Math.floor(c[0] / 1000) + 10800, 
+                        time: Math.floor(c[0] / 1000), 
                         open: parseFloat(c[1]), 
                         high: parseFloat(c[2]), 
                         low: parseFloat(c[3]), 
@@ -2430,18 +2433,14 @@ async def get_dashboard(request: Request):
 
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
-                    const symbolChanged = (symbol !== lastLoadedSymbol || currentTimeframe !== lastLoadedTf);
-                    const limit = (isLiveTick && !symbolChanged) ? 5 : 1000;
+                    const limit = isLiveTick ? 5 : 1000;
                     const candles = await fetchCandlesDirect(symbol, currentTimeframe, limit);
                     
                     if (candles.length > 0 && candleSeries) {
-                        if (isLiveTick && !symbolChanged) {
+                        if (isLiveTick) {
                             candles.forEach(c => candleSeries.update(c));
                             drawPositionBoxes();
                         } else {
-                            lastLoadedSymbol = symbol;
-                            lastLoadedTf = currentTimeframe;
-
                             const lastCandle = candles[candles.length - 1];
                             const pConf = getPrecisionConfig(lastCandle.close);
                             candleSeries.applyOptions({ priceFormat: { type: 'price', precision: pConf.precision, minMove: pConf.minMove } });
@@ -2449,7 +2448,7 @@ async def get_dashboard(request: Request):
                             const intervalSec = getIntervalSeconds(currentTimeframe);
                             let futureData = [];
                             let lastTime = lastCandle.time;
-                            for (let i = 1; i <= 50; i++) {
+                            for (let i = 1; i <= 150; i++) {
                                 futureData.push({ time: lastTime + (i * intervalSec) });
                             }
                             
@@ -2628,6 +2627,7 @@ async def get_dashboard(request: Request):
                     const res = await fetch('/api/state');
                     const data = await res.json();
 
+                    // BİLDİRİM KONTROL (Sadece yeni log eklendiyse çalışır)
                     if (data.logs && data.logs.length > 0) {
                         const currentTopLog = data.logs[0];
                         if (currentTopLog !== lastProcessedLog) {
@@ -2656,6 +2656,7 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
+                    // L2 EMİR DEFTERİ PANEL GÜNCELLEMESİ (LOGLARIN HEMEN ÜSTÜ)
                     if (data.order_book_metrics) {
                         let ob = data.order_book_metrics;
                         document.getElementById('ob-bid-pct').innerText = '%' + ob.bid_pressure;
@@ -2805,7 +2806,7 @@ async def get_dashboard(request: Request):
                             let eqMap = new Map();
                             data.equity_curve.forEach(d => {
                                 if(d && !isNaN(d.time)) {
-                                    eqMap.set(Number(d.time) + 10800, Number(d.value));
+                                    eqMap.set(Number(d.time), Number(d.value));
                                 }
                             });
                             
