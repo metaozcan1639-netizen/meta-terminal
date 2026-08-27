@@ -15,7 +15,6 @@ import uvicorn
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Sistem zamanı borsa standardı UTC'ye sabitlendi
 UTC_TZ = timezone.utc
 
 # =================================================================
@@ -2417,7 +2416,6 @@ async def get_dashboard(request: Request):
                 }
 
                 if (Array.isArray(data) && data.length > 0) {
-                    // Saf UTC zaman damgası (Python backend ile %100 senkronize)
                     return data.map(c => ({
                         time: Math.floor(c[0] / 1000), 
                         open: parseFloat(c[1]), 
@@ -2432,7 +2430,7 @@ async def get_dashboard(request: Request):
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
                     const symbolChanged = (symbol !== lastLoadedSymbol || currentTimeframe !== lastLoadedTf);
-                    const limit = (isLiveTick && !symbolChanged) ? 5 : 1000;
+                    const limit = (isLiveTick && !symbolChanged) ? 3 : 1000;
                     const candles = await fetchCandlesDirect(symbol, currentTimeframe, limit);
                     
                     if (candles.length > 0 && candleSeries) {
@@ -2840,7 +2838,7 @@ async def get_dashboard(request: Request):
 
             initCharts();
             loadChartCandles(currentSymbol, null, false);
-            setInterval(updateDashboard, 5000);
+            setInterval(updateDashboard, 6000);
         </script>
     </body>
     </html>
