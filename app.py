@@ -15,7 +15,6 @@ import uvicorn
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-# Sistem zamanı borsa standardı UTC'ye sabitlendi
 UTC_TZ = timezone.utc
 
 # =================================================================
@@ -361,18 +360,19 @@ async def analyze_symbol(exchange, symbol):
         if any(exc in base for exc in EXCLUDED_KEYWORDS):
             return None
 
+        # 1H Ana Yön için veriler + 15M Retest için 15M mum verileri çekiliyor
         tasks = [
             exchange.fetch_ohlcv(symbol, timeframe='1h', limit=40),
-            exchange.fetch_ohlcv(symbol, timeframe='1h', limit=40),
+            exchange.fetch_ohlcv(symbol, timeframe='15m', limit=30),
             exchange.fetch_ohlcv(symbol, timeframe='4h', limit=50),
             exchange.fetch_order_book(symbol, limit=20)
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
-        if any(isinstance(r, Exception) or not r or len(r) < 30 for r in results[:3]):
+        if any(isinstance(r, Exception) or not r or len(r) < 20 for r in results[:3]):
             return None
 
-        df_1h_main = calculate_indicators(pd.DataFrame(results[0], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
-        df_1h_retest = calculate_indicators(pd.DataFrame(results[1], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        df_1h = calculate_indicators(pd.DataFrame(results[0], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
+        df_15m = calculate_indicators(pd.DataFrame(results[1], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         df_4h = calculate_indicators(pd.DataFrame(results[2], columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         book = results[3] if not isinstance(results[3], Exception) and results[3] else {}
 
@@ -390,17 +390,17 @@ async def analyze_symbol(exchange, symbol):
                 "bid_pressure": bid_pressure, "ask_pressure": ask_pressure
             }
 
-        c_1h = df_1h_main.iloc[-1]
-        c_4h = df_4h.iloc[-1]
+        c_1h = df_1h.iloc[-1]
+        c_15m = df_15m.iloc[-1]
 
         system_state["breadth_total"] += 1
         if c_1h['close'] > c_1h['ema50']:
             system_state["breadth_bullish"] += 1
 
-        swing_low_1h = df_1h_retest['low'].iloc[-20:-3].min()
-        swing_high_1h = df_1h_retest['high'].iloc[-20:-3].max()
-        recent_breakout_high = df_1h_main['high'].iloc[-8:-1].max()
-        recent_breakout_low = df_1h_main['low'].iloc[-8:-1].min()
+        swing_low_1h = df_1h['low'].iloc[-20:-3].min()
+        swing_high_1h = df_1h['high'].iloc[-20:-3].max()
+        recent_breakout_high = df_1h['high'].iloc[-8:-1].max()
+        recent_breakout_low = df_1h['low'].iloc[-8:-1].min()
 
         score = 0
         direction = None
@@ -410,7 +410,7 @@ async def analyze_symbol(exchange, symbol):
         if adx_val < 18:
             return None
 
-        sweep_low = df_1h_retest['low'].iloc[-4:].min() < swing_low_1h
+        sweep_low = df_1h['low'].iloc[-4:].min() < swing_low_1h
         body_size = abs(c_1h['close'] - c_1h['open'])
         total_candle_size = c_1h['high'] - c_1h['low']
         is_strong_green = (
@@ -419,7 +419,7 @@ async def analyze_symbol(exchange, symbol):
             and (body_size / (total_candle_size + 1e-9) > 0.35)
         )
 
-        sweep_high = df_1h_retest['high'].iloc[-4:].max() > swing_high_1h
+        sweep_high = df_1h['high'].iloc[-4:].max() > swing_high_1h
         is_strong_red = (
             c_1h['close'] < recent_breakout_low
             and c_1h['close'] < c_1h['open']
@@ -443,19 +443,22 @@ async def analyze_symbol(exchange, symbol):
                     "reasons": ["⚡ 1H Tepe Likiditesi Alındı + 1H Güçlü Kırılım"]
                 }
 
+        # 15 DAKİKALIK (15M) GRAFİKTE RETEST VE DESTEKTE TUTUNMA (MUM KAPANIŞ) KONTROLÜ
         if symbol in retest_tracker:
             tracker = retest_tracker[symbol]
             if tracker["direction"] == "LONG":
-                if c_1h['low'] <= tracker["level"] * 1.005 and c_1h['close'] > tracker["level"] and c_1h['close'] > c_1h['open']:
+                # 15M mumunun iğne atıp seviyeyi koruması VE 15M mumunun yeşil kapanması
+                if c_15m['low'] <= tracker["level"] * 1.003 and c_15m['close'] > tracker["level"] and c_15m['close'] > c_15m['open']:
                     direction = "LONG"
                     score += tracker["score_base"] + 25
-                    reasons = tracker["reasons"] + ["🎯 Kusursuz 1H Break & Retest (Seviye Üstü Yeşil Mum Kapanışı)"]
+                    reasons = tracker["reasons"] + ["🎯 15M Kusursuz Retest (Destekte Tutundu ve Yeşil Kapattı)"]
                     del retest_tracker[symbol]
             elif tracker["direction"] == "SHORT":
-                if c_1h['high'] >= tracker["level"] * 0.995 and c_1h['close'] < tracker["level"] and c_1h['close'] < c_1h['open']:
+                # 15M mumunun iğne atıp direnci koruması VE 15M mumunun kırmızı kapanması
+                if c_15m['high'] >= tracker["level"] * 0.997 and c_15m['close'] < tracker["level"] and c_15m['close'] < c_15m['open']:
                     direction = "SHORT"
                     score += tracker["score_base"] + 25
-                    reasons = tracker["reasons"] + ["🎯 Kusursuz 1H Break & Retest (Seviye Altı Kırmızı Mum Kapanışı)"]
+                    reasons = tracker["reasons"] + ["🎯 15M Kusursuz Retest (Dirençte Reddedildi ve Kırmızı Kapattı)"]
                     del retest_tracker[symbol]
 
         if direction == "LONG" and bid_pressure >= 55.0:
@@ -512,14 +515,14 @@ async def analyze_symbol(exchange, symbol):
         effective_risk = system_state["risk_pct"]
 
         if direction == "LONG":
-            sl = float(df_1h_main['low'].iloc[-8:].min() - (2.8 * atr))
+            sl = float(df_1h['low'].iloc[-8:].min() - (2.8 * atr))
             if (entry - sl) / entry < 0.02:
                 sl = entry * 0.98
             risk_dist = entry - sl
             tp1 = entry + (1.5 * risk_dist)
             tp2 = entry + (3.0 * risk_dist)
         else:
-            sl = float(df_1h_main['high'].iloc[-8:].max() + (2.8 * atr))
+            sl = float(df_1h['high'].iloc[-8:].max() + (2.8 * atr))
             if (sl - entry) / entry < 0.02:
                 sl = entry * 1.02
             risk_dist = sl - entry
@@ -568,7 +571,7 @@ async def keep_alive_loop():
 
 async def market_scanner_loop():
     await asyncio.sleep(2)
-    add_log("Quant Motoru (Avcı): Saf UTC Zaman Dilimi + Mum Kapanış Onaylı Retest Aktif!")
+    add_log("Quant Motoru (Avcı): 1H Trend + 15M Retest (Mum Kapanış Onaylı) Aktif!")
 
     while True:
         exchange = None
@@ -1162,7 +1165,7 @@ async def get_dashboard(request: Request):
             <div class="card p-3 rounded-xl flex flex-wrap justify-between items-center gap-3">
                 <div class="flex flex-col space-y-1 bg-slate-900/90 p-2 rounded-xl border border-slate-800">
                     <div class="flex items-center justify-between gap-2 border-b border-slate-800 pb-1 text-[9px]">
-                        <span class="text-slate-400 font-semibold uppercase">Dönemsel PnL (UTC 00:00):</span>
+                        <span class="text-slate-400 font-semibold uppercase">Dönemsel PnL (TSİ 00:00):</span>
                         <div class="flex space-x-1">
                             <button onclick="changePnlFilter('today')" id="pnl-tf-today" class="pnl-tf-btn active px-1 py-0.5 rounded text-slate-400 hover:text-white">Bugün</button>
                             <button onclick="changePnlFilter('yesterday')" id="pnl-tf-yesterday" class="pnl-tf-btn px-1 py-0.5 rounded text-slate-400 hover:text-white">Dün</button>
@@ -2115,7 +2118,7 @@ async def get_dashboard(request: Request):
                 if (!selectedPos || !candleSeries || !chart) return;
 
                 const timeScale = chart.timeScale();
-                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp);
+                const startX = timeScale.timeToCoordinate(selectedPos.open_timestamp + 10800);
                 const rightX = canvas.width - 55;
                 const boxStartX = startX !== null ? Math.max(0, startX) : 40;
                 const boxWidth = rightX - boxStartX;
@@ -2417,9 +2420,8 @@ async def get_dashboard(request: Request):
                 }
 
                 if (Array.isArray(data) && data.length > 0) {
-                    // Saf UTC zaman damgası (Python backend ile %100 senkronize)
                     return data.map(c => ({
-                        time: Math.floor(c[0] / 1000), 
+                        time: Math.floor(c[0] / 1000) + 10800, 
                         open: parseFloat(c[1]), 
                         high: parseFloat(c[2]), 
                         low: parseFloat(c[3]), 
@@ -2432,70 +2434,82 @@ async def get_dashboard(request: Request):
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
                     const symbolChanged = (symbol !== lastLoadedSymbol || currentTimeframe !== lastLoadedTf);
-                    const limit = (isLiveTick && !symbolChanged) ? 5 : 1000;
+                    const limit = (isLiveTick && !symbolChanged) ? 3 : 1000;
+                    
                     const candles = await fetchCandlesDirect(symbol, currentTimeframe, limit);
                     
                     if (candles.length > 0 && candleSeries) {
                         if (isLiveTick && !symbolChanged) {
+                            // CANLI AKIŞ: Son 3 mumu çekip update ile eziyoruz. 
+                            // Bu sayede hem anlık fiyat oynar, hem de saat başlarında YENİ MUM anında oluşur!
                             candles.forEach(c => candleSeries.update(c));
-                            drawPositionBoxes();
-                        } else {
-                            lastLoadedSymbol = symbol;
-                            lastLoadedTf = currentTimeframe;
-
+                            
                             const lastCandle = candles[candles.length - 1];
-                            const pConf = getPrecisionConfig(lastCandle.close);
-                            candleSeries.applyOptions({ priceFormat: { type: 'price', precision: pConf.precision, minMove: pConf.minMove } });
-                            
-                            const intervalSec = getIntervalSeconds(currentTimeframe);
-                            let futureData = [];
-                            let lastTime = lastCandle.time;
-                            for (let i = 1; i <= 50; i++) {
-                                futureData.push({ time: lastTime + (i * intervalSec) });
-                            }
-                            
-                            candleSeries.setData([...candles, ...futureData]);
-
-                            const dec = lastCandle.close < 1 ? pConf.precision : 2;
+                            const dec = lastCandle.close < 1 ? 6 : 2;
                             document.getElementById('bar-open').innerText = `$${lastCandle.open.toFixed(dec)}`;
                             document.getElementById('bar-high').innerText = `$${lastCandle.high.toFixed(dec)}`;
                             document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
                             document.getElementById('bar-close').innerText = `$${lastCandle.close.toFixed(dec)}`;
                             
-                            if (chart) chart.priceScale('right').applyOptions({ autoScale: true });
-                            
-                            resizeCanvas();
                             drawPositionBoxes();
+                            return;
+                        }
+                        
+                        lastLoadedSymbol = symbol;
+                        lastLoadedTf = currentTimeframe;
 
-                            priceLines.forEach(l => candleSeries.removePriceLine(l));
-                            priceLines = [];
-                            const tfLabel = currentTimeframe === '60' ? '1H' : (currentTimeframe === '240' ? '4H' : (currentTimeframe === 'D' ? '1D' : `${currentTimeframe}M`));
-                            document.getElementById('chart-title').innerText = `${symbol} (${tfLabel})`;
+                        const lastCandle = candles[candles.length - 1];
+                        const pConf = getPrecisionConfig(lastCandle.close);
+                        candleSeries.applyOptions({ priceFormat: { type: 'price', precision: pConf.precision, minMove: pConf.minMove } });
+                        
+                        const intervalSec = getIntervalSeconds(currentTimeframe);
+                        let futureData = [];
+                        let lastTime = lastCandle.time;
+                        for (let i = 1; i <= 50; i++) {
+                            futureData.push({ time: lastTime + (i * intervalSec) });
+                        }
+                        
+                        candleSeries.setData([...candles, ...futureData]);
 
-                            if (posData && candleSeries) {
-                                const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
-                                const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP' });
-                                
-                                priceLines.push(entryLine, slLine);
-                                
-                                const p = posData.entry < 1 ? 6 : 2;
-                                let htmlStr = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span>`;
-                                
-                                if (Math.abs(posData.tp1 - posData.tp2) / posData.entry < 0.001) {
-                                    const tpLine = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP (TAM ÇIKIŞ)' });
-                                    priceLines.push(tpLine);
-                                    htmlStr += ` | <span class="text-emerald-500 font-mono font-bold">TP: ${posData.tp1.toFixed(p)}</span>`;
-                                } else {
-                                    const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
-                                    const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
-                                    priceLines.push(tp1Line, tp2Line);
-                                    htmlStr += ` | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
-                                }
-                                
-                                document.getElementById('chart-levels').innerHTML = htmlStr;
+                        const dec = lastCandle.close < 1 ? pConf.precision : 2;
+                        document.getElementById('bar-open').innerText = `$${lastCandle.open.toFixed(dec)}`;
+                        document.getElementById('bar-high').innerText = `$${lastCandle.high.toFixed(dec)}`;
+                        document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
+                        document.getElementById('bar-close').innerText = `$${lastCandle.close.toFixed(dec)}`;
+                        
+                        if (chart) chart.priceScale('right').applyOptions({ autoScale: true });
+                        
+                        resizeCanvas();
+                        drawPositionBoxes();
+
+                        priceLines.forEach(l => candleSeries.removePriceLine(l));
+                        priceLines = [];
+                        const tfLabel = currentTimeframe === '60' ? '1H' : (currentTimeframe === '240' ? '4H' : (currentTimeframe === 'D' ? '1D' : `${currentTimeframe}M`));
+                        document.getElementById('chart-title').innerText = `${symbol} (${tfLabel})`;
+
+                        if (posData && candleSeries) {
+                            const entryLine = candleSeries.createPriceLine({ price: posData.entry, color: '#38bdf8', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Solid, axisLabelVisible: true, title: 'GİRİŞ' });
+                            const slLine = candleSeries.createPriceLine({ price: posData.sl, color: '#ef4444', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'STOP' });
+                            
+                            priceLines.push(entryLine, slLine);
+                            
+                            const p = posData.entry < 1 ? 6 : 2;
+                            let htmlStr = `<span class="text-sky-400 font-mono">Giriş: ${posData.entry}</span> | <span class="text-red-400 font-mono">SL: ${posData.sl.toFixed(p)}</span>`;
+                            
+                            if (Math.abs(posData.tp1 - posData.tp2) / posData.entry < 0.001) {
+                                const tpLine = candleSeries.createPriceLine({ price: posData.tp1, color: '#10b981', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP (TAM ÇIKIŞ)' });
+                                priceLines.push(tpLine);
+                                htmlStr += ` | <span class="text-emerald-500 font-mono font-bold">TP: ${posData.tp1.toFixed(p)}</span>`;
                             } else {
-                                document.getElementById('chart-levels').innerHTML = '';
+                                const tp1Line = candleSeries.createPriceLine({ price: posData.tp1, color: '#4ade80', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP1' });
+                                const tp2Line = candleSeries.createPriceLine({ price: posData.tp2, color: '#047857', lineWidth: 2, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: true, title: 'TP2' });
+                                priceLines.push(tp1Line, tp2Line);
+                                htmlStr += ` | <span class="text-emerald-600 font-mono">TP2: ${posData.tp2.toFixed(p)}</span>`;
                             }
+                            
+                            document.getElementById('chart-levels').innerHTML = htmlStr;
+                        } else {
+                            document.getElementById('chart-levels').innerHTML = '';
                         }
                     }
                 } catch(e) {}
