@@ -2427,15 +2427,39 @@ async def get_dashboard(request: Request):
                 return [];
             }
 
+            // ANLIK FİYAT ENJEKSİYONU İLE CANLI AKIŞ MOTORU EKLENDİ
+            async function fetchLiveTickerPrice(symbol) {
+                let baseSym = symbol.split('/')[0].toUpperCase().replace(':USDT', '');
+                if (baseSym.endsWith('USDT') && baseSym !== 'USDT') baseSym = baseSym.replace('USDT', '');
+                let rawSym = resolvedSymbolCache[symbol] || (baseSym + 'USDT');
+                try {
+                    let res = await fetch(`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${rawSym}`);
+                    let json = await res.json();
+                    if (json && json.price) return parseFloat(json.price);
+                } catch(e) {}
+                return null;
+            }
+
             async function loadChartCandles(symbol, posData = null, isLiveTick = false) {
                 try {
                     const symbolChanged = (symbol !== lastLoadedSymbol || currentTimeframe !== lastLoadedTf);
-                    const limit = (isLiveTick && !symbolChanged) ? 3 : 1000;
-                    const candles = await fetchCandlesDirect(symbol, currentTimeframe, limit);
+                    const candles = await fetchCandlesDirect(symbol, currentTimeframe, 1000);
                     
                     if (candles.length > 0 && candleSeries) {
                         if (isLiveTick && !symbolChanged) {
-                            candles.forEach(c => candleSeries.update(c));
+                            let livePrice = await fetchLiveTickerPrice(symbol);
+                            if (livePrice) {
+                                let lastCandle = candles[candles.length - 1];
+                                lastCandle.close = livePrice;
+                                if (livePrice > lastCandle.high) lastCandle.high = livePrice;
+                                if (livePrice < lastCandle.low) lastCandle.low = livePrice;
+                                candleSeries.update(lastCandle);
+                                
+                                const dec = livePrice < 1 ? 6 : 2;
+                                document.getElementById('bar-close').innerText = `$${livePrice.toFixed(dec)}`;
+                                document.getElementById('bar-high').innerText = `$${lastCandle.high.toFixed(dec)}`;
+                                document.getElementById('bar-low').innerText = `$${lastCandle.low.toFixed(dec)}`;
+                            }
                             drawPositionBoxes();
                         } else {
                             lastLoadedSymbol = symbol;
@@ -2838,7 +2862,7 @@ async def get_dashboard(request: Request):
 
             initCharts();
             loadChartCandles(currentSymbol, null, false);
-            setInterval(updateDashboard, 6000);
+            setInterval(updateDashboard, 5000);
         </script>
     </body>
     </html>
