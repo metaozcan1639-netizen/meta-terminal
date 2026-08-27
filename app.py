@@ -460,7 +460,7 @@ async def analyze_symbol(exchange, symbol):
                     reasons = tracker["reasons"] + ["🎯 Kusursuz 1H Break & Retest (Direnç Onayı)"]
                     del retest_tracker[symbol]
 
-        # L2 Emir Defteri Dinamik Skorlama Matrisi (Sabit 20 puan yerine tahta baskısı katsayısı)
+        # L2 Emir Defteri Dinamik Skorlama Matrisi
         if direction == "LONG" and bid_pressure >= 55.0:
             book_score = int((bid_pressure - 50) * 1.5)
             score += book_score
@@ -1164,7 +1164,7 @@ async def get_dashboard(request: Request):
             </div>
         </div>
 
-        <!-- SAYFA 1: CANLI TERMİNAL (L2 EMİR DEFTERİ PANELİ EKLENDİ) -->
+        <!-- SAYFA 1: CANLI TERMİNAL -->
         <div id="page-terminal" class="space-y-3">
             <div class="card p-3 rounded-xl flex flex-wrap justify-between items-center gap-3">
                 <div class="flex flex-col space-y-1 bg-slate-900/90 p-2 rounded-xl border border-slate-800">
@@ -1267,7 +1267,7 @@ async def get_dashboard(request: Request):
                 </div>
             </div>
 
-            <!-- GRAFİK VE L2 EMİR DEFTERİ BÖLÜMÜ -->
+            <!-- GRAFİK VE SAĞ PANEL (L2 EMİR DEFTERİ LOGLARIN HEMEN ÜSTÜNDE) -->
             <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                 <div class="card p-3 rounded-xl lg:col-span-2 h-[520px] flex flex-col">
                     <div class="flex flex-wrap justify-between items-center mb-2 px-1 gap-2">
@@ -1296,7 +1296,7 @@ async def get_dashboard(request: Request):
                     </div>
                 </div>
 
-                <!-- SAĞ PANEL: GİRİŞ GEREKÇESİ VE YENİ L2 EMİR DEFTERİ GÖSTERGESİ -->
+                <!-- SAĞ PANEL: GİRİŞ GEREKÇESİ, L2 EMİR DEFTERİ (LOGLARIN ÜSTÜNDE) VE LOGLAR -->
                 <div class="card p-3 rounded-xl flex flex-col justify-between h-[520px]">
                     <div>
                         <h2 class="text-xs font-semibold text-slate-400 mb-2 uppercase tracking-wider">Seçili Parite Giriş Gerekçesi</h2>
@@ -1305,11 +1305,9 @@ async def get_dashboard(request: Request):
                         </div>
                     </div>
                     
-                    <!-- L2 EMİR DEFTERİ (ORDER BOOK) CANLI PANELİ -->
-                    <div class="mt-2 bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 space-y-1.5">
-                        <h3 class="text-[11px] font-bold text-sky-400 uppercase flex items-center justify-between">
-                            <span>⚡ L2 Emir Defteri (Tahta Derinliği)</span>
-                        </h3>
+                    <!-- L2 EMİR DEFTERİ (ORDER BOOK) - LOGLARIN HEMEN ÜSTÜNDE -->
+                    <div class="my-2 bg-slate-900/90 p-2.5 rounded-lg border border-slate-800 space-y-1.5">
+                        <h3 class="text-[11px] font-bold text-sky-400 uppercase">⚡ L2 Emir Defteri (Tahta Derinliği)</h3>
                         <div class="flex justify-between text-[11px] font-bold">
                             <span class="text-emerald-400">Alıcı (Bid): <b id="ob-bid-pct">%50.0</b></span>
                             <span class="text-rose-400">Satıcı (Ask): <b id="ob-ask-pct">%50.0</b></span>
@@ -1320,7 +1318,7 @@ async def get_dashboard(request: Request):
                         </div>
                     </div>
 
-                    <div class="mt-2">
+                    <div>
                         <h3 class="text-[10px] font-semibold text-slate-500 mb-1 uppercase">Sistem Logları</h3>
                         <div id="log-box" class="bg-black/50 p-2 rounded text-[11px] text-emerald-500/80 font-mono h-24 overflow-y-auto space-y-1"></div>
                     </div>
@@ -2654,7 +2652,7 @@ async def get_dashboard(request: Request):
                     document.getElementById('scanned-count').innerText = data.scanned_count;
                     document.getElementById('last-scan').innerText = data.last_scan_time;
 
-                    // L2 EMİR DEFTERİ PANEL GÜNCELLEMESİ
+                    // L2 EMİR DEFTERİ PANEL GÜNCELLEMESİ (LOGLARIN HEMEN ÜSTÜ)
                     if (data.order_book_metrics) {
                         let ob = data.order_book_metrics;
                         document.getElementById('ob-bid-pct').innerText = '%' + ob.bid_pressure;
@@ -2763,7 +2761,7 @@ async def get_dashboard(request: Request):
                                 <td class="text-white font-mono">$${p.margin}</td>
                                 <td class="font-mono text-slate-300">${p.entry}</td>
                                 <td class="font-mono text-white font-bold">${p.current_price || p.entry}</td>
-                                <td class="font-mono font-bold ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-red-400'}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}</td>
+                                <td class="font-mono font-bold ${p.unrealized_pnl >= 0 ? 'text-emerald-400' : 'text-rose-400'}">${p.unrealized_pnl >= 0 ? '+' : ''}$${p.unrealized_pnl.toFixed(2)}</td>
                                 <td class="w-24"><div class="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden"><div class="bg-emerald-500 h-1.5 rounded-full" style="width: ${p.progress_pct}%"></div></div><span class="text-[9px] text-slate-400 font-mono">%${p.progress_pct}</span></td>
                             </tr>`).join('');
                     }
