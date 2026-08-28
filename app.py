@@ -182,15 +182,20 @@ async def ask_gemini_approval(signal, gemini_api_key):
     
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url, json=payload, timeout=8) as res:
+            # Zaman aşımı 15 saniyeye çıkarıldı
+            async with session.post(url, json=payload, timeout=15) as res:
                 if res.status == 200:
                     data = await res.json()
                     text = data['candidates'][0]['content']['parts'][0]['text']
+                    await asyncio.sleep(2) # Spama karşı 2 saniye mola
                     return text.strip()
+                elif res.status == 429:
+                    await asyncio.sleep(5) # Limit dolduysa 5 saniye bekle
+                    return "RED - Google API Limitlerine Takıldı (Çok fazla istek). İşlem riskli kabul edilip reddedildi."
                 else:
-                    return "ONAY - API Yanıt Vermedi, Sistem Algoritması Geçerli."
+                    return f"RED - API Yanıt Vermedi (Kod: {res.status}). Güvenlik için işlem reddedildi."
     except Exception as e:
-        return f"ONAY - AI Bağlantı Hatası: Kuantum Motoru onayı devrede."
+        return "RED - AI Bağlantı Hatası (Zaman Aşımı). Güvenlik için işlem reddedildi."
 
 async def create_exchange_instance():
     api_conf = system_state["api_settings"]
@@ -329,6 +334,7 @@ async def update_btc_metrics(exchange):
         df_1h = calculate_indicators(pd.DataFrame(candles_1h, columns=['t', 'open', 'high', 'low', 'close', 'volume']))
         
         last_1h = df_1h.iloc[-1]
+        last_1h_closed = df_1h.iloc[-2] if len(df_1h) > 1 else last_1h # Yön kararı için kapanmış mum
         
         c_now = df_15m['close'].iloc[-1]
         c_prev = df_15m['open'].iloc[-1]
@@ -352,7 +358,8 @@ async def update_btc_metrics(exchange):
             system_state["btc_shock_lock"] = False
             system_state["btc_shock_reason"] = ""
 
-        if last_1h['close'] > last_1h['ema50']:
+        # YÖN KARARI: Kapanmış Muma Göre Yapılır (Dalgalanmayı Önler)
+        if last_1h_closed['close'] > last_1h_closed['ema50']:
             system_state["btc_regime"] = "🟢 BOĞA (YÜKSELİŞ)"
             bias = "BOĞA / LONG"
         else:
@@ -2773,22 +2780,33 @@ async def get_dashboard(request: Request):
                     }
 
                     if (data.logs && data.logs.length > 0) {
-                        const currentTopLog = data.logs[0];
-                        if (currentTopLog !== lastProcessedLog) {
-                            lastProcessedLog = currentTopLog;
-                            
-                            if (currentTopLog.includes("POZİSYON AÇILDI")) {
-                                playAlertSound("OPEN");
-                                sendWebNotification("🟢 Yeni İşlem Açıldı", currentTopLog.split("]")[1]);
-                            } else if (currentTopLog.includes("TP1 ALINDI") || currentTopLog.includes("Likidite Havuzuna Ulaşıldı") || currentTopLog.includes("Momentum Kaybı")) {
-                                playAlertSound("WIN");
-                                sendWebNotification("🎯 Kâr Alındı / Hedef Vuruldu", currentTopLog.split("]")[1]);
-                            } else if (currentTopLog.includes("Stop-Loss Tetiklendi") || currentTopLog.includes("LİMİTİ TETİKLENDİ")) {
-                                playAlertSound("LOSS");
-                                sendWebNotification("🛑 Stop-Loss Patladı", currentTopLog.split("]")[1]);
-                            } else if (currentTopLog.includes("MANUEL KAPATMA")) {
-                                playAlertSound("CLICK");
+                        if (!lastProcessedLog) {
+                            lastProcessedLog = data.logs[0];
+                        } else if (data.logs[0] !== lastProcessedLog) {
+                            let newLogs = [];
+                            for (let i = 0; i < data.logs.length; i++) {
+                                if (data.logs[i] === lastProcessedLog) break;
+                                newLogs.push(data.logs[i]);
                             }
+                            
+                            newLogs.reverse().forEach((log, index) => {
+                                setTimeout(() => {
+                                    if (log.includes("POZİSYON AÇILDI")) {
+                                        playAlertSound("OPEN");
+                                        sendWebNotification("🟢 Yeni İşlem Açıldı", log.split("]")[1]);
+                                    } else if (log.includes("TP1 ALINDI") || log.includes("Likidite Havuzuna Ulaşıldı") || log.includes("Momentum Kaybı")) {
+                                        playAlertSound("WIN");
+                                        sendWebNotification("🎯 Kâr Alındı / Hedef Vuruldu", log.split("]")[1]);
+                                    } else if (log.includes("Stop-Loss Tetiklendi") || log.includes("LİMİTİ TETİKLENDİ")) {
+                                        playAlertSound("LOSS");
+                                        sendWebNotification("🛑 Stop-Loss Patladı", log.split("]")[1]);
+                                    } else if (log.includes("MANUEL KAPATMA")) {
+                                        playAlertSound("CLICK");
+                                    }
+                                }, index * 1500); 
+                            });
+                            
+                            lastProcessedLog = data.logs[0];
                         }
                     }
 
